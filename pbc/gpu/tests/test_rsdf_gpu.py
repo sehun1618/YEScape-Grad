@@ -653,6 +653,14 @@ class RSDFGPUParityTest(unittest.TestCase):
             native_source_derivatives=True,
             native_metric_derivatives=True,
         )
+        fused = build_rsdf_contracted_response(
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=True,
+            native_metric_derivatives=True,
+            observable_mode="fused",
+        )
         self.assertLess(
             float(
                 cp.max(
@@ -753,6 +761,22 @@ class RSDFGPUParityTest(unittest.TestCase):
         )
         self.assertIsNone(native_both.profile.component_batch_size)
         self.assertIsNone(native_both.profile.initial_component_batch_size)
+        self.assertIsNone(fused.target_coulomb)
+        self.assertIsNone(fused.restricted_hf_bilinear)
+        np.testing.assert_allclose(
+            cp.asnumpy(fused.coupled_target_j_bilinear),
+            cp.asnumpy(
+                native_both.target_coulomb
+                + native_both.restricted_hf_bilinear
+            ),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        self.assertEqual(
+            fused.profile.response_mode,
+            "native_source_native_metric_fused_adjoint",
+        )
+        self.assertEqual(fused.profile.metadata()["observable_count"], 1)
 
     def test_component_oom_retries_without_double_commit(self):
         source = np.zeros((4, 1))
@@ -906,8 +930,15 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertGreater(profile["host_to_device_bytes"], 0)
         self.assertEqual(
             profile["response_mode"],
-            "native_source_native_metric_contracted_adjoint",
+            "native_source_native_metric_fused_adjoint",
         )
+        self.assertEqual(profile["observable_mode"], "fused")
+        self.assertEqual(profile["observable_count"], 1)
+        self.assertEqual(
+            metadata["gradient_partition"],
+            "explicit_response_coupled",
+        )
+        self.assertFalse(metadata["target_coulomb_component_resolved"])
         self.assertEqual(
             profile["host_source_derivative_seconds"],
             0.0,

@@ -201,8 +201,8 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 | N1 benchmark integrity | `complete` | attempt identity, process-liveness reconciliation, interrupted state 및 prior-artifact archive; benchmark unit test 12개와 Water8 3회/Water20 1회 통과 | lifecycle regression 유지 |
 | N2 GPU source derivative | `complete` | SR/LR+vbar native contraction, Gamma/sampled-k canonical orientation, source adjoint algebra, bounded reciprocal rebatch 및 shared two-observable traversal; RSDF 12개와 MGGA 4개 test 통과 | regression 유지 |
 | N3 GPU metric derivative | `complete` | exact host SR `ip1/ip2` + GPU reciprocal metric/Cholesky adjoint; RSDF 14개와 MGGA 4개 test, Water20 35.2% N2 대비 개선 | regression 유지 |
-| N4 conditional remainder | `in progress` | Water20 analytic 32.468 s; device derivative response 23.316 s가 최대 exclusive 후보 | source/metric device substage를 분리 profile한 뒤 한 후보만 선택 |
-| N5 release gate | `pending` | 이전 R2 release evidence 존재 | N0--N4 완료 범위만 재검증 |
+| N4 conditional remainder | `complete` | Water20 source SR 21.330 s 병목을 exact fused adjoint로 10.676 s까지 축소; Water8 median 26.9%, Water20 34.7% end-to-end 개선 | fused/resolved regression 유지 |
+| N5 release gate | `in progress` | RSDF 14개 + MGGA 4개 회귀 통과 | selected FD, package/wheel/example smoke 및 최종 ledger 고정 |
 
 ## 7. 완료 정의
 
@@ -308,3 +308,29 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 - Default profile mode는 `native_source_native_metric_contracted_adjoint`이며 component
   batch 값은 `null`이다. Reference/mixed host derivative route에서만 bounded component
   stream과 transactional OOM rebatch를 사용한다. Silent CPU fallback은 없다.
+
+## 12. 2026-07-17 N4 implementation record
+
+- N3 이후 Water20 exclusive profile을 source setup, short-range, reciprocal, metric 및
+  adjoint로 분리했다. 전체 32.958 s 중 native source가 23.243 s, 그중 short-range가
+  21.330 s로 명확한 단일 병목이었다. Central CDERI, H1 또는 XC를 추측해 포팅하지
+  않았다.
+- 최종 DC gradient에는 target-J derivative와 restricted-HF Z-bilinear의 합만 필요하다.
+  Reverse map의 선형성
+  $R^*(W_J+W_Z)=R^*W_J+R^*W_Z$를 이용해 두 CDERI adjoint를 source/metric primitive
+  contraction 전에 합쳤다. 따라서 현재 single-source CUDA short-range kernel은 canonical
+  pair당 두 번이 아니라 한 번 호출된다. Cutoff, mesh, screening 또는 물리식은 바꾸지
+  않았다.
+- Production gradient는 `observable_mode="fused"`와
+  `response_mode=native_source_native_metric_fused_adjoint`를 사용하고 최종 합을
+  `coupled` contribution으로 조립한다. 성분별 target-J와 Z-bilinear가 필요한 진단은
+  `observable_mode="resolved"`로 기존 2-pass reference를 그대로 사용할 수 있다.
+- Fused direct contraction은 resolved 두 성분의 합과 $10^{-9}$ 이내로 일치했다.
+  Water8/Water20의 archived N3 gradient와 최대 차이는 각각
+  $7.42\times10^{-14}$와 $6.18\times10^{-14}$ Ha/Bohr였다.
+- Water8 독립 process 세 번의 median은 5.884 s에서 4.299 s로 26.9% 감소했다.
+  Water20은 32.468 s에서 21.202 s로 34.7% 감소했고, short-range source는
+  21.330 s에서 10.676 s로 감소했다. 따라서 N4의 5% keep gate를 통과한다.
+- RSDF test 14개와 SCAN/r2SCAN MGGA test 4개, 총 18개가 311.173 s에 통과했다.
+  Gamma/sampled-k, mixed ownership, batch-1 및 transactional OOM 계약을 포함한다.
+  Water64는 실행하지 않았다.

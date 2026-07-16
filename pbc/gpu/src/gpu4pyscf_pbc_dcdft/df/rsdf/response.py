@@ -50,6 +50,12 @@ class RSDFResponseProfile:
     component_batch_size: int | None = None
     initial_component_batch_size: int | None = None
     component_rebatch_count: int = 0
+    device_native_source_derivative_seconds: float = 0.0
+    device_native_metric_derivative_seconds: float = 0.0
+    device_adjoint_component_seconds: float = 0.0
+    device_native_source_setup_seconds: float = 0.0
+    device_native_source_short_range_seconds: float = 0.0
+    device_native_source_reciprocal_seconds: float = 0.0
 
     def metadata(self) -> dict[str, object]:
         """Return JSON-safe profile fields with explicit ownership labels."""
@@ -57,6 +63,9 @@ class RSDFResponseProfile:
         component_stream = "component_stream" in self.response_mode
         native_source = "native_source" in self.response_mode
         native_metric = "native_metric" in self.response_mode
+        observable_mode = (
+            "fused" if "fused_adjoint" in self.response_mode else "resolved"
+        )
         device_operations = [
             "host-to-device primitive transfer",
             "metric Cholesky and central CDERI solve",
@@ -104,6 +113,8 @@ class RSDFResponseProfile:
                 self.device_derivative_upload_response_seconds
             ),
             "response_mode": self.response_mode,
+            "observable_mode": observable_mode,
+            "observable_count": 1 if observable_mode == "fused" else 2,
             "host_peak_primitive_bytes": self.host_peak_primitive_bytes,
             "device_peak_explicit_working_bytes": (
                 self.device_peak_explicit_working_bytes
@@ -119,6 +130,24 @@ class RSDFResponseProfile:
                 self.initial_component_batch_size
             ),
             "component_rebatch_count": self.component_rebatch_count,
+            "device_native_source_derivative_seconds": (
+                self.device_native_source_derivative_seconds
+            ),
+            "device_native_metric_derivative_seconds": (
+                self.device_native_metric_derivative_seconds
+            ),
+            "device_adjoint_component_seconds": (
+                self.device_adjoint_component_seconds
+            ),
+            "device_native_source_setup_seconds": (
+                self.device_native_source_setup_seconds
+            ),
+            "device_native_source_short_range_seconds": (
+                self.device_native_source_short_range_seconds
+            ),
+            "device_native_source_reciprocal_seconds": (
+                self.device_native_source_reciprocal_seconds
+            ),
             "host_owned_operations": _host_owned_operations(
                 native_source=native_source,
                 native_metric=native_metric,

@@ -14,6 +14,24 @@ from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
 from . import source_reciprocal, source_short_range
 
 
+@dataclass(frozen=True)
+class SourceContractionResult:
+    """Native source values and exclusive device phase timings."""
+
+    values: cp.ndarray
+    setup_seconds: float
+    short_range_seconds: float
+    reciprocal_seconds: float
+
+    @property
+    def total_seconds(self) -> float:
+        return (
+            self.setup_seconds
+            + self.short_range_seconds
+            + self.reciprocal_seconds
+        )
+
+
 def build_source_optimizer(cell, auxcell, parameters, *, bvk_kmesh=None):
     """Build an SR optimizer with the exact RSDF source split settings."""
 
@@ -34,31 +52,62 @@ def build_source_optimizer(cell, auxcell, parameters, *, bvk_kmesh=None):
 def contract_gamma_sources(optimizer, source_adjoints):
     """Contract several Gamma source adjoints in one shared traversal."""
 
+    return contract_gamma_sources_profiled(
+        optimizer,
+        source_adjoints,
+    ).values
+
+
+def contract_gamma_sources_profiled(optimizer, source_adjoints):
+    """Contract Gamma sources and return exclusive CUDA phase timings."""
+
     _require_gamma_optimizer(optimizer)
+    events = _phase_events()
+    events[0].record()
     sources = _gamma_source_batch(optimizer, source_adjoints)
     pair_addresses = optimizer.pair_and_diag_indices(
         cart=True,
         original_ao_order=False,
     )[0]
+    events[1].record()
     short_range = source_short_range.contract_gamma_batch(
         optimizer,
         sources,
         pair_addresses,
     )
+    events[2].record()
     reciprocal = source_reciprocal.contract_gamma_batch(
         optimizer,
         sources,
     )
-    return short_range + reciprocal
+    events[3].record()
+    events[3].synchronize()
+    return _source_result(short_range + reciprocal, events)
 
 
 def contract_kpoint_sources(optimizer, kpts, source_adjoint_groups):
     """Contract several sampled-k adjoint maps in one shared traversal."""
 
+    return contract_kpoint_sources_profiled(
+        optimizer,
+        kpts,
+        source_adjoint_groups,
+    ).values
+
+
+def contract_kpoint_sources_profiled(
+    optimizer,
+    kpts,
+    source_adjoint_groups,
+):
+    """Contract sampled-k sources with exclusive CUDA phase timings."""
+
     points = _kpoint_array(kpts)
     groups = tuple(source_adjoint_groups)
     if not groups:
         raise ValueError("at least one sampled-k source adjoint map is required")
+    events = _phase_events()
+    events[0].record()
     ordered = cp.stack(
         [
             _ordered_sorted_sources(optimizer, points, group)
@@ -70,19 +119,40 @@ def contract_kpoint_sources(optimizer, kpts, source_adjoint_groups):
         cart=True,
         original_ao_order=False,
     )[0]
+    events[1].record()
     short_range = source_short_range.contract_kpoint_batch(
         optimizer,
         ordered,
         momentum,
         pair_addresses,
     )
+    events[2].record()
     reciprocal = source_reciprocal.contract_kpoint_batch(
         optimizer,
         ordered,
         momentum,
         points,
     )
-    return short_range + reciprocal
+    events[3].record()
+    events[3].synchronize()
+    return _source_result(short_range + reciprocal, events)
+
+
+def _phase_events():
+    return tuple(cp.cuda.Event() for _unused in range(4))
+
+
+def _source_result(values, events):
+    elapsed = [
+        cp.cuda.get_elapsed_time(first, second) / 1000.0
+        for first, second in zip(events, events[1:])
+    ]
+    return SourceContractionResult(
+        values=values,
+        setup_seconds=elapsed[0],
+        short_range_seconds=elapsed[1],
+        reciprocal_seconds=elapsed[2],
+    )
 
 
 def contract_gamma_short_range_source(optimizer, source_adjoint):

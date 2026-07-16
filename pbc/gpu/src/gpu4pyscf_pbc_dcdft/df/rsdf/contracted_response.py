@@ -27,20 +27,16 @@ from .response import (
     RSDFResponseProfile,
     _host_pair_primitives,
 )
-from .metric_adjoint import (
-    PairMetricAdjoints,
-    push_cderi_adjoint_through_metric,
-)
+from .metric_adjoint import push_cderi_adjoint_through_metric
 from .metric_native import build_metric_contraction_context
 from .source_adjoint import (
-    PairSourceAdjoints,
     build_pair_cderi_adjoints,
     push_cderi_adjoint_through_source,
 )
 from .source_native import (
     build_source_optimizer,
-    contract_gamma_sources,
-    contract_kpoint_sources,
+    contract_gamma_sources_profiled,
+    contract_kpoint_sources_profiled,
 )
 
 
@@ -56,16 +52,17 @@ class _ContractedPairExecution:
     initial_component_batch_size: int | None
     final_component_batch_size: int | None
     component_rebatch_count: int
-    target_source_adjoint: cp.ndarray | None = None
-    bilinear_source_adjoint: cp.ndarray | None = None
+    native_metric_seconds: float = 0.0
+    source_adjoints: tuple[cp.ndarray, ...] | None = None
 
 
 @dataclass(frozen=True)
 class RSDFContractedResponse:
     """Bounded RSDF target-J and Z-bilinear nuclear response."""
 
-    target_coulomb: cp.ndarray
-    restricted_hf_bilinear: cp.ndarray
+    target_coulomb: cp.ndarray | None
+    restricted_hf_bilinear: cp.ndarray | None
+    coupled_target_j_bilinear: cp.ndarray | None
     parameters: RSDFParameters
     value_parity_max_abs: float
     host_primitive_seconds: float
@@ -88,6 +85,7 @@ def build_rsdf_contracted_response(
     ),
     native_source_derivatives: bool | str = "auto",
     native_metric_derivatives: bool | str = "auto",
+    observable_mode: str = "resolved",
 ) -> RSDFContractedResponse:
     """Stream primitive derivatives into the two required force scalars.
 
@@ -98,6 +96,7 @@ def build_rsdf_contracted_response(
     function.
     """
 
+    observable_mode = _normalize_observable_mode(observable_mode)
     witness, kpts, parameters = _prepare_provider(provider)
     reference = _density_array(reference_density, len(kpts), "reference")
     response = _density_array(response_density, len(kpts), "response")
@@ -110,12 +109,26 @@ def build_rsdf_contracted_response(
     auxiliary_reference = auxiliary_density_contraction(central, reference)
     auxiliary_response = auxiliary_density_contraction(central, response)
     natm = int(provider.cell.natm)
-    target_coulomb = cp.zeros((natm, 3), dtype=cp.float64)
-    bilinear = cp.zeros_like(target_coulomb)
+    output_shape = (natm, 3)
+    if observable_mode == "fused":
+        target_coulomb = None
+        bilinear = None
+        coupled = cp.zeros(output_shape, dtype=cp.float64)
+        observable_outputs = (coupled,)
+    else:
+        target_coulomb = cp.zeros(output_shape, dtype=cp.float64)
+        bilinear = cp.zeros_like(target_coulomb)
+        coupled = None
+        observable_outputs = (target_coulomb, bilinear)
 
     host_totals = _empty_host_profile()
     device_central_seconds = 0.0
     device_derivative_seconds = 0.0
+    device_native_metric_seconds = 0.0
+    device_native_source_seconds = 0.0
+    device_native_source_setup_seconds = 0.0
+    device_native_source_short_range_seconds = 0.0
+    device_native_source_reciprocal_seconds = 0.0
     peak_explicit_bytes = 0
     full_derivative_bytes = 0
     initial_component_batch_size = None
@@ -123,8 +136,6 @@ def build_rsdf_contracted_response(
     component_rebatch_count = 0
     parity = 0.0
     pairs = canonical_pairs(len(kpts))
-    target_source_adjoints = {}
-    bilinear_source_adjoints = {}
     source_optimizer = _native_source_optimizer(
         provider,
         witness,
@@ -136,6 +147,15 @@ def build_rsdf_contracted_response(
         native_metric_derivatives,
         name="native_metric_derivatives",
     )
+    if observable_mode == "fused" and (
+        source_optimizer is None or not use_native_metric
+    ):
+        raise NotImplementedError(
+            "fused RSDF observables require native source and metric "
+            "derivatives; use observable_mode='resolved' for mixed or "
+            "host-reference execution"
+        )
+    source_adjoint_groups = tuple({} for _unused in observable_outputs)
     for pair in pairs:
         first, second = pair
         metric_context = (
@@ -168,8 +188,8 @@ def build_rsdf_contracted_response(
             response=response,
             auxiliary_reference=auxiliary_reference,
             auxiliary_response=auxiliary_response,
-            target_coulomb=target_coulomb,
-            bilinear=bilinear,
+            observable_outputs=observable_outputs,
+            observable_mode=observable_mode,
             nao=int(provider.cell.nao_nr()),
             natm=natm,
             metric_context=metric_context,
@@ -180,6 +200,7 @@ def build_rsdf_contracted_response(
         parity = max(parity, pair_response.parity)
         device_central_seconds += pair_response.central_seconds
         device_derivative_seconds += pair_response.derivative_seconds
+        device_native_metric_seconds += pair_response.native_metric_seconds
         peak_explicit_bytes = max(
             peak_explicit_bytes,
             pair_response.peak_explicit_bytes,
@@ -196,32 +217,35 @@ def build_rsdf_contracted_response(
             pair_response.final_component_batch_size,
         )
         component_rebatch_count += pair_response.component_rebatch_count
-        if pair_response.target_source_adjoint is not None:
-            target_source_adjoints[pair] = (
-                pair_response.target_source_adjoint
-            )
-            bilinear_source_adjoints[pair] = (
-                pair_response.bilinear_source_adjoint
-            )
+        if pair_response.source_adjoints is not None:
+            for group, adjoint in zip(
+                source_adjoint_groups,
+                pair_response.source_adjoints,
+                strict=True,
+            ):
+                group[pair] = adjoint
 
     if source_optimizer is not None:
-        source_start = cp.cuda.Event()
-        source_end = cp.cuda.Event()
-        source_start.record()
-        source_target, source_bilinear = _contract_native_sources(
+        source_result = _contract_native_sources(
             source_optimizer,
             kpts,
-            target_source_adjoints,
-            bilinear_source_adjoints,
+            source_adjoint_groups,
         )
-        target_coulomb += source_target
-        bilinear += source_bilinear
-        source_end.record()
-        source_end.synchronize()
-        device_derivative_seconds += cp.cuda.get_elapsed_time(
-            source_start,
-            source_end,
-        ) / 1000.0
+        for output, value in zip(
+            observable_outputs,
+            source_result.values,
+            strict=True,
+        ):
+            output += value
+        device_native_source_seconds = source_result.total_seconds
+        device_native_source_setup_seconds = source_result.setup_seconds
+        device_native_source_short_range_seconds = (
+            source_result.short_range_seconds
+        )
+        device_native_source_reciprocal_seconds = (
+            source_result.reciprocal_seconds
+        )
+        device_derivative_seconds += device_native_source_seconds
 
     host_seconds = sum(
         host_totals[name]
@@ -252,10 +276,23 @@ def build_rsdf_contracted_response(
         component_rebatch_count=component_rebatch_count,
         native_source=(source_optimizer is not None),
         native_metric=use_native_metric,
+        observable_mode=observable_mode,
+        device_native_source_seconds=device_native_source_seconds,
+        device_native_metric_seconds=device_native_metric_seconds,
+        device_native_source_setup_seconds=(
+            device_native_source_setup_seconds
+        ),
+        device_native_source_short_range_seconds=(
+            device_native_source_short_range_seconds
+        ),
+        device_native_source_reciprocal_seconds=(
+            device_native_source_reciprocal_seconds
+        ),
     )
     return RSDFContractedResponse(
         target_coulomb=target_coulomb,
         restricted_hf_bilinear=bilinear,
+        coupled_target_j_bilinear=coupled,
         parameters=parameters,
         value_parity_max_abs=parity,
         host_primitive_seconds=host_seconds,
@@ -291,6 +328,16 @@ def _native_derivatives_enabled(value, *, name):
     if not isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be True, False, or 'auto'")
     return bool(value)
+
+
+def _normalize_observable_mode(value):
+    normalized = str(value).strip().lower()
+    if normalized not in {"fused", "resolved"}:
+        raise ValueError(
+            "observable_mode must be 'fused' or 'resolved', got "
+            f"{value!r}"
+        )
+    return normalized
 
 
 def _prepare_provider(provider):
@@ -381,7 +428,19 @@ def _contracted_profile(
     component_rebatch_count,
     native_source,
     native_metric,
+    observable_mode,
+    device_native_source_seconds,
+    device_native_metric_seconds,
+    device_native_source_setup_seconds,
+    device_native_source_short_range_seconds,
+    device_native_source_reciprocal_seconds,
 ):
+    device_adjoint_seconds = max(
+        0.0,
+        device_derivative_seconds
+        - device_native_source_seconds
+        - device_native_metric_seconds,
+    )
     return RSDFResponseProfile(
         canonical_pair_count=len(pairs),
         derivative_component_count=len(pairs) * natm * 3,
@@ -395,7 +454,11 @@ def _contracted_profile(
         device_derivative_output_bytes=0,
         device_central_upload_factorization_seconds=device_central_seconds,
         device_derivative_upload_response_seconds=device_derivative_seconds,
-        response_mode=_response_mode(native_source, native_metric),
+        response_mode=_response_mode(
+            native_source,
+            native_metric,
+            observable_mode,
+        ),
         host_peak_primitive_bytes=host_totals["peak_bytes"],
         device_peak_explicit_working_bytes=peak_explicit_bytes,
         full_derivative_equivalent_bytes=full_derivative_bytes,
@@ -403,11 +466,29 @@ def _contracted_profile(
         component_batch_size=final_component_batch_size,
         initial_component_batch_size=initial_component_batch_size,
         component_rebatch_count=component_rebatch_count,
+        device_native_source_derivative_seconds=(
+            device_native_source_seconds
+        ),
+        device_native_metric_derivative_seconds=(
+            device_native_metric_seconds
+        ),
+        device_adjoint_component_seconds=device_adjoint_seconds,
+        device_native_source_setup_seconds=(
+            device_native_source_setup_seconds
+        ),
+        device_native_source_short_range_seconds=(
+            device_native_source_short_range_seconds
+        ),
+        device_native_source_reciprocal_seconds=(
+            device_native_source_reciprocal_seconds
+        ),
     )
 
 
-def _response_mode(native_source, native_metric):
+def _response_mode(native_source, native_metric, observable_mode):
     if native_source and native_metric:
+        if observable_mode == "fused":
+            return "native_source_native_metric_fused_adjoint"
         return "native_source_native_metric_contracted_adjoint"
     if native_source:
         return "native_source_contracted_component_stream"
@@ -425,8 +506,8 @@ def _contract_device_pair(
     response,
     auxiliary_reference,
     auxiliary_response,
-    target_coulomb,
-    bilinear,
+    observable_outputs,
+    observable_mode,
     nao,
     natm,
     metric_context,
@@ -487,6 +568,7 @@ def _contract_device_pair(
         auxiliary_response,
         native_source=(source_components is None),
         native_metric=(metric_context is not None),
+        observable_mode=observable_mode,
     )
     context_bytes = (
         0
@@ -508,8 +590,8 @@ def _contract_device_pair(
             auxiliary_response=auxiliary_response,
             source_components=source_components,
             metric_components=metric_components,
-            target_coulomb=target_coulomb,
-            bilinear=bilinear,
+            target_coulomb=observable_outputs[0],
+            bilinear=observable_outputs[1],
             memory_fraction=memory_fraction,
             minimum_reserve_bytes=minimum_reserve_bytes,
             max_component_batch_size=max_component_batch_size,
@@ -523,20 +605,23 @@ def _contract_device_pair(
             stream["peak_explicit_bytes"],
         )
     if metric_context is not None:
-        metric_result = metric_context.contract(
-            cp.stack(
-                (
-                    metric_adjoints.target_coulomb,
-                    metric_adjoints.restricted_hf_bilinear,
-                )
-            )
-        )
-        target_coulomb += metric_result.values[0]
-        bilinear += metric_result.values[1]
+        metric_result = metric_context.contract(cp.stack(metric_adjoints))
+        for output, value in zip(
+            observable_outputs,
+            metric_result.values,
+            strict=True,
+        ):
+            output += value
         peak_explicit_bytes = max(
             peak_explicit_bytes,
             metric_result.peak_explicit_bytes,
         )
+        native_metric_seconds = (
+            metric_context.device_setup_seconds
+            + metric_result.device_seconds
+        )
+    else:
+        native_metric_seconds = 0.0
     derivative_end.record()
     derivative_end.synchronize()
     cderi_bytes = int(factorization.value.nbytes)
@@ -557,14 +642,8 @@ def _contract_device_pair(
         initial_component_batch_size=initial_batch_size,
         final_component_batch_size=final_batch_size,
         component_rebatch_count=rebatch_count,
-        target_source_adjoint=(
-            None if source_adjoints is None else source_adjoints.target_coulomb
-        ),
-        bilinear_source_adjoint=(
-            None
-            if source_adjoints is None
-            else source_adjoints.restricted_hf_bilinear
-        ),
+        native_metric_seconds=native_metric_seconds,
+        source_adjoints=source_adjoints,
     )
 
 
@@ -585,6 +664,7 @@ def _build_native_pair_adjoints(
     *,
     native_source,
     native_metric,
+    observable_mode,
 ):
     if not native_source and not native_metric:
         return None, None
@@ -596,29 +676,28 @@ def _build_native_pair_adjoints(
         auxiliary_reference,
         auxiliary_response,
     )
+    cderi_adjoints = (
+        (target + bilinear,)
+        if observable_mode == "fused"
+        else (target, bilinear)
+    )
     source_adjoints = None
     if native_source:
-        source_adjoints = PairSourceAdjoints(
-            target_coulomb=push_cderi_adjoint_through_source(
+        source_adjoints = tuple(
+            push_cderi_adjoint_through_source(
                 factorization.factor,
-                target,
-            ),
-            restricted_hf_bilinear=push_cderi_adjoint_through_source(
-                factorization.factor,
-                bilinear,
-            ),
+                adjoint,
+            )
+            for adjoint in cderi_adjoints
         )
     metric_adjoints = None
     if native_metric:
-        metric_adjoints = PairMetricAdjoints(
-            target_coulomb=push_cderi_adjoint_through_metric(
+        metric_adjoints = tuple(
+            push_cderi_adjoint_through_metric(
                 factorization,
-                target,
-            ),
-            restricted_hf_bilinear=push_cderi_adjoint_through_metric(
-                factorization,
-                bilinear,
-            ),
+                adjoint,
+            )
+            for adjoint in cderi_adjoints
         )
     return source_adjoints, metric_adjoints
 
@@ -710,22 +789,19 @@ def _matching_component_count(arrays):
 def _contract_native_sources(
     optimizer,
     kpts,
-    target_adjoints,
-    bilinear_adjoints,
+    source_adjoint_groups,
 ):
+    groups = tuple(source_adjoint_groups)
+    if not groups:
+        raise ValueError("at least one source-adjoint group is required")
     if len(kpts) == 1 and np.linalg.norm(kpts[0]) <= 1.0e-10:
-        pair = next(iter(target_adjoints))
-        contracted = contract_gamma_sources(
+        pair = next(iter(groups[0]))
+        return contract_gamma_sources_profiled(
             optimizer,
-            (
-                target_adjoints[pair],
-                bilinear_adjoints[pair],
-            ),
+            tuple(group[pair] for group in groups),
         )
-        return contracted[0], contracted[1]
-    contracted = contract_kpoint_sources(
+    return contract_kpoint_sources_profiled(
         optimizer,
         kpts,
-        (target_adjoints, bilinear_adjoints),
+        groups,
     )
-    return contracted[0], contracted[1]

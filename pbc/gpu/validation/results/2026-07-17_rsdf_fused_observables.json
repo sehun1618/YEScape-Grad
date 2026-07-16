@@ -1,0 +1,63 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_rsdf_fused_observables_v1",
+  "overall_status": "pass",
+  "water64_executed_by_codex": false,
+  "implementation": {
+    "production_observable_mode": "fused",
+    "reference_observable_mode": "resolved",
+    "production_response_mode": "native_source_native_metric_fused_adjoint",
+    "short_range_source_kernel_calls_per_pair": 1,
+    "target_coulomb_component_resolved_in_production": false,
+    "gradient_partition": "explicit_response_coupled",
+    "silent_cpu_fallback": false
+  },
+  "algebra": {
+    "identity": "R*(W_target + W_bilinear) = R*W_target + R*W_bilinear",
+    "fused_vs_resolved_direct_contraction_max_abs_ha_per_bohr": 1e-9,
+    "water8_archived_gradient_max_abs_difference_ha_per_bohr": 7.419065362057609e-14,
+    "water20_archived_gradient_max_abs_difference_ha_per_bohr": 6.178391132038996e-14
+  },
+  "correctness": {
+    "gamma_full_gradient_cpu_gpu": "pass",
+    "sampled_k_full_gradient_cpu_gpu": "pass",
+    "pbe_scan_r2scan": "pass",
+    "bounded_memory_and_transactional_oom": "pass",
+    "rsdf_test_count": 14,
+    "mgga_test_count": 4,
+    "combined_test_elapsed_s": 311.173
+  },
+  "water8": {
+    "n3_analytic_gradient_wall_s": [
+      5.860908176749945,
+      5.904339888133109,
+      5.884372713975608
+    ],
+    "n3_median_wall_s": 5.884372713975608,
+    "n4_analytic_gradient_wall_s": [
+      4.309350502677262,
+      4.2994936583563685,
+      4.288232123479247
+    ],
+    "n4_median_wall_s": 4.2994936583563685,
+    "n4_speedup_percent_vs_n3": 26.93369595462728
+  },
+  "water20": {
+    "n3_analytic_gradient_wall_s": 32.467983606271446,
+    "n4_profiled_resolved_wall_s": 32.957769442,
+    "n4_fused_analytic_gradient_wall_s": 21.201679370366037,
+    "n4_speedup_percent_vs_n3": 34.69973489123369,
+    "resolved_source_total_wall_s": 23.243222792,
+    "fused_source_total_wall_s": 11.809298708200453,
+    "resolved_source_short_range_wall_s": 21.329828125,
+    "fused_source_short_range_wall_s": 10.675568359375,
+    "fused_source_reciprocal_wall_s": 1.131584716796875,
+    "fused_metric_wall_s": 0.015500543594360351,
+    "resolved_device_peak_explicit_working_bytes": 517588352,
+    "fused_device_peak_explicit_working_bytes": 288561632
+  },
+  "source_result_directories": [
+    "pbc/benchmark/results/rsdf_n3_native_metric_2026-07-17",
+    "pbc/benchmark/results/rsdf_n4_source_phase_profile_2026-07-17",
+    "pbc/benchmark/results/rsdf_n4_fused_observable_2026-07-17"
+  ]
+}

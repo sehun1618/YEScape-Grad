@@ -177,14 +177,20 @@ CPU fallback 대신 명시적 memory error로 종료한다.
 
 GPU RSDF production gradient도 `gradient_metadata.df_response_profile`에 ownership과
 memory 정보를 기록한다. Default
-`response_mode=native_source_native_metric_contracted_adjoint`는 source와 reciprocal
-metric derivative를 full `dCDERI/dJ/dK` 없이 adjoint에 직접 수축했다는 뜻이다. Exact
-screened short-range metric `ip1/ip2`는 host boundary로 metadata에 명시된다.
+`response_mode=native_source_native_metric_fused_adjoint`는 target-J와 Z-bilinear
+adjoint를 먼저 합친 뒤 source와 reciprocal metric derivative에 한 번만 직접 수축했다는
+뜻이다. `observable_mode=fused`, `observable_count=1`이며 성분별 진단 경로는
+`build_rsdf_contracted_response(..., observable_mode="resolved")`로 보존된다. Exact screened
+short-range metric `ip1/ip2`는 host boundary로 metadata에 명시된다.
 `full_derivative_equivalent_bytes`는 피한 full tensor 크기,
 `retained_device_derivative_bytes`는 실제 보존량,
 `device_peak_explicit_working_bytes`는 명시적 workspace estimate다. Reference 또는 mixed
 `component_stream` mode에서만 `initial_component_batch_size`, `component_batch_size`,
 `component_rebatch_count`가 OOM 축소 이력을 나타내며 native-only mode에서는 `null`이다.
+Source 병목 분석에는 `gradient_internal_s`의
+`rsdf_device_native_source_{setup,short_range,reciprocal}`과
+`rsdf_device_native_metric_derivative`를 사용한다. 이 값은 CUDA event를 동기화해 측정한
+exclusive device phase이며, 합산 wall time과 host setup time은 별도로 해석한다.
 
 ## 3. FD 선택
 

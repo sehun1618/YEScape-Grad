@@ -115,6 +115,13 @@ class GDFGradientResult:
                     f"{label} local-part-2 pseudopotential value setup",
                 ]
             )
+        elif self.backend == "rsdf" and self.df_response_profile is not None:
+            host_boundaries.append(
+                "RSDF central 2-center/3-center integral and CDERI setup"
+            )
+            host_boundaries.extend(
+                self.df_response_profile.get("host_owned_operations", ())
+            )
         else:
             host_boundaries.extend(
                 [
@@ -137,9 +144,10 @@ class GDFGradientResult:
             "target XC, Pulay, response, and final electronic assembly",
         ]
         contracted_rsdf = bool(
-            self.df_response_profile
+            self.backend == "rsdf"
+            and self.df_response_profile
             and self.df_response_profile.get("response_mode")
-            == "source_contracted_component_stream"
+            != "full_tensor_reference"
         )
         if native:
             device_operations.extend(
@@ -151,11 +159,10 @@ class GDFGradientResult:
             )
         elif contracted_rsdf:
             device_operations.extend(
-                [
-                    f"{label} metric Cholesky and component-streamed response",
-                    "source-contracted target-J and Z-vector bilinear response",
-                    "no retained full dCDERI, dJ, or dK derivative tensors",
-                ]
+                self.df_response_profile.get("device_owned_operations", ())
+            )
+            device_operations.append(
+                "no retained full dCDERI, dJ, or dK derivative tensors"
             )
         else:
             device_operations.extend(
@@ -180,6 +187,11 @@ class GDFGradientResult:
             "gdf_bilinear_mode": self.gdf_bilinear_mode,
             "gdf_reciprocal_memory": self.gdf_reciprocal_memory,
             "df_response_profile": self.df_response_profile,
+            "df_observable_mode": (
+                None
+                if self.df_response_profile is None
+                else self.df_response_profile.get("observable_mode")
+            ),
             "native_one_electron": self.native_one_electron,
             "gradient_partition": (
                 "explicit_response_coupled"
@@ -313,6 +325,7 @@ def _gaussian_df_gpu_gradient(
     fused_two_electron = gdf_bilinear_mode == "one_pass_fused"
     reciprocal_memory_diagnostics = {}
     contracted_two_electron_response = None
+    fused_target_j_z_bilinear = None
 
     if progress_callback is not None:
         progress_callback("gradient_target_fock_rhs", state="started")
@@ -443,26 +456,36 @@ def _gaussian_df_gpu_gradient(
                 dc_mf.with_df,
                 context.density,
                 transition_density,
+                observable_mode="fused",
             )
-            target_coulomb = cderi_response.target_coulomb
-            contracted_two_electron_response = (
-                cderi_response.restricted_hf_bilinear
+            fused_target_j_z_bilinear = (
+                cderi_response.coupled_target_j_bilinear
             )
+            if fused_target_j_z_bilinear is None:
+                target_coulomb = cderi_response.target_coulomb
+                contracted_two_electron_response = (
+                    cderi_response.restricted_hf_bilinear
+                )
+            else:
+                target_coulomb = None
+                contracted_two_electron_response = None
             if context.source_mf.exxdiv is not None:
                 if context.source_mf.exxdiv != "ewald":
                     raise NotImplementedError(
                         "GPU RSDF supports exxdiv='ewald' or None, got "
                         f"{context.source_mf.exxdiv!r}"
                     )
-                contracted_two_electron_response += (
-                    ewald_restricted_hf_bilinear_derivative(
-                        context.cell,
-                        context.kpts,
-                        context.density,
-                        transition_density,
-                        _full_overlap_derivatives(context, one_sources),
-                    )
+                ewald_response = ewald_restricted_hf_bilinear_derivative(
+                    context.cell,
+                    context.kpts,
+                    context.density,
+                    transition_density,
+                    _full_overlap_derivatives(context, one_sources),
                 )
+                if fused_target_j_z_bilinear is None:
+                    contracted_two_electron_response += ewald_response
+                else:
+                    fused_target_j_z_bilinear += ewald_response
         else:
             cderi_response = response_builder(dc_mf.with_df)
         timings[f"{backend_name}_host_primitive_integrals"] = (
@@ -551,10 +574,13 @@ def _gaussian_df_gpu_gradient(
     z_nuclear_batch_size = None
     source_hf = (
         None
-        if native_gdf or contracted_two_electron_response is not None
+        if (
+            native_gdf
+            or contracted_two_electron_response is not None
+            or fused_target_j_z_bilinear is not None
+        )
         else jk_derivative.restricted_hf
     )
-    fused_target_j_z_bilinear = None
     if native_one_electron:
         response = native_response_core
         z_nuclear_batch_size = z_nuclear_batch_execution.final_batch_size
@@ -608,15 +634,16 @@ def _gaussian_df_gpu_gradient(
                 )
         else:
             rsdf_response_start = perf_counter()
-            if contracted_two_electron_response is None:
-                response += _componentwise_z_two_electron_response(
-                    context,
-                    partitions,
-                    z_result,
-                    source_hf,
-                )
-            else:
-                response += contracted_two_electron_response
+            if fused_target_j_z_bilinear is None:
+                if contracted_two_electron_response is None:
+                    response += _componentwise_z_two_electron_response(
+                        context,
+                        partitions,
+                        z_result,
+                        source_hf,
+                    )
+                else:
+                    response += contracted_two_electron_response
             cp.cuda.Stream.null.synchronize()
             timings["rsdf_z_two_electron_response"] = (
                 perf_counter() - rsdf_response_start
@@ -701,6 +728,24 @@ def _gaussian_df_gpu_gradient(
                     ),
                     "rsdf_device_derivative_upload_response": (
                         profile.device_derivative_upload_response_seconds
+                    ),
+                    "rsdf_device_native_source_derivative": (
+                        profile.device_native_source_derivative_seconds
+                    ),
+                    "rsdf_device_native_metric_derivative": (
+                        profile.device_native_metric_derivative_seconds
+                    ),
+                    "rsdf_device_adjoint_component": (
+                        profile.device_adjoint_component_seconds
+                    ),
+                    "rsdf_device_native_source_setup": (
+                        profile.device_native_source_setup_seconds
+                    ),
+                    "rsdf_device_native_source_short_range": (
+                        profile.device_native_source_short_range_seconds
+                    ),
+                    "rsdf_device_native_source_reciprocal": (
+                        profile.device_native_source_reciprocal_seconds
                     ),
                 }
             )

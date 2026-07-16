@@ -246,13 +246,41 @@ $$
 를 만족할 때만 derivative를 허용한다. 이 guard는 omega, mesh, auxiliary basis,
 pair orientation, Cholesky gauge mismatch를 production gradient에 섞이지 않게 한다.
 
+### 6.1 Fused production observable
+
+성분별 진단에서는 target-J와 restricted-HF Z-bilinear에 대해 두 adjoint
+$W_J^C$, $W_Z^C$를 각각 source와 metric 뒤로 전파할 수 있다. 하지만 최종 DC gradient는
+두 핵좌표 미분의 합만 사용한다. Reverse map $R^*$가 선형이므로
+
+$$
+R^*(W_J^C)+R^*(W_Z^C)
+=R^*(W_J^C+W_Z^C).
+$$
+
+Production GPU route는 따라서 먼저
+
+$$
+W_{J+Z}^C = W_J^C + W_Z^C
+$$
+
+를 만들고 source와 metric derivative에 한 번만 수축한다. 이는 중요한 orbital만
+선택하거나 물리항을 근사하는 방식이 아니다. 똑같은 두 선형 functional을 더하는 순서만
+바꾼 것이다. 현재 GPU4PySCF short-range integral ABI가 source 하나만 받으므로 이
+재배열은 가장 큰 CUDA integral traversal을 canonical pair당 두 번에서 한 번으로 줄인다.
+
+`build_rsdf_contracted_response(..., observable_mode="fused")`가 production 경로이며
+결과는 `coupled_target_j_bilinear` 하나로 반환되어
+`GradientContributions.assemble(..., coupled=...)`에서 더해진다. 성분별 분석이나
+full-tensor witness 비교에는 `observable_mode="resolved"`를 사용하며, 이 경로는
+`target_coulomb`과 `restricted_hf_bilinear`를 각각 반환한다.
+
 ## 7. J/K, target DFA, and Z-vector assembly
 
 $dC$ component stream이 준비된 뒤 RSDF는 GDF의 backend-independent 물리식을
 재사용하되 full AO matrix derivative는 만들지 않는다.
 
-1. 각 canonical pair의 $dC$에 J/K product rule을 적용해 target-J와 Z-bilinear scalar를
-   즉시 누적한다.
+1. 각 canonical pair의 J/K product-rule adjoint를 만들고 production에서는 target-J와
+   Z-bilinear를 합쳐 하나의 coupled scalar로 즉시 누적한다.
 2. target PBE/SCAN/r2SCAN explicit Hartree/XC derivative를 조립한다.
 3. target-Fock overlap/Pulay term을 더한다.
 4. HF orbital Hessian action과 adjoint Z-vector를 계산한다.
@@ -371,9 +399,23 @@ Water20 1회 결과는 다음과 같다. Water20에는 FD를 실행하지 않았
 | Water20 host metric derivative | 15.121 s | 0.109 s | 99.3% 감소 |
 | Water20 host-to-device primitive | 34,675,200 B | 16,275,392 B | 53.1% 감소 |
 
-N3의 RSDF regression 14개와 SCAN/r2SCAN MGGA regression 4개가 통과했다. Default
-`response_mode`는 `native_source_native_metric_contracted_adjoint`이며, native-only
-경로에서는 component batch가 필요하지 않아 해당 metadata가 `null`이다.
+N3의 RSDF regression 14개와 SCAN/r2SCAN MGGA regression 4개가 통과했다. N4부터
+production `response_mode`는 `native_source_native_metric_fused_adjoint`이고
+`observable_count=1`이다. Native-only 경로에서는 component batch가 필요하지 않아 해당
+metadata가 `null`이다.
+
+N4 fused observable의 동일 조건 결과는 다음과 같다.
+
+| Metric | N3 resolved adjoints | N4 fused adjoint | Change |
+| --- | ---: | ---: | ---: |
+| Water8 analytic gradient median | 5.884 s | 4.299 s | 26.9% 감소 |
+| Water20 analytic gradient | 32.468 s | 21.202 s | 34.7% 감소 |
+| Water20 native source short-range | 21.330 s | 10.676 s | 50.0% 감소 |
+| Water20 explicit device workspace | 517,588,352 B | 288,561,632 B | 44.2% 감소 |
+
+Water8/Water20에서 N3 gradient와의 최대 차이는 각각 $7.42\times10^{-14}$와
+$6.18\times10^{-14}$ Ha/Bohr였다. RSDF 14개와 MGGA 4개 회귀가 모두 통과했으며
+Water64는 이 검증에서 실행하지 않았다.
 
 ## 10. Current limitations and failure policy
 
