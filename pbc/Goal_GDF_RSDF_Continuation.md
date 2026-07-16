@@ -204,9 +204,9 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
 | G6 bounded-memory repair | `complete` | complete live-memory estimator/reserve, transactional OOM rebatch, planner 7-test 및 GDF GPU 35-test 통과, water8 selected-FD $2.09\times10^{-9}$ Ha/Bohr, water20 prior-gradient gap $3.23\times10^{-14}$ Ha/Bohr | 사용자 Water64 evidence는 optional follow-up이며 자동 gate가 아님 |
 | G7 post-closure timing | `complete` | water8 3회 median: one-pass 6.2552 s, fused 4.7703 s; water20 limited no-FD 32.1472 s | compact validation evidence 유지 |
 | G8 profile-driven GDF optimization | `complete` | CUDA profile에서 SR integral kernel 82%; Gamma derivative omega 1.5배로 water8 one-pass/fused median 30.3%/23.4%, water20 34.2% 개선, FD/parity 및 35-test 통과 | sampled-k는 변경하지 않고 현재 Gamma 정책 유지 |
-| R0 RSDF baseline | `active` | 기능/정확성 release gate만 존재 | 고정 water8/20 timing queue와 component/ownership profile 작성 |
-| R1 RSDF contracted response | `pending` | full response/intermediate 비용 미분해 | R0 profile 후 범위 확정 |
-| R2 RSDF release | `pending` | 기존 correctness evidence 존재 | 최적화 후 전체 gate 재실행 |
+| R0 RSDF baseline | `complete` | water8 3회 gradient median 224.3317 s; one-electron 146.1063 s, RSDF response 76.1478 s; host/device timing 및 byte ownership 기록 | compact evidence 유지 |
+| R1 RSDF contracted response | `complete` | bulk source/metric derivative, native H1 reuse, canonical-pair direct contraction으로 full `dCDERI/dJ/dK` 제거; water8 median 7.3928 s, retained derivative 0 B, FD $2.72\times10^{-10}$ Ha/Bohr | final package gate 유지 |
+| R2 RSDF release | `complete` | Gamma/sampled-k PBE 및 SCAN/r2SCAN parity, forced batch-1와 transactional OOM rebatch, 관련 29-test, wheel/import/example, 공유 GDF 35-test 통과 | compact evidence 유지 |
 
 ## 7. 완료 정의
 
@@ -267,3 +267,52 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
   차이는 $7.38\times10^{-12}$/$1.65\times10^{-11}$ Ha/Bohr다.
 - Gamma/k-point 전체 GDF GPU 35-test module이 551.310 s에 통과했다. sampled-k omega
   policy는 변경하지 않았다.
+
+## 11. 2026-07-16 R0 RSDF baseline record
+
+- Water8/SZV-GTH/GTH-SCAN/r2SCAN/400 Ha/Gamma를 독립 process 세 번 측정했다.
+- Analytic-gradient wall time은 222.3333, 224.3317, 231.9235 s였고 median은
+  224.3317 s였다.
+- One-electron median은 146.1063 s, RSDF response median은 76.1478 s였다.
+- Response 중 source derivative median은 71.3266 s, metric derivative median은
+  4.5648 s였다.
+- Full response는 device derivative output 382,205,952 B를 보존했다. 따라서 R1은 host
+  source 반복, H1 tensor, full derivative materialization 순서로 범위를 좁혔다.
+- Water20 과거 evidence는 read-only scaling 참고로만 사용했고 재실행하지 않았다.
+
+## 12. 2026-07-16 R1 RSDF optimization record
+
+- Source와 metric primitive는 원자마다 integral context를 다시 만들지 않고 all-atom
+  derivative를 한 번 생성한다.
+- RSDF one-electron H1은 DF backend와 무관한 기존 bounded native GDF H1 streaming을
+  재사용하고 RSDF two-electron response만 별도로 더한다.
+- Production `RSDFContractedResponse`는 canonical k-pair와 nuclear component 하나의
+  $dC$를 만든 즉시 target-J와 Z-vector bilinear scalar로 수축한다. Full `dCDERI`,
+  `dJ`, `dK`는 반환하거나 보존하지 않는다.
+- Full-tensor reference, production scalar assembly, bounded-memory execution을 각각
+  `response.py`, `contracted_response.py`, `component_stream.py`로 분리했다. Public API는
+  유지되며 memory/OOM 정책은 물리 응답 조립과 독립적으로 테스트된다.
+- Component upload의 기본 상한은 3이며 free-memory preflight를 거친다. OOM batch는 결과를
+  commit하지 않고 절반으로 줄여 같은 interval부터 재시도한다. Forced batch-1 parity와
+  synthetic 4-to-2 OOM retry가 통과했다.
+- 최종 Water8 wall time은 6.9598, 7.3928, 7.5430 s, median 7.3928 s로 R0 대비
+  96.70% 감소했다.
+- One-copy full $dC$ equivalent는 63,700,992 B지만 retained derivative는 0 B이고,
+  명시적 component working estimate는 6,303,744 B다.
+- 선택 FD 오차는 $2.717\times10^{-10}$ Ha/Bohr, Z residual은
+  $2.581\times10^{-14}$ 이하, R0 gradient gap은 $4.337\times10^{-11}$ Ha/Bohr다.
+- Gamma와 sampled-k PBE CPU/GPU parity, SCAN Gamma와 r2SCAN sampled-k regression이
+  통과했다. Water64는 실행하지 않았다.
+
+## 13. 2026-07-16 R2 release record
+
+- CPU RSDF 5, CPU MGGA 4, GPU RSDF 7, GPU MGGA 4, package/import/benchmark 9개로
+  구성된 관련 회귀 29개가 모듈 분리 후 다시 통과했다.
+- CPU와 GPU wheel을 build isolation 없이 각각 빌드하고 임시 target에 설치한 뒤 source
+  tree가 아닌 wheel package에서 import했다.
+- CPU sampled-k RSDF와 GPU sampled-k RSDF public example이 wheel 설치본으로 실행됐다.
+- 공유 `grad/gdf.py` 변경의 GDF 무회귀를 확인하기 위해 GDF GPU 35-test 전체 모듈을
+  재실행했고 550.958 s에 통과했다.
+- Release evidence는
+  `pbc/gpu/validation/results/2026-07-16_rsdf_optimization.json`에 고정했다.
+- 모든 completion gate가 small/medium test로 닫혔고 Water64는 실행하지 않았다.

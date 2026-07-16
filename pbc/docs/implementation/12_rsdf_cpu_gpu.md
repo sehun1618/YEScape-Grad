@@ -171,8 +171,55 @@ L^{A_x}=L\Phi(W),
 $$
 
 여기서 `Phi`는 strict lower triangle을 보존하고 real diagonal의 절반을 취한다.
-`RSDFResponseTensors`는 `source_dcderi`와 `metric_dcderi`를 따로 보존하여 auxiliary
-response를 component-wise audit할 수 있게 한다.
+`df/rsdf/response.py::build_rsdf_response_tensors`가 반환하는
+`RSDFResponseTensors`는 방정식 검증용 reference builder이다. 이 builder는
+`source_dcderi`와 `metric_dcderi`를 따로 보존하므로 auxiliary response를
+component-wise audit하거나 storage FD와 직접 비교할 수 있다.
+
+GPU production gradient는
+`df/rsdf/contracted_response.py::build_rsdf_contracted_response`가 반환하는
+`RSDFContractedResponse`를 사용한다. 한 canonical k-pair와
+한 nuclear component의 $dC$만 device에서 만들고, 필요한 두 scalar에 즉시 수축한 뒤
+버린다. 따라서 production에는 다음 배열이 남지 않는다.
+
+```text
+dCDERI: (natm, 3, naux, nao, nao)
+dJ/dR:  (natm, nkpts, 3, nao, nao)
+dK/dR:  (natm, nkpts, 3, nao, nao)
+```
+
+Diagonal CDERI에서
+
+$$
+u_D=\sum_k \operatorname{Tr}[C_{kk}D_k],
+\qquad
+du_D^{A_x}=\sum_k \operatorname{Tr}[C_{kk}^{A_x}D_k]
+$$
+
+를 만들면 target Hartree 항은
+
+$$
+E_J^{A_x}=\frac{1}{N_k^2}\operatorname{Re}
+\left[u_D\cdot du_D^{A_x}\right]
+$$
+
+이다. Z-vector transition density를 $T$라 하면 Coulomb cross term은
+
+$$
+g_{J,DT}^{A_x}=\frac{2}{N_k^2}\operatorname{Re}
+\left[u_D\cdot du_T^{A_x}+u_T\cdot du_D^{A_x}\right].
+$$
+
+Exchange는 각 canonical pair가 소유하는 $(k_i,k_j)$와 reverse conjugate pair를 함께
+수축한다. 이 pair-local 식은 full $dJ/dK$ witness와 복소 sampled-k random test에서
+$10^{-10}$ 이내로 일치한다.
+
+`df/rsdf/component_stream.py`가 production의 GPU memory policy를 별도로 소유한다.
+Primitive upload는 기본 최대 세 component이며 free-memory budget으로 preflight한다.
+OOM이면 실패 batch의 결과를 commit하지 않고 같은 component부터 batch를 절반으로 줄여
+재시도한다. Batch size 1도 실패하면 CPU fallback 대신 설명 가능한 `MemoryError`를
+발생시킨다. Reference tensor 생성, 물리적 scalar 조립, memory/OOM 정책을 서로 다른
+module로 분리해 각 계약을 독립적으로 읽고 회귀 테스트할 수 있다.
 
 PySCF HDF5에 저장된 central CDERI는 SCF energy의 authoritative value이다. Package는
 독립적으로 `B`, `M`, $L^{-1}B$를 재구성하고 모든 canonical k-pair에서
@@ -186,9 +233,11 @@ pair orientation, Cholesky gauge mismatch를 production gradient에 섞이지 �
 
 ## 7. J/K, target DFA, and Z-vector assembly
 
-$dC$가 준비된 뒤 RSDF는 GDF의 backend-independent post-CDERI algebra를 재사용한다.
+$dC$ component stream이 준비된 뒤 RSDF는 GDF의 backend-independent 물리식을
+재사용하되 full AO matrix derivative는 만들지 않는다.
 
-1. $dJ/dR$과 $dK/dR$에 product rule을 적용한다.
+1. 각 canonical pair의 $dC$에 J/K product rule을 적용해 target-J와 Z-bilinear scalar를
+   즉시 누적한다.
 2. target PBE/SCAN/r2SCAN explicit Hartree/XC derivative를 조립한다.
 3. target-Fock overlap/Pulay term을 더한다.
 4. HF orbital Hessian action과 adjoint Z-vector를 계산한다.
@@ -233,8 +282,8 @@ Device-owned operations:
 
 - canonical CDERI storage after one-time upload
 - source HF and target DFA J/K contractions
-- metric Cholesky and `dL`/$dC$ response algebra
-- full $dJ/dR$, $dK/dR$
+- metric Cholesky와 bounded component `dL`/$dC$ response algebra
+- source-contracted target-J와 Z-vector bilinear scalar 누적
 - target XC contraction, HF AX/Z-vector, final electronic assembly
 
 `silent_cpu_fallback`은 `False`이다. Host integral generation은 숨겨진 CPU DC-DFT
@@ -267,11 +316,29 @@ Direct evidence:
 pbc/cpu/validation/results/2026-07-14_rsdf_cpu.json
 pbc/gpu/validation/results/2026-07-14_rsdf_gpu.json
 pbc/gpu/validation/results/2026-07-14_mgga_gpu.json
+pbc/gpu/validation/results/2026-07-16_rsdf_optimization.json
 ```
 
 PBE 전용 RSDF gate에 더해 SCAN/r2SCAN과 결합한 4개 RSDF full Cartesian case도
 통과했다. 이 결합 matrix의 maximum CPU analytic-FD 및 GPU analytic-FD error는 각각
 $7.395\times10^{-7}$ 및 $7.396\times10^{-7}$ Ha/Bohr이다.
+
+2026-07-16 source-contracted optimization의 Water8/SZV-GTH/r2SCAN/400 Ha/Gamma
+결과는 다음과 같다. Timing은 독립 process 세 번의 median이다.
+
+| Metric | R0 full-tensor | R1 contracted | Change |
+| --- | ---: | ---: | ---: |
+| analytic gradient wall time | 224.332 s | 7.393 s | 96.70% 감소 |
+| one-electron stage | 146.106 s | 0.428 s | native H1 streaming |
+| RSDF response stage | 76.148 s | 5.089 s | bulk primitive + direct contraction |
+| retained device derivative bytes | 382,205,952 B | 0 B | full output 제거 |
+| equivalent one-copy full $dC$ | - | 63,700,992 B | materialize하지 않음 |
+| explicit component workspace estimate | - | 6,303,744 B | batch 3 |
+
+최종 선택 FD 오차는 $2.717\times10^{-10}$ Ha/Bohr, Z-vector residual은
+$2.581\times10^{-14}$ 이하였으며 R0 gradient와의 최대 차이는
+$4.337\times10^{-11}$ Ha/Bohr였다. Gamma와 $2\times1\times1$ sampled-k CPU/GPU
+parity, SCAN Gamma 및 r2SCAN sampled-k regression도 통과했다.
 
 Regression gates는 CPU `39/39`, GPU `17/17`를 통과했다. Production RSDF response는
 matrix finite difference를 호출하지 않는다.

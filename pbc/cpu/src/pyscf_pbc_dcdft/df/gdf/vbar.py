@@ -46,6 +46,38 @@ def vbar_source_derivative(
     return np.asarray(result)
 
 
+def vbar_source_derivatives(
+    cell,
+    auxcell,
+    omega: float,
+    *,
+    kpt: np.ndarray,
+) -> np.ndarray:
+    """Return all-atom zero-transfer source derivatives from one overlap."""
+
+    point = _kpoint(kpt)
+    ip = -np.asarray(
+        cell.pbc_intor("int1e_ipovlp", kpts=point.reshape(1, 3))
+    )[0]
+    nao = int(cell.nao_nr())
+    naux = int(auxcell.nao_nr())
+    coefficient = _vbar(cell, auxcell, omega)[None, :]
+    result = np.zeros(
+        (int(cell.natm), 3, nao, nao, naux), dtype=ip.dtype
+    )
+    slices = np.asarray(cell.aoslice_by_atom(), dtype=int)
+    for atom_id in range(cell.natm):
+        p0, p1 = slices[atom_id, 2:4]
+        for axis in range(3):
+            d_overlap = np.zeros((nao, nao), dtype=ip.dtype)
+            d_overlap[p0:p1, :] += ip[axis, p0:p1, :]
+            d_overlap[:, p0:p1] += ip[axis, p0:p1, :].T.conj()
+            result[atom_id, axis] = (
+                -d_overlap[:, :, None] * coefficient[None, :, :]
+            )
+    return result.reshape(int(cell.natm), 3, nao * nao, naux)
+
+
 def _vbar(cell, auxcell, omega):
     charges = np.asarray(rsdf.get_aux_chg(auxcell), dtype=float)
     return np.pi * charges / (float(omega) ** 2 * float(cell.vol))

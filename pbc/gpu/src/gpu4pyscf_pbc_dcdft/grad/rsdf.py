@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..df.rsdf import build_rsdf_response_tensors
+from ..df.rsdf import build_rsdf_contracted_response
 from .gdf import GDFGradientResult, _gaussian_df_gpu_gradient
 
 
@@ -22,7 +22,7 @@ def rsdf_gpu_gradient(
     return _gaussian_df_gpu_gradient(
         dc_mf,
         backend_name="rsdf",
-        response_builder=build_rsdf_response_tensors,
+        response_builder=build_rsdf_contracted_response,
         z_equation=z_equation,
         z_solver=z_solver,
         z_tolerance=z_tolerance,

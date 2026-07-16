@@ -174,6 +174,39 @@ def long_range_metric_derivative(
     return _real_at_gamma(np.asarray(derivatives), momentum_transfer)
 
 
+def long_range_metric_derivatives(
+    cell,
+    auxcell,
+    omega: float,
+    *,
+    mesh: tuple[int, int, int] | np.ndarray,
+    q: np.ndarray,
+) -> np.ndarray:
+    """Return all-atom ``dM_LR/dR`` from one reciprocal transform."""
+
+    aux_fourier, coulomb, momentum_transfer, grid_vectors = (
+        _long_range_context(cell, auxcell, omega, mesh, q)
+    )
+    momentum = grid_vectors + momentum_transfer
+    naux = int(auxcell.nao_nr())
+    result = np.zeros(
+        (int(auxcell.natm), 3, naux, naux), dtype=np.complex128
+    )
+    for atom_id in range(auxcell.natm):
+        p0, p1 = _ao_slice(auxcell, atom_id)
+        for axis in range(3):
+            d_aux = np.zeros_like(aux_fourier)
+            d_aux[p0:p1] = (
+                -1j
+                * momentum[:, axis][None, :]
+                * aux_fourier[p0:p1]
+            )
+            value = (d_aux.conj() * coulomb) @ aux_fourier.T
+            value += (aux_fourier.conj() * coulomb) @ d_aux.T
+            result[atom_id, axis] = value
+    return _real_at_gamma(result, momentum_transfer)
+
+
 def g0_metric(cell, auxcell, omega: float, *, q: np.ndarray) -> np.ndarray:
     """Return the zero-transfer charge correction, or zero for ``q != 0``."""
 

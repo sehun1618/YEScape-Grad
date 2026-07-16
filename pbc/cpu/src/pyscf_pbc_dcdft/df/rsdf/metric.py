@@ -31,6 +31,7 @@ from ..gdf.metric import (
     g0_metric_derivative,
     long_range_metric,
     long_range_metric_derivative,
+    long_range_metric_derivatives,
 )
 
 
@@ -122,6 +123,36 @@ def rsdf_metric_derivative(
     )
 
 
+def rsdf_metric_derivatives(
+    cell,
+    auxcell,
+    parameters,
+    *,
+    q: np.ndarray,
+) -> RSDFMetricDerivativeParts:
+    """Return metric derivatives for all atoms with shared SR/LR work."""
+
+    momentum = _qpoint(q)
+    short_range = _short_range_metric_derivatives(
+        auxcell,
+        parameters.metric_omega,
+        q=momentum,
+    )
+    long_range = long_range_metric_derivatives(
+        cell,
+        auxcell,
+        parameters.metric_omega,
+        mesh=parameters.metric_mesh,
+        q=momentum,
+    )
+    g0 = np.zeros_like(short_range)
+    return RSDFMetricDerivativeParts(
+        short_range=short_range,
+        long_range=long_range,
+        g0=g0,
+    )
+
+
 def _short_range_metric_derivative(auxcell, atom_id, omega, *, q):
     atom = _atom_id(auxcell, atom_id)
     ip1 = _short_range_integral(
@@ -138,6 +169,27 @@ def _short_range_metric_derivative(auxcell, atom_id, omega, *, q):
     derivative[:, p0:p1, :] -= ip1[:, p0:p1, :]
     derivative[:, :, p0:p1] -= ip2[:, :, p0:p1]
     return _real_if_close(derivative)
+
+
+def _short_range_metric_derivatives(auxcell, omega, *, q):
+    momentum = _qpoint(q)
+    ip1 = _short_range_integral(
+        auxcell, omega, q=momentum, intor="int2c2e_ip1"
+    )
+    ip2 = _short_range_integral(
+        auxcell, omega, q=momentum, intor="int2c2e_ip2"
+    )
+    naux = int(auxcell.nao_nr())
+    derivatives = np.zeros(
+        (int(auxcell.natm), 3, naux, naux), dtype=ip1.dtype
+    )
+    for atom_id in range(auxcell.natm):
+        p0, p1 = np.asarray(
+            auxcell.aoslice_nr_by_atom(), dtype=int
+        )[atom_id, 2:4]
+        derivatives[atom_id, :, p0:p1, :] -= ip1[:, p0:p1, :]
+        derivatives[atom_id, :, :, p0:p1] -= ip2[:, :, p0:p1]
+    return _real_if_close(derivatives)
 
 
 def _short_range_integral(auxcell, omega, *, q, intor):

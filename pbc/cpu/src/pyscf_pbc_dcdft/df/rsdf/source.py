@@ -18,9 +18,17 @@ from pyscf.pbc.lib.kpts_helper import is_zero
 from ..gdf.source_long_range import (
     long_range_source,
     long_range_source_derivative,
+    long_range_source_derivatives,
 )
-from ..gdf.source_short_range import short_range_source_derivative
-from ..gdf.vbar import vbar_source, vbar_source_derivative
+from ..gdf.source_short_range import (
+    short_range_source_derivative,
+    short_range_source_derivatives,
+)
+from ..gdf.vbar import (
+    vbar_source,
+    vbar_source_derivative,
+    vbar_source_derivatives,
+)
 
 
 @dataclass(frozen=True)
@@ -123,6 +131,49 @@ def rsdf_source_derivative(
             cell,
             auxcell,
             atom_id,
+            parameters.source_omega,
+            kpt=first,
+        )
+    else:
+        zero_mode = np.zeros_like(short_range)
+    return RSDFSourceDerivativeParts(
+        short_range=np.asarray(short_range),
+        long_range=np.asarray(long_range),
+        vbar=np.asarray(zero_mode),
+    )
+
+
+def rsdf_source_derivatives(
+    cell,
+    auxcell,
+    parameters,
+    *,
+    kpti: np.ndarray,
+    kptj: np.ndarray,
+) -> RSDFSourceDerivativeParts:
+    """Return source derivatives for all atoms with shared intermediates."""
+
+    first, second = _kpoint_pair(kpti, kptj)
+    short_range = short_range_source_derivatives(
+        cell,
+        auxcell,
+        parameters.source_omega,
+        kpti=first,
+        kptj=second,
+        precision=parameters.precision_r,
+    )
+    long_range = long_range_source_derivatives(
+        cell,
+        auxcell,
+        parameters.source_omega,
+        mesh=parameters.source_mesh,
+        kpti=first,
+        kptj=second,
+    )
+    if is_zero(second - first):
+        zero_mode = vbar_source_derivatives(
+            cell,
+            auxcell,
             parameters.source_omega,
             kpt=first,
         )

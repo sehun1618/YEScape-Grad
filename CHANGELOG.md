@@ -13,3 +13,8 @@ All notable changes to the public packages will be documented here.
 - Add bounded-memory Gamma GDF reciprocal planning, transactional OOM
   rebatching, workspace reuse, reportable phase metadata, and a profiled
   Gamma derivative SR/LR workload balance.
+- Add profiled RSDF source/metric response ownership, all-atom primitive
+  reuse, native one-electron H1 streaming, and a bounded source-contracted
+  target-J/Z-vector response that retains no full dCDERI, dJ, or dK tensors.
+- Separate RSDF full-tensor validation, production scalar contraction, and
+  bounded GPU memory/OOM scheduling into independently testable modules.

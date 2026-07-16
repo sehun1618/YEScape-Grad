@@ -31,6 +31,14 @@ class GDFJKDerivatives:
         return self.coulomb - 0.5 * self.exchange
 
 
+@dataclass(frozen=True)
+class ContractedPairDerivative:
+    """Scalar contractions produced by one canonical ``dCDERI`` block."""
+
+    target_coulomb: cp.ndarray
+    restricted_hf_bilinear: cp.ndarray
+
+
 def gdf_jk_derivative(
     cderi: Mapping[Pair, cp.ndarray],
     dcderi: Mapping[Pair, cp.ndarray],
@@ -130,6 +138,161 @@ def contract_restricted_hf_bilinear_energy_derivative(
         optimize=True,
     )
     return value.real / len(reference)
+
+
+def auxiliary_density_contraction(cderi, density):
+    """Return ``sum_k Tr[C_kk D_k]`` for a periodic CDERI mapping.
+
+    The auxiliary vector is shared by every nuclear component.  Building it
+    once lets a source-contracted derivative consume one canonical k-pair at
+    a time without retaining ``dCDERI`` blocks from earlier pairs.
+    """
+
+    dm = _density_array(density)
+    first = pair_block(cderi, 0, 0)
+    result = cp.zeros(first.shape[0], dtype=cp.complex128)
+    for kpoint_id in range(len(dm)):
+        result += cp.einsum(
+            "pij,ji->p",
+            pair_block(cderi, kpoint_id, kpoint_id),
+            dm[kpoint_id],
+            optimize=True,
+        )
+    return result
+
+
+def contract_canonical_pair_derivative(
+    cderi,
+    pair,
+    cderi_derivative,
+    reference_density,
+    response_density,
+    *,
+    auxiliary_reference=None,
+    auxiliary_response=None,
+) -> ContractedPairDerivative:
+    """Immediately contract one canonical ``dC`` with target and Z sources.
+
+    ``pair`` owns both ordered orientations.  For a non-diagonal pair the
+    reverse block is the conjugate AO transpose, exactly as in
+    :func:`derivative_pair_block`.  The routine returns only two real scalars:
+    the target Coulomb derivative and the restricted-HF cross-density
+    derivative.  It never constructs AO ``dJ``/``dK`` matrices.
+    """
+
+    reference = _density_array(reference_density)
+    response = _density_array(response_density)
+    if reference.shape != response.shape:
+        raise ValueError(
+            "reference and response densities must have the same shape, "
+            f"got {reference.shape} and {response.shape}"
+        )
+    nkpts = len(reference)
+    canonical = (int(pair[0]), int(pair[1]))
+    derivative = cp.asarray(cderi_derivative)
+    expected = pair_block(cderi, *canonical).shape
+    if derivative.shape != expected:
+        raise ValueError(
+            f"dCDERI block for pair {canonical} must have shape {expected}, "
+            f"got {derivative.shape}"
+        )
+    if auxiliary_reference is None:
+        auxiliary_reference = auxiliary_density_contraction(
+            cderi, reference
+        )
+    if auxiliary_response is None:
+        auxiliary_response = auxiliary_density_contraction(cderi, response)
+    auxiliary_reference = cp.asarray(auxiliary_reference)
+    auxiliary_response = cp.asarray(auxiliary_response)
+
+    target_coulomb = cp.asarray(0.0, dtype=cp.float64)
+    bilinear = cp.asarray(0.0, dtype=cp.float64)
+    first, second = canonical
+    if first == second:
+        derivative_reference = cp.einsum(
+            "pij,ji->p", derivative, reference[first], optimize=True
+        )
+        derivative_response = cp.einsum(
+            "pij,ji->p", derivative, response[first], optimize=True
+        )
+        target_coulomb = cp.real(
+            cp.einsum(
+                "p,p->", auxiliary_reference, derivative_reference
+            )
+        ) / nkpts**2
+        bilinear = 2.0 * cp.real(
+            cp.einsum(
+                "p,p->", auxiliary_reference, derivative_response
+            )
+            + cp.einsum(
+                "p,p->", auxiliary_response, derivative_reference
+            )
+        ) / nkpts**2
+
+    exchange = cp.asarray(0.0, dtype=cp.complex128)
+    ordered_pairs = (
+        (canonical,)
+        if first == second
+        else (canonical, (second, first))
+    )
+    for ki, kj in ordered_pairs:
+        factor_ij = pair_block(cderi, ki, kj)
+        factor_ji = pair_block(cderi, kj, ki)
+        derivative_ij = _oriented_pair_derivative(
+            derivative, canonical, ki, kj
+        )
+        derivative_ji = _oriented_pair_derivative(
+            derivative, canonical, kj, ki
+        )
+        exchange += cp.einsum(
+            "li,pij,jk,pkl->",
+            reference[ki],
+            derivative_ij,
+            response[kj],
+            factor_ji,
+            optimize=True,
+        )
+        exchange += cp.einsum(
+            "li,pij,jk,pkl->",
+            response[ki],
+            derivative_ij,
+            reference[kj],
+            factor_ji,
+            optimize=True,
+        )
+        exchange += cp.einsum(
+            "li,pij,jk,pkl->",
+            reference[ki],
+            factor_ij,
+            response[kj],
+            derivative_ji,
+            optimize=True,
+        )
+        exchange += cp.einsum(
+            "li,pij,jk,pkl->",
+            response[ki],
+            factor_ij,
+            reference[kj],
+            derivative_ji,
+            optimize=True,
+        )
+    bilinear -= 0.5 * exchange.real / nkpts**2
+    return ContractedPairDerivative(
+        target_coulomb=target_coulomb,
+        restricted_hf_bilinear=bilinear,
+    )
+
+
+def _oriented_pair_derivative(derivative, canonical, first, second):
+    """Orient one canonical derivative for an ordered k-point pair."""
+
+    if (int(first), int(second)) == canonical:
+        return derivative
+    if (int(second), int(first)) == canonical:
+        return derivative.conj().transpose(0, 2, 1)
+    raise ValueError(
+        f"ordered pair {(first, second)} is unrelated to {canonical}"
+    )
 
 
 def ewald_exchange_derivative(

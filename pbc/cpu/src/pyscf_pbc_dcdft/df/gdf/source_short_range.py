@@ -107,6 +107,94 @@ def short_range_source_derivative(
     return _real_if_close(derivative.reshape(3, nao * nao, naux))
 
 
+def short_range_source_derivatives(
+    cell,
+    auxcell,
+    omega: float,
+    *,
+    kpti: np.ndarray,
+    kptj: np.ndarray,
+    precision: float | None = None,
+) -> np.ndarray:
+    """Return ``dB_SR/dR`` for every atom from one integral traversal.
+
+    The derivative integral tensors do not depend on which atom will own a
+    row, column, or auxiliary block.  Evaluating ``ip1``/``ip2`` once and
+    distributing their AO slices therefore gives exactly the same result as
+    repeated atom-wise calls without rebuilding the periodic integral task
+    list for every nucleus.
+    """
+
+    ki = _kpoint(kpti)
+    kj = _kpoint(kptj)
+    nao = int(cell.nao_nr())
+    naux = int(auxcell.nao_nr())
+    if _absolute_gamma_pair(ki, kj):
+        ip1 = _gamma_s1_tensor(
+            cell,
+            auxcell,
+            omega,
+            intor="int3c2e_ip1",
+            precision=precision,
+        ).reshape(3, nao, nao, naux)
+        ip2 = _gamma_s1_tensor(
+            cell,
+            auxcell,
+            omega,
+            intor="int3c2e_ip2",
+            precision=precision,
+        ).reshape(3, nao, nao, naux)
+        swapped_ip1 = ip1
+    else:
+        ip1 = _helper_tensor(
+            cell,
+            auxcell,
+            omega,
+            kpti=ki,
+            kptj=kj,
+            intor="int3c2e_ip1",
+            aosym="s1",
+            precision=precision,
+        ).reshape(3, nao, nao, naux)
+        ip2 = _helper_tensor(
+            cell,
+            auxcell,
+            omega,
+            kpti=ki,
+            kptj=kj,
+            intor="int3c2e_ip2",
+            aosym="s1",
+            precision=precision,
+        ).reshape(3, nao, nao, naux)
+        swapped_ip1 = _helper_tensor(
+            cell,
+            auxcell,
+            omega,
+            kpti=kj,
+            kptj=ki,
+            intor="int3c2e_ip1",
+            aosym="s1",
+            precision=precision,
+        ).reshape(3, nao, nao, naux)
+
+    derivatives = np.zeros(
+        (int(cell.natm), 3, nao, nao, naux), dtype=ip1.dtype
+    )
+    for atom_id in range(cell.natm):
+        atom = _atom_id(cell, auxcell, atom_id)
+        p0, p1 = _ao_slice(cell, atom)
+        q0, q1 = _ao_slice(auxcell, atom)
+        derivative = derivatives[atom]
+        derivative[:, p0:p1, :, :] -= ip1[:, p0:p1, :, :]
+        derivative[:, :, p0:p1, :] -= np.conj(
+            np.swapaxes(swapped_ip1[:, p0:p1, :, :], 1, 2)
+        )
+        derivative[:, :, :, q0:q1] -= ip2[:, :, :, q0:q1]
+    return _real_if_close(
+        derivatives.reshape(int(cell.natm), 3, nao * nao, naux)
+    )
+
+
 def _gamma_derivative(cell, auxcell, atom_id, omega, *, precision=None):
     """Return exact Gamma derivatives from PySCF's unpacked k driver.
 

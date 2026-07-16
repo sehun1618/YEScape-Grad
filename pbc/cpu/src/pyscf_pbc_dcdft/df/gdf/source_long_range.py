@@ -58,6 +58,99 @@ def long_range_source_derivative(
     return ao_derivative + aux_derivative
 
 
+def long_range_source_derivatives(
+    cell,
+    auxcell,
+    omega: float,
+    *,
+    mesh: tuple[int, int, int] | np.ndarray,
+    kpti: np.ndarray,
+    kptj: np.ndarray,
+) -> np.ndarray:
+    """Return all-atom ``dB_LR/dR`` while reusing one Fourier context."""
+
+    context = _context(cell, auxcell, omega, mesh, kpti, kptj)
+    ao_derivatives = _all_ao_pair_derivatives(cell, context)
+    auxiliary_derivatives = _all_auxiliary_derivatives(
+        cell, auxcell, context
+    )
+    return _real_if_close(ao_derivatives + auxiliary_derivatives)
+
+
+def _all_ao_pair_derivatives(cell, context):
+    supmol = _fourier_supermolecule(cell, context["kj"])
+    kernel_i = gen_ft_center_derivative_kernel(supmol, center="i")
+    kernel_j = gen_ft_center_derivative_kernel(supmol, center="j")
+    common = (
+        context["Gv"],
+        context["gxyz"],
+        context["Gvbase"],
+        context["q"],
+    )
+    raw_i = kernel_i(*common, kptjs=np.asarray([context["kj"]]))
+    raw_j = kernel_j(*common, kptjs=np.asarray([context["kj"]]))
+    ip_i = raw_i[0][0] + 1j * raw_i[1][0]
+    ip_j = raw_j[0][0] + 1j * raw_j[1][0]
+    nao = int(cell.nao_nr())
+    naux = int(context["auxG"].shape[0])
+    ngrid = len(context["Gv"])
+    weighted_aux = (context["auxG"] * context["coulG"]).T.conj()
+    result = np.zeros(
+        (int(cell.natm), 3, nao, nao, naux), dtype=np.complex128
+    )
+    for atom_id in range(cell.natm):
+        p0, p1 = _ao_slice(cell, atom_id)
+        count = p1 - p0
+        for axis in range(3):
+            rows = ip_i[axis, :, p0:p1, :].reshape(
+                ngrid, count * nao
+            )
+            result[atom_id, axis, p0:p1, :, :] -= (
+                rows.T @ weighted_aux
+            ).reshape(count, nao, naux)
+            columns = ip_j[axis, :, :, p0:p1].reshape(
+                ngrid, nao * count
+            )
+            result[atom_id, axis, :, p0:p1, :] -= (
+                columns.T @ weighted_aux
+            ).reshape(nao, count, naux)
+    return result.reshape(int(cell.natm), 3, nao * nao, naux)
+
+
+def _all_auxiliary_derivatives(cell, auxcell, context):
+    ao_pair = ft_ao.ft_aopair(
+        cell,
+        context["Gv"],
+        aosym="s1",
+        b=context["b"],
+        gxyz=context["gxyz"],
+        Gvbase=context["Gvbase"],
+        kpti_kptj=np.asarray([context["ki"], context["kj"]]),
+        q=context["q"],
+        intor="GTO_ft_ovlp",
+        comp=1,
+    ).reshape(len(context["Gv"]), cell.nao_nr() ** 2)
+    nao_pair = int(cell.nao_nr()) ** 2
+    naux = int(auxcell.nao_nr())
+    momentum = context["Gv"] + context["q"]
+    result = np.zeros(
+        (int(cell.natm), 3, nao_pair, naux), dtype=np.complex128
+    )
+    for atom_id in range(cell.natm):
+        p0, p1 = _ao_slice(auxcell, atom_id)
+        for axis in range(3):
+            weighted = (
+                -1j
+                * momentum[:, axis][None, :]
+                * context["auxG"][p0:p1]
+                * context["coulG"][None, :]
+            ).T
+            result[atom_id, axis, :, p0:p1] = (
+                ao_pair.T @ weighted.conj()
+            )
+    return result
+
+
 def _ao_pair_derivative(cell, atom_id, context):
     supmol = _fourier_supermolecule(cell, context["kj"])
     kernel_i = gen_ft_center_derivative_kernel(supmol, center="i")
@@ -182,3 +275,10 @@ def _kpoint(value):
     if point.shape != (3,):
         raise ValueError(f"k-point must have shape (3,), got {point.shape}")
     return point
+
+
+def _real_if_close(array, tolerance=1e-10):
+    value = np.asarray(array)
+    if value.size and np.max(np.abs(value.imag)) <= tolerance:
+        return value.real
+    return value

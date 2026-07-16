@@ -61,9 +61,10 @@ route는 active public API가 아니다.
 | Theory equation | 계산량 | CPU owner | GPU owner | Shape / unit | Validation |
 | --- | --- | --- | --- | --- | --- |
 | $(\omega_s,\mathcal M_s;\omega_m,\mathcal M_m)$, Eq. `eq:rsdf-independent-parameters` | independent source/metric settings | `df/rsdf/parameters.py::parameters_from_provider` | CPU provider metadata uploaded by `df/rsdf/rsdf.py` | immutable metadata | public provider build contract |
-| $dB^{\mathrm{RS}}/dR$, Eq. `eq:rsdf-source-derivative` | screened three-center source response | `df/rsdf/source.py::rsdf_source_derivative` | host primitive + device response | atom-resolved source tensor | direct source FD |
-| $dM^{\mathrm{RS}}/dR$, Eq. `eq:rsdf-metric-derivative` | screened metric response | `df/rsdf/metric.py::rsdf_metric_derivative` | host primitive + device response | atom-resolved metric tensor | direct metric FD |
+| $dB^{\mathrm{RS}}/dR$, Eq. `eq:rsdf-source-derivative` | screened three-center source response | `df/rsdf/source.py::rsdf_source_derivatives` | host primitive + `df/rsdf/contracted_response.py` | atom-resolved source tensor | direct source FD |
+| $dM^{\mathrm{RS}}/dR$, Eq. `eq:rsdf-metric-derivative` | screened metric response | `df/rsdf/metric.py::rsdf_metric_derivatives` | host primitive + `df/rsdf/contracted_response.py` | atom-resolved metric tensor | direct metric FD |
 | $dC^{\mathrm{RS}}/dR$, Eq. `eq:rsdf-cderi-derivative` | RSDF source + metric auxiliary response | `df/rsdf/response.py::build_rsdf_response_tensors` | `df/rsdf/response.py::build_rsdf_response_tensors` | atom-resolved CDERI derivative | direct CDERI FD/parity |
+| $dE_J/dR$ and $z^T B_{J/K}^R$, Eq. `eq:rsdf-cderi-derivative` | production source-contracted response | direct CPU gradient contraction | `df/rsdf/contracted_response.py::build_rsdf_contracted_response`; memory policy: `df/rsdf/component_stream.py` | two $(N_{\mathrm{atom}},3)$ scalars, Ha/Bohr | full-tensor witness, batch-1, OOM retry, Gamma/k-point parity |
 | $dE_{\mathrm{DC}}^{\mathrm{RSDF}}/dR$, Eq. `eq:rsdf-total-gradient` | RSDF total gradient | `grad/rsdf.py::rsdf_cpu_gradient` | `grad/rsdf.py::rsdf_gpu_gradient` | $(N_{\mathrm{atom}},3)$, Ha/Bohr | PBE/SCAN/r2SCAN, H2/H2O, SZV/DZVP, Gamma/k-point FD |
 
 ## Global conventions

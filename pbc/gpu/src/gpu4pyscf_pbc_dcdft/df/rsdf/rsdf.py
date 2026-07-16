@@ -98,10 +98,12 @@ class RSDF(GDF):
             "auxbasis": self.auxbasis,
             "energy": True,
             "analytic_gradient": True,
-            "gradient_status": "stage_6_2_gpu_completion_gate_passed",
+            "gradient_status": "source_contracted_release_gate_passed",
             "target_xc": ["PBE", "SCAN", "R2SCAN"],
             "central_cderi": "PySCF RSDF host setup, canonical CuPy storage",
-            "jk_contraction": "project-local CuPy",
+            "jk_contraction": (
+                "project-local CuPy source-contracted component stream"
+            ),
             "silent_cpu_fallback": False,
             "host_boundaries": [
                 "RSDF central and derivative periodic integral generation",

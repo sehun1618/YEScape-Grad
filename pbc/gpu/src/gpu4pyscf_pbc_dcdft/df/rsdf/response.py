@@ -1,4 +1,4 @@
-"""RSDF host primitives with device-side metric and CDERI response."""
+"""RSDF host primitives and full-tensor reference response."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import numpy as np
 from pyscf_pbc_dcdft.df.gdf.storage import Pair, canonical_pairs
 from pyscf_pbc_dcdft.df.rsdf.metric import (
     rsdf_metric,
-    rsdf_metric_derivative,
+    rsdf_metric_derivatives,
 )
 from pyscf_pbc_dcdft.df.rsdf.parameters import (
     RSDFParameters,
@@ -20,10 +20,143 @@ from pyscf_pbc_dcdft.df.rsdf.parameters import (
 )
 from pyscf_pbc_dcdft.df.rsdf.source import (
     rsdf_source,
-    rsdf_source_derivative,
+    rsdf_source_derivatives,
 )
 
-from ..gdf.response import _device_pair_response
+from ..gdf.cholesky import CDERIFactorization
+
+
+@dataclass(frozen=True)
+class RSDFResponseProfile:
+    """Aggregated host/device ownership and timing for one response build."""
+
+    canonical_pair_count: int
+    derivative_component_count: int
+    host_source_value_seconds: float
+    host_metric_value_seconds: float
+    host_source_derivative_seconds: float
+    host_metric_derivative_seconds: float
+    host_primitive_bytes: int
+    host_to_device_bytes: int
+    device_cderi_output_bytes: int
+    device_derivative_output_bytes: int
+    device_central_upload_factorization_seconds: float
+    device_derivative_upload_response_seconds: float
+    response_mode: str = "full_tensor_reference"
+    host_peak_primitive_bytes: int = 0
+    device_peak_explicit_working_bytes: int = 0
+    full_derivative_equivalent_bytes: int = 0
+    retained_device_derivative_bytes: int = 0
+    component_batch_size: int | None = None
+    initial_component_batch_size: int | None = None
+    component_rebatch_count: int = 0
+
+    def metadata(self) -> dict[str, object]:
+        """Return JSON-safe profile fields with explicit ownership labels."""
+
+        contracted = self.response_mode == (
+            "source_contracted_component_stream"
+        )
+        device_operations = [
+            "host-to-device primitive transfer",
+            "metric Cholesky and central CDERI solve",
+        ]
+        if contracted:
+            device_operations.extend(
+                [
+                    "bounded component CDERI response",
+                    "immediate target-J and Z-bilinear scalar contraction",
+                ]
+            )
+        else:
+            device_operations.append(
+                "source and metric full-CDERI derivative response"
+            )
+        return {
+            "canonical_pair_count": self.canonical_pair_count,
+            "derivative_component_count": self.derivative_component_count,
+            "host_source_value_seconds": self.host_source_value_seconds,
+            "host_metric_value_seconds": self.host_metric_value_seconds,
+            "host_source_derivative_seconds": (
+                self.host_source_derivative_seconds
+            ),
+            "host_metric_derivative_seconds": (
+                self.host_metric_derivative_seconds
+            ),
+            "host_primitive_bytes": self.host_primitive_bytes,
+            "host_to_device_bytes": self.host_to_device_bytes,
+            "device_cderi_output_bytes": self.device_cderi_output_bytes,
+            "device_derivative_output_bytes": (
+                self.device_derivative_output_bytes
+            ),
+            "device_central_upload_factorization_seconds": (
+                self.device_central_upload_factorization_seconds
+            ),
+            "device_derivative_upload_response_seconds": (
+                self.device_derivative_upload_response_seconds
+            ),
+            "response_mode": self.response_mode,
+            "host_peak_primitive_bytes": self.host_peak_primitive_bytes,
+            "device_peak_explicit_working_bytes": (
+                self.device_peak_explicit_working_bytes
+            ),
+            "full_derivative_equivalent_bytes": (
+                self.full_derivative_equivalent_bytes
+            ),
+            "retained_device_derivative_bytes": (
+                self.retained_device_derivative_bytes
+            ),
+            "component_batch_size": self.component_batch_size,
+            "initial_component_batch_size": (
+                self.initial_component_batch_size
+            ),
+            "component_rebatch_count": self.component_rebatch_count,
+            "host_owned_operations": [
+                "RSDF three-center source value and nuclear derivatives",
+                "RSDF two-center metric value and nuclear derivatives",
+            ],
+            "device_owned_operations": device_operations,
+        }
+
+
+@dataclass(frozen=True)
+class _HostPairPrimitives:
+    """Host arrays and exclusive primitive timings for one k-point pair."""
+
+    source: np.ndarray
+    metric: np.ndarray
+    source_derivatives: np.ndarray
+    metric_derivatives: np.ndarray
+    source_value_seconds: float
+    metric_value_seconds: float
+    source_derivative_seconds: float
+    metric_derivative_seconds: float
+
+    @property
+    def transferred_bytes(self) -> int:
+        """Bytes uploaded when this pair is evaluated on the device."""
+
+        return sum(
+            int(array.nbytes)
+            for array in (
+                self.source,
+                self.metric,
+                self.source_derivatives,
+                self.metric_derivatives,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class _DevicePairResponse:
+    """Device response arrays and CUDA-event phase timings for one pair."""
+
+    value: cp.ndarray
+    total: cp.ndarray
+    source: cp.ndarray
+    metric: cp.ndarray
+    central_seconds: float
+    derivative_seconds: float
 
 
 @dataclass(frozen=True)
@@ -38,6 +171,7 @@ class RSDFResponseTensors:
     value_parity_max_abs: float
     host_primitive_seconds: float
     device_response_seconds: float
+    profile: RSDFResponseProfile
 
 
 def build_rsdf_response_tensors(
@@ -45,11 +179,11 @@ def build_rsdf_response_tensors(
     *,
     value_tolerance: float = 1.0e-7,
 ) -> RSDFResponseTensors:
-    """Build analytic RSDF ``dCDERI`` with CuPy factor response.
+    """Build the full analytic RSDF ``dCDERI`` reference tensors.
 
-    Host work is limited to periodic derivative primitive generation and the
-    CPU witness used for exact value parity.  Cholesky factorization,
-    ``dL``, ``dC``, and all downstream J/K contractions are device operations.
+    This intentionally materializes the complete derivative tensors and is
+    retained as a correctness witness. Production gradients use the bounded
+    source-contracted builder in ``contracted_response``.
     """
 
     if getattr(provider, "backend_name", None) != "rsdf":
@@ -85,14 +219,31 @@ def build_rsdf_response_tensors(
     metric_parts = {}
     parity = 0.0
     central = provider.central_cderi_blocks
+    device_central_seconds = 0.0
+    device_derivative_seconds = 0.0
+    device_cderi_output_bytes = 0
+    device_derivative_output_bytes = 0
     for pair, pair_primitives in primitives.items():
-        value, total, source_part, metric_part = _device_pair_response(
-            pair_primitives, nao=int(provider.cell.nao_nr())
+        pair_response = _device_pair_response(
+            pair_primitives,
+            nao=int(provider.cell.nao_nr()),
         )
+        value = pair_response.value
         values[pair] = value
-        derivatives[pair] = total
-        source_parts[pair] = source_part
-        metric_parts[pair] = metric_part
+        derivatives[pair] = pair_response.total
+        source_parts[pair] = pair_response.source
+        metric_parts[pair] = pair_response.metric
+        device_central_seconds += pair_response.central_seconds
+        device_derivative_seconds += pair_response.derivative_seconds
+        device_cderi_output_bytes += int(value.nbytes)
+        device_derivative_output_bytes += sum(
+            int(array.nbytes)
+            for array in (
+                pair_response.total,
+                pair_response.source,
+                pair_response.metric,
+            )
+        )
         parity = max(
             parity,
             float(cp.max(cp.abs(value - central[pair])).get()),
@@ -104,6 +255,13 @@ def build_rsdf_response_tensors(
             "GPU RSDF source/metric convention does not reproduce CPU "
             f"storage: max gap {parity:.3e} > {float(value_tolerance):.3e}"
         )
+    profile = _response_profile(
+        primitives,
+        device_cderi_output_bytes=device_cderi_output_bytes,
+        device_derivative_output_bytes=device_derivative_output_bytes,
+        device_central_seconds=device_central_seconds,
+        device_derivative_seconds=device_derivative_seconds,
+    )
     return RSDFResponseTensors(
         cderi=MappingProxyType(values),
         dcderi=MappingProxyType(derivatives),
@@ -113,6 +271,7 @@ def build_rsdf_response_tensors(
         value_parity_max_abs=parity,
         host_primitive_seconds=host_seconds,
         device_response_seconds=device_seconds,
+        profile=profile,
     )
 
 
@@ -120,6 +279,7 @@ def _host_pair_primitives(cell, auxcell, kpts, pair, parameters):
     ki, kj = pair
     first = kpts[ki]
     second = kpts[kj]
+    start = perf_counter()
     source = rsdf_source(
         cell,
         auxcell,
@@ -127,37 +287,134 @@ def _host_pair_primitives(cell, auxcell, kpts, pair, parameters):
         kpti=first,
         kptj=second,
     )
+    source_value_seconds = perf_counter() - start
+
+    start = perf_counter()
     metric = rsdf_metric(
         cell,
         auxcell,
         parameters,
         q=second - first,
     )
-    source_derivatives = []
-    metric_derivatives = []
-    for atom_id in range(cell.natm):
-        source_derivatives.append(
-            rsdf_source_derivative(
-                cell,
-                auxcell,
-                atom_id,
-                parameters,
-                kpti=first,
-                kptj=second,
-            ).total
-        )
-        metric_derivatives.append(
-            rsdf_metric_derivative(
-                cell,
-                auxcell,
-                atom_id,
-                parameters,
-                q=second - first,
-            ).total
-        )
-    return (
-        np.asarray(source),
-        np.asarray(metric),
-        np.asarray(source_derivatives),
-        np.asarray(metric_derivatives),
+    metric_value_seconds = perf_counter() - start
+    start = perf_counter()
+    source_derivatives = np.asarray(
+        rsdf_source_derivatives(
+            cell,
+            auxcell,
+            parameters,
+            kpti=first,
+            kptj=second,
+        ).total
+    )
+    source_derivative_seconds = perf_counter() - start
+    start = perf_counter()
+    metric_derivatives = np.asarray(
+        rsdf_metric_derivatives(
+            cell,
+            auxcell,
+            parameters,
+            q=second - first,
+        ).total
+    )
+    metric_derivative_seconds = perf_counter() - start
+    return _HostPairPrimitives(
+        source=np.asarray(source),
+        metric=np.asarray(metric),
+        source_derivatives=source_derivatives,
+        metric_derivatives=metric_derivatives,
+        source_value_seconds=source_value_seconds,
+        metric_value_seconds=metric_value_seconds,
+        source_derivative_seconds=source_derivative_seconds,
+        metric_derivative_seconds=metric_derivative_seconds,
+    )
+
+
+def _device_pair_response(primitives, *, nao):
+    central_start = cp.cuda.Event()
+    central_end = cp.cuda.Event()
+    derivative_end = cp.cuda.Event()
+    central_start.record()
+    factorization = CDERIFactorization.build(
+        cp.asarray(primitives.source),
+        cp.asarray(primitives.metric),
+        nao=nao,
+    )
+    central_end.record()
+
+    natm = primitives.source_derivatives.shape[0]
+    naux = factorization.value.shape[0]
+    shape = (natm, 3, naux, nao, nao)
+    total = cp.empty(shape, dtype=cp.complex128)
+    source_part = cp.empty_like(total)
+    metric_part = cp.empty_like(total)
+    for atom_id in range(natm):
+        d_source = cp.asarray(primitives.source_derivatives[atom_id])
+        d_metric = cp.asarray(primitives.metric_derivatives[atom_id])
+        for axis in range(3):
+            response = factorization.differentiate(
+                d_source[axis], d_metric[axis]
+            )
+            source_part[atom_id, axis] = response.source
+            metric_part[atom_id, axis] = response.metric
+            total[atom_id, axis] = response.total
+    derivative_end.record()
+    derivative_end.synchronize()
+    return _DevicePairResponse(
+        value=factorization.value,
+        total=total,
+        source=source_part,
+        metric=metric_part,
+        central_seconds=cp.cuda.get_elapsed_time(
+            central_start, central_end
+        ) / 1000.0,
+        derivative_seconds=cp.cuda.get_elapsed_time(
+            central_end, derivative_end
+        ) / 1000.0,
+    )
+
+
+def _response_profile(
+    primitives,
+    *,
+    device_cderi_output_bytes,
+    device_derivative_output_bytes,
+    device_central_seconds,
+    device_derivative_seconds,
+):
+    blocks = tuple(primitives.values())
+    return RSDFResponseProfile(
+        canonical_pair_count=len(blocks),
+        derivative_component_count=sum(
+            int(block.source_derivatives.shape[0]) * 3
+            for block in blocks
+        ),
+        host_source_value_seconds=sum(
+            block.source_value_seconds for block in blocks
+        ),
+        host_metric_value_seconds=sum(
+            block.metric_value_seconds for block in blocks
+        ),
+        host_source_derivative_seconds=sum(
+            block.source_derivative_seconds for block in blocks
+        ),
+        host_metric_derivative_seconds=sum(
+            block.metric_derivative_seconds for block in blocks
+        ),
+        host_primitive_bytes=sum(
+            block.transferred_bytes for block in blocks
+        ),
+        host_to_device_bytes=sum(
+            block.transferred_bytes for block in blocks
+        ),
+        device_cderi_output_bytes=int(device_cderi_output_bytes),
+        device_derivative_output_bytes=int(
+            device_derivative_output_bytes
+        ),
+        device_central_upload_factorization_seconds=float(
+            device_central_seconds
+        ),
+        device_derivative_upload_response_seconds=float(
+            device_derivative_seconds
+        ),
     )

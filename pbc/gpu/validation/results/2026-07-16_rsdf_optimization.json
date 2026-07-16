@@ -1,0 +1,85 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_rsdf_optimization_v1",
+  "overall_status": "pass",
+  "water64_executed_by_codex": false,
+  "scope": {
+    "system": "water8",
+    "basis": "SZV-GTH",
+    "pseudo": "GTH-SCAN",
+    "xc": "r2SCAN",
+    "ke_cutoff_ha": 400.0,
+    "kmesh": [1, 1, 1]
+  },
+  "r0_full_tensor_baseline": {
+    "gradient_wall_s": [
+      222.33327246457338,
+      224.33168176189065,
+      231.9235208714381
+    ],
+    "gradient_median_wall_s": 224.33168176189065,
+    "one_electron_median_wall_s": 146.10627997945994,
+    "response_median_wall_s": 76.147839887999,
+    "source_derivative_median_wall_s": 71.32658448349684,
+    "metric_derivative_median_wall_s": 4.564801366999745,
+    "device_derivative_output_bytes": 382205952
+  },
+  "r1_source_contracted": {
+    "gradient_wall_s": [
+      6.959762676618993,
+      7.392798065207899,
+      7.54302108194679
+    ],
+    "gradient_median_wall_s": 7.392798065207899,
+    "gradient_speedup_percent": 96.70452340608104,
+    "one_electron_median_wall_s": 0.42750550247728825,
+    "response_median_wall_s": 5.089054728858173,
+    "source_derivative_median_wall_s": 2.5257796831429005,
+    "metric_derivative_median_wall_s": 2.0694122770801187,
+    "device_derivative_response_median_wall_s": 0.18884591674804688,
+    "host_primitive_bytes": 65931264,
+    "host_peak_primitive_bytes": 65931264,
+    "full_derivative_equivalent_bytes": 63700992,
+    "retained_device_derivative_bytes": 0,
+    "device_peak_explicit_working_bytes": 6303744,
+    "initial_component_batch_size": 3,
+    "final_component_batch_size": 3,
+    "component_rebatch_count": 0,
+    "selected_fd_max_error_ha_per_bohr": 2.7170614369520507e-10,
+    "z_vector_residual_max_abs": 2.5805746428630982e-14,
+    "max_gap_vs_r0_gradient_ha_per_bohr": 4.3363146406960595e-11
+  },
+  "correctness": {
+    "gamma_cpu_gpu_gradient": "pass",
+    "sampled_k_cpu_gpu_gradient": "pass",
+    "scan_gamma_cpu_gpu": "pass",
+    "r2scan_sampled_k_cpu_gpu": "pass",
+    "forced_component_batch_1_parity": "pass",
+    "transactional_oom_rebatch_4_to_2": "pass",
+    "silent_cpu_fallback": false
+  },
+  "release_gate": {
+    "test_count": 29,
+    "test_modules": {
+      "cpu_rsdf": 5,
+      "cpu_mgga": 4,
+      "gpu_rsdf": 7,
+      "gpu_mgga": 4,
+      "gpu_package_boundary": 2,
+      "cpu_import_isolation": 2,
+      "benchmark_inputs": 5
+    },
+    "cpu_wheel_build_install_import": "pass",
+    "gpu_wheel_build_install_import": "pass",
+    "cpu_rsdf_example": "pass",
+    "gpu_rsdf_example": "pass",
+    "shared_gdf_gpu_regression": {
+      "test_count": 35,
+      "elapsed_s": 550.958,
+      "status": "pass"
+    }
+  },
+  "source_queues": [
+    "pbc/benchmark/rsdf_r0_baseline.json",
+    "pbc/benchmark/rsdf_r1_release_gate.json"
+  ]
+}

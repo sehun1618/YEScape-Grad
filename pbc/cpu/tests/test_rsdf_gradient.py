@@ -13,6 +13,15 @@ from pyscf_pbc_dcdft.df.gdf.storage import (
     load_cderi_storage,
 )
 from pyscf_pbc_dcdft.df.rsdf import build_rsdf_response_tensors
+from pyscf_pbc_dcdft.df.rsdf.parameters import parameters_from_provider
+from pyscf_pbc_dcdft.df.rsdf.metric import (
+    rsdf_metric_derivative,
+    rsdf_metric_derivatives,
+)
+from pyscf_pbc_dcdft.df.rsdf.source import (
+    rsdf_source_derivative,
+    rsdf_source_derivatives,
+)
 
 
 def _cell(distance=1.4):
@@ -76,6 +85,58 @@ class RSDFCDERIResponseTest(unittest.TestCase):
             self.assertLess(
                 np.max(np.abs(analytic - finite_difference)), 2.0e-8
             )
+
+    def test_gamma_bulk_source_derivative_matches_atomwise_route(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = _provider(cell, kpts)
+        parameters = parameters_from_provider(provider)
+        bulk = rsdf_source_derivatives(
+            cell,
+            provider.auxcell,
+            parameters,
+            kpti=kpts[0],
+            kptj=kpts[0],
+        ).total
+        atomwise = np.asarray(
+            [
+                rsdf_source_derivative(
+                    cell,
+                    provider.auxcell,
+                    atom_id,
+                    parameters,
+                    kpti=kpts[0],
+                    kptj=kpts[0],
+                ).total
+                for atom_id in range(cell.natm)
+            ]
+        )
+        self.assertLess(np.max(np.abs(bulk - atomwise)), 1.0e-11)
+
+    def test_gamma_bulk_metric_derivative_matches_atomwise_route(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = _provider(cell, kpts)
+        parameters = parameters_from_provider(provider)
+        bulk = rsdf_metric_derivatives(
+            cell,
+            provider.auxcell,
+            parameters,
+            q=np.zeros(3),
+        ).total
+        atomwise = np.asarray(
+            [
+                rsdf_metric_derivative(
+                    cell,
+                    provider.auxcell,
+                    atom_id,
+                    parameters,
+                    q=np.zeros(3),
+                ).total
+                for atom_id in range(cell.natm)
+            ]
+        )
+        self.assertLess(np.max(np.abs(bulk - atomwise)), 1.0e-11)
 
 
 class RSDFFullGradientTest(unittest.TestCase):
