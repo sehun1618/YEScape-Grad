@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[1]
@@ -80,7 +82,14 @@ class BenchmarkInputTest(unittest.TestCase):
             path = Path(directory) / "progress.json"
             reporter = benchmark.ProgressReporter(
                 path,
-                context={"run_name": "test", "device": "gpu"},
+                context={
+                    "run_name": "test",
+                    "device": "gpu",
+                    "run_identity": {
+                        "case_run_id": "000_test",
+                        "attempt_id": "attempt-1",
+                    },
+                },
                 minimum_write_interval_s=0.0,
                 memory_provider=lambda: {
                     "status": "running",
@@ -100,6 +109,10 @@ class BenchmarkInputTest(unittest.TestCase):
             self.assertEqual(payload["stage"], "zvector_matrix")
             self.assertEqual(payload["stage_fraction"], 0.25)
             self.assertEqual(payload["context"]["run_name"], "test")
+            self.assertEqual(
+                payload["context"]["run_identity"]["attempt_id"],
+                "attempt-1",
+            )
             self.assertEqual(payload["timezone"], "Asia/Seoul")
             self.assertTrue(payload["updated_at_kst"].endswith("+09:00"))
             self.assertEqual(
@@ -121,6 +134,158 @@ class BenchmarkInputTest(unittest.TestCase):
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "complete")
             self.assertEqual(payload["stage"], "complete")
+
+    def test_dead_running_attempt_is_reconciled_as_interrupted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            identity = {
+                "case_run_id": "000_test",
+                "attempt_id": "dead-attempt",
+                "started_at_kst": "2026-07-17T12:00:00+09:00",
+                "hostname": socket.gethostname(),
+            }
+            queue._write_json(
+                case_dir / "attempt.json",
+                {
+                    "status": "running",
+                    "run_identity": identity,
+                    "child_pid": 999_999_999,
+                    "child_process_start_ticks": 1,
+                },
+            )
+            queue._write_json(
+                case_dir / "progress.json",
+                {
+                    "status": "running",
+                    "stage": "hf_scf",
+                    "elapsed_s": 12.5,
+                    "context": {"run_identity": identity},
+                    "history": [],
+                },
+            )
+
+            self.assertEqual(
+                queue._reconcile_previous_attempt(case_dir), "interrupted"
+            )
+            attempt = queue._read_json(case_dir / "attempt.json")
+            progress = queue._read_json(case_dir / "progress.json")
+            self.assertEqual(attempt["status"], "interrupted")
+            self.assertEqual(progress["status"], "interrupted")
+            self.assertEqual(progress["details"]["previous_stage"], "hf_scf")
+
+    def test_live_attempt_requires_matching_process_start_time(self):
+        identity = {"hostname": socket.gethostname()}
+        pid = queue.os.getpid()
+        start_ticks = queue._process_start_ticks(pid)
+        self.assertIsNotNone(start_ticks)
+        self.assertTrue(
+            queue._attempt_is_active(
+                {
+                    "run_identity": identity,
+                    "child_pid": pid,
+                    "child_process_start_ticks": start_ticks,
+                }
+            )
+        )
+        self.assertFalse(
+            queue._attempt_is_active(
+                {
+                    "run_identity": identity,
+                    "child_pid": pid,
+                    "child_process_start_ticks": int(start_ticks) + 1,
+                }
+            )
+        )
+
+    def test_rerun_archives_prior_attempt_as_one_unit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            arrays = case_dir / "arrays"
+            arrays.mkdir()
+            (arrays / "gradient.npy").write_bytes(b"array")
+            for name in ("report.json", "progress.json"):
+                queue._write_json(case_dir / name, {"status": "failed"})
+            queue._write_json(
+                case_dir / "attempt.json",
+                {
+                    "run_identity": {"attempt_id": "old-attempt"},
+                    "status": "failed",
+                },
+            )
+
+            archive = queue._archive_case_artifacts(case_dir)
+            self.assertIsNotNone(archive)
+            self.assertTrue((archive / "report.json").is_file())
+            self.assertTrue((archive / "progress.json").is_file())
+            self.assertTrue((archive / "attempt.json").is_file())
+            self.assertTrue((archive / "arrays" / "gradient.npy").is_file())
+            self.assertFalse((case_dir / "report.json").exists())
+            self.assertIn("old-attempt", archive.name)
+
+    def test_case_runner_rejects_report_from_another_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = root / "case"
+            fake_runner = root / "fake_runner.py"
+            fake_runner.write_text(
+                "from pathlib import Path\n"
+                "import argparse, json\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--input')\n"
+                "p.add_argument('--output-dir')\n"
+                "a = p.parse_args()\n"
+                "Path(a.output_dir, 'report.json').write_text(\n"
+                "    json.dumps({'status': 'complete', "
+                "'run_identity': {'attempt_id': 'stale'}}))\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(queue, "CASE_RUNNER", fake_runner):
+                outcome = queue._run_case(
+                    {"device": "cpu", "num_threads": 1},
+                    case_dir,
+                    "000_test",
+                )
+
+            self.assertEqual(outcome["returncode"], 0)
+            self.assertEqual(outcome["status"], "failed")
+            self.assertEqual(outcome["report"], {})
+            attempt = queue._read_json(case_dir / "attempt.json")
+            self.assertFalse(attempt["report_identity_matches"])
+
+    def test_case_runner_accepts_only_its_current_complete_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = root / "case"
+            fake_runner = root / "fake_runner.py"
+            fake_runner.write_text(
+                "from pathlib import Path\n"
+                "import argparse, json\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--input')\n"
+                "p.add_argument('--output-dir')\n"
+                "a = p.parse_args()\n"
+                "config = json.loads(Path(a.input).read_text())\n"
+                "Path(a.output_dir, 'report.json').write_text(\n"
+                "    json.dumps({'status': 'complete', "
+                "'run_identity': config['run_identity']}))\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(queue, "CASE_RUNNER", fake_runner):
+                outcome = queue._run_case(
+                    {"device": "cpu", "num_threads": 1},
+                    case_dir,
+                    "000_test",
+                )
+
+            self.assertEqual(outcome["status"], "complete")
+            self.assertEqual(
+                outcome["report"]["run_identity"], outcome["run_identity"]
+            )
+            attempt = queue._read_json(case_dir / "attempt.json")
+            self.assertEqual(attempt["status"], "complete")
+            self.assertTrue(attempt["report_identity_matches"])
 
     def test_memory_summary_keeps_stage_samples_and_high_water(self):
         report = benchmark.summarize_memory(

@@ -34,6 +34,16 @@ conda run -n gpu python run_benchmark_queue.py \
   --overwrite
 ```
 
+각 실행 attempt에는 `run_identity`가 부여되며 `attempt.json`, `progress.json`,
+`report.json`에 같은 값이 기록된다. Queue runner는 현재 attempt와 identity가 다른
+report를 결과로 받아들이지 않는다. 같은 case를 다시 실행하면 기존 root artifact는
+삭제하지 않고 `attempts/<시각>_<attempt-id>/`로 함께 이동한다.
+
+외부 종료로 `progress.json`만 `running`에 남더라도 다음 queue 실행에서 기록된 PID와
+Linux process start time을 확인한다. 같은 process가 더 이상 없으면 이전 attempt를
+`interrupted`로 바꾸고 새 attempt를 시작한다. 같은 host에서 실제 process가 살아
+있다면 중복 실행하지 않고 `skipped_running`으로 기록한다.
+
 확장된 case 이름에 특정 문자열이 들어간 job만 실행하려면 `--only`를 사용한다.
 
 ```bash
@@ -199,8 +209,10 @@ component만 사용한다.
 |-- command.txt
 |-- stdout.txt
 |-- stderr.txt
+|-- attempt.json
 |-- progress.json
 |-- report.json
+|-- attempts/                 # 재실행 전 attempt 보존; 존재할 때만 생성
 `-- arrays/
     |-- analytic_gradient_ha_per_bohr.npy
     |-- fd_gradient_ha_per_bohr.npy                 # FD를 켠 경우

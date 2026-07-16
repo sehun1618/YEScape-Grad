@@ -198,8 +198,8 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 | Stage | State | 현재 evidence | 다음 행동 |
 | --- | --- | --- | --- |
 | N0 sampled-k dtype safety | `complete` | common complex dtype solve; warning-as-error r2SCAN `2 x 1 x 1` RSDF, RSDF/MGGA 11-test 및 공유 GDF 36-test 통과 | regression 유지 |
-| N1 benchmark integrity | `pending` | 외부 종료 후 stale `running` progress와 이전 failed report가 같은 directory에 존재 가능 | run identity와 interrupted-state contract 설계 |
-| N2 GPU source derivative | `pending` | Water8에서 host source derivative가 RSDF response의 주요 부분; Water64 사용자 실행에서도 높은 CPU 사용 관측 | primitive ownership map과 small parity fixture 작성 |
+| N1 benchmark integrity | `complete` | attempt identity, process-liveness reconciliation, interrupted state 및 prior-artifact archive; benchmark unit test 12개와 Water8 3회/Water20 1회 통과 | lifecycle regression 유지 |
+| N2 GPU source derivative | `pending` | 새 Water8 median에서 host source derivative가 주요 부분이며 Water20에서는 28.999 s; Water64 사용자 실행에서도 높은 CPU 사용 관측 | primitive ownership map과 small parity fixture 작성 |
 | N3 GPU metric derivative | `pending` | metric derivative는 명시적 host boundary | N2 완료 후 시작 |
 | N4 conditional remainder | `pending` | profile 전에는 대상 미정 | N2/N3 후 exclusive profile |
 | N5 release gate | `pending` | 이전 R2 release evidence 존재 | N0--N4 완료 범위만 재검증 |
@@ -230,3 +230,23 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 - RSDF/MGGA 관련 11개 test가 58.014 s에, 공유 GDF GPU 36개 test가 550.286 s에
   통과했다. Gamma real path, sampled-k, dense/matrix-free Z-vector와 full-gradient
   parity를 포함한다.
+
+## 9. 2026-07-17 N1 implementation record
+
+- 각 queue 실행은 `case_run_id`, UUID `attempt_id`, KST 시작 시각과 hostname으로 된
+  `run_identity`를 `run_input.json`, `attempt.json`, `progress.json` 및 `report.json`에
+  공유한다.
+- Queue runner는 PID뿐 아니라 Linux process start tick도 비교한다. 기록된 child가
+  사라졌거나 PID가 재사용된 경우 이전 attempt와 progress를 `interrupted`로 바꾼다.
+  살아 있는 child는 `skipped_running`으로 남겨 중복 계산을 막는다.
+- 재실행 전 root의 input, log, progress, report 및 array를
+  `attempts/<KST>_<attempt-id>/`로 함께 보존한다. 새 attempt와 identity가 다른 report는
+  성공 결과로 읽지 않는다.
+- lifecycle, stale-report rejection, live/dead process 판정, atomic progress와 archive를
+  포함한 benchmark unit test 12개가 통과했다.
+- `results/rsdf_n1_integrity_2026-07-17`에서 Water8 세 번과 FD 없는 Water20 한 번이 모두
+  완료됐다. Water8 analytic-gradient wall-time 중앙값은 7.952 s, Water20은 58.377 s다.
+- 모든 report/attempt identity가 일치했다. `source_omega=0.3`, `metric_omega=0.4`,
+  source/metric mesh `21^3/31^3`, host-to-device bytes, host peak RSS 및 sampled VRAM peak가
+  보존됐다. Water20의 host source/metric derivative time은 각각 28.999 s와 15.596 s로
+  N2/N3의 측정 기준선이다.

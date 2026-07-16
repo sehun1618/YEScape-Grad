@@ -1246,6 +1246,7 @@ def main() -> int:
             "device": config.get("device", "cpu"),
             "df_backend": config.get("df_backend", "fftdf"),
             "xc": config.get("xc", "PBE"),
+            "run_identity": config.get("run_identity"),
         },
     )
     vram_tracker = VRAMPeakTracker(
@@ -1263,6 +1264,7 @@ def main() -> int:
             progress=progress,
             vram_tracker=vram_tracker,
         )
+        report["run_identity"] = config.get("run_identity")
         vram_report = vram_tracker.stop()
         report.setdefault("memory", {})["vram_peak_tracking"] = vram_report
         write_json(report_path, report)
@@ -1273,6 +1275,7 @@ def main() -> int:
             "status": "failed",
             "schema_version": 1,
             "run_name": config.get("name"),
+            "run_identity": config.get("run_identity"),
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),

@@ -5,18 +5,33 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime
 import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 
 HERE = Path(__file__).resolve().parent
 CASE_RUNNER = HERE / "dcdft_benchmark.py"
+KST = ZoneInfo("Asia/Seoul")
+CASE_ARTIFACTS = (
+    "run_input.json",
+    "command.txt",
+    "stdout.txt",
+    "stderr.txt",
+    "progress.json",
+    "report.json",
+    "attempt.json",
+    "arrays",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -25,10 +40,162 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     )
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_optional_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        return _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _now_kst() -> str:
+    return datetime.now(KST).isoformat()
+
+
+def _new_run_identity(run_id: str) -> dict[str, str]:
+    return {
+        "case_run_id": str(run_id),
+        "attempt_id": uuid.uuid4().hex,
+        "started_at_kst": _now_kst(),
+        "hostname": socket.gethostname(),
+    }
+
+
+def _process_start_ticks(pid: int) -> int | None:
+    """Return Linux process start ticks, robust to spaces in ``comm``."""
+
+    try:
+        stat = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    close = stat.rfind(")")
+    if close < 0:
+        return None
+    fields_after_comm = stat[close + 1 :].split()
+    try:
+        return int(fields_after_comm[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _attempt_is_active(attempt: Mapping[str, Any]) -> bool | None:
+    identity = attempt.get("run_identity") or {}
+    if identity.get("hostname") != socket.gethostname():
+        return None
+    try:
+        pid = int(attempt["child_pid"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    observed_start = _process_start_ticks(pid)
+    if observed_start is None:
+        return False
+    recorded_start = attempt.get("child_process_start_ticks")
+    if recorded_start is None:
+        return True
+    try:
+        return int(recorded_start) == observed_start
+    except (TypeError, ValueError):
+        return False
+
+
+def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    """Stop a child owned by this queue runner after local interruption."""
+
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _mark_progress_interrupted(
+    case_dir: Path,
+    run_identity: Mapping[str, Any],
+    *,
+    reason: str,
+) -> None:
+    path = case_dir / "progress.json"
+    progress = _read_optional_json(path)
+    if progress is None or progress.get("status") != "running":
+        return
+    context = progress.get("context") or {}
+    if context.get("run_identity") != dict(run_identity):
+        return
+    previous_stage = progress.get("stage")
+    progress["status"] = "interrupted"
+    progress["stage"] = "interrupted"
+    progress["stage_fraction"] = None
+    progress["updated_at_kst"] = _now_kst()
+    progress["details"] = {
+        "previous_stage": previous_stage,
+        "reason": str(reason),
+    }
+    progress.setdefault("history", []).append(
+        {
+            "stage": "interrupted",
+            "elapsed_s": progress.get("elapsed_s"),
+        }
+    )
+    _write_json(path, progress)
+
+
+def _reconcile_previous_attempt(case_dir: Path) -> str | None:
+    """Resolve a stale running attempt before queue skip/run decisions."""
+
+    path = case_dir / "attempt.json"
+    attempt = _read_optional_json(path)
+    if attempt is None:
+        return None
+    status = str(attempt.get("status", "unknown"))
+    if status != "running":
+        return status
+    active = _attempt_is_active(attempt)
+    if active is not False:
+        return "running"
+    identity = dict(attempt.get("run_identity") or {})
+    attempt["status"] = "interrupted"
+    attempt["finished_at_kst"] = _now_kst()
+    attempt["interruption_reason"] = "recorded child process is no longer active"
+    _write_json(path, attempt)
+    _mark_progress_interrupted(
+        case_dir,
+        identity,
+        reason=attempt["interruption_reason"],
+    )
+    return "interrupted"
+
+
+def _archive_case_artifacts(case_dir: Path) -> Path | None:
+    existing = [case_dir / name for name in CASE_ARTIFACTS]
+    existing = [path for path in existing if path.exists()]
+    if not existing:
+        return None
+    attempt = _read_optional_json(case_dir / "attempt.json") or {}
+    identity = attempt.get("run_identity") or {}
+    attempt_id = _slug(str(identity.get("attempt_id", "legacy")))
+    timestamp = datetime.now(KST).strftime("%Y%m%dT%H%M%S.%f%z")
+    archive = case_dir / "attempts" / f"{timestamp}_{attempt_id}"
+    archive.mkdir(parents=True, exist_ok=False)
+    for source in existing:
+        source.replace(archive / source.name)
+    return archive
 
 
 def _slug(value: str) -> str:
@@ -114,8 +281,14 @@ def _case_environment(run: Mapping[str, Any]) -> dict[str, str]:
     return environment
 
 
-def _run_case(run: dict[str, Any], case_dir: Path) -> dict[str, Any]:
+def _run_case(
+    run: dict[str, Any], case_dir: Path, run_id: str
+) -> dict[str, Any]:
     case_dir.mkdir(parents=True, exist_ok=True)
+    archived = _archive_case_artifacts(case_dir)
+    run_identity = _new_run_identity(run_id)
+    run = dict(run)
+    run["run_identity"] = run_identity
     input_path = case_dir / "run_input.json"
     _write_json(input_path, run)
     command = [
@@ -129,28 +302,80 @@ def _run_case(run: dict[str, Any], case_dir: Path) -> dict[str, Any]:
     (case_dir / "command.txt").write_text(
         shlex.join(command) + "\n", encoding="utf-8"
     )
+    attempt_path = case_dir / "attempt.json"
     with (case_dir / "stdout.txt").open("w", encoding="utf-8") as stdout, (
         case_dir / "stderr.txt"
     ).open("w", encoding="utf-8") as stderr:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=HERE,
             env=_case_environment(run),
             stdout=stdout,
             stderr=stderr,
             text=True,
-            check=False,
         )
+        attempt = {
+            "schema": "pbc_dcdft_benchmark_attempt_v1",
+            "status": "running",
+            "run_identity": run_identity,
+            "child_pid": process.pid,
+            "child_process_start_ticks": _process_start_ticks(process.pid),
+            "archived_previous_artifacts": (
+                str(archived) if archived is not None else None
+            ),
+        }
+        _write_json(attempt_path, attempt)
+        try:
+            returncode = process.wait()
+        except BaseException:
+            _terminate_process(process)
+            attempt["status"] = "interrupted"
+            attempt["finished_at_kst"] = _now_kst()
+            attempt["interruption_reason"] = "queue runner was interrupted"
+            _write_json(attempt_path, attempt)
+            _mark_progress_interrupted(
+                case_dir,
+                run_identity,
+                reason=attempt["interruption_reason"],
+            )
+            raise
     report_path = case_dir / "report.json"
-    report = _read_json(report_path) if report_path.is_file() else {}
+    report = _read_optional_json(report_path) or {}
+    report_identity_matches = report.get("run_identity") == run_identity
+    if not report_identity_matches:
+        report = {}
+    if report and returncode == 0:
+        status = str(report.get("status", "failed"))
+    elif returncode < 0:
+        status = "interrupted"
+    else:
+        status = "failed"
+    if status == "interrupted":
+        _mark_progress_interrupted(
+            case_dir,
+            run_identity,
+            reason=f"benchmark child exited with return code {returncode}",
+        )
+    attempt["status"] = status
+    attempt["finished_at_kst"] = _now_kst()
+    attempt["returncode"] = int(returncode)
+    attempt["report_identity_matches"] = bool(report_identity_matches)
+    _write_json(attempt_path, attempt)
     return {
-        "returncode": completed.returncode,
-        "status": report.get("status", "failed"),
+        "returncode": returncode,
+        "status": status,
         "report": report,
+        "run_identity": run_identity,
     }
 
 
-def _summary_row(run_id: str, case_dir: Path, report: Mapping[str, Any]):
+def _summary_row(
+    run_id: str,
+    case_dir: Path,
+    report: Mapping[str, Any],
+    *,
+    queue_state: str,
+):
     timing = report.get("timing_s") or {}
     accuracy = report.get("accuracy") or {}
     system = report.get("system") or {}
@@ -159,7 +384,8 @@ def _summary_row(run_id: str, case_dir: Path, report: Mapping[str, Any]):
     vram = memory.get("vram_peak_tracking") or {}
     return {
         "run_id": run_id,
-        "status": report.get("status"),
+        "status": report.get("status", queue_state),
+        "queue_state": queue_state,
         "device": report.get("device"),
         "df_backend": report.get("df_backend"),
         "xc": report.get("xc"),
@@ -247,15 +473,25 @@ def main() -> int:
             continue
         case_dir = output_root / run_id
         report_path = case_dir / "report.json"
-        if _completed_report(report_path) and not args.overwrite:
+        lifecycle = _reconcile_previous_attempt(case_dir)
+        run_identity = None
+        if lifecycle == "running":
+            report = {}
+            state = "skipped_running"
+            attempt = _read_optional_json(case_dir / "attempt.json") or {}
+            run_identity = attempt.get("run_identity")
+            print(f"[{run_id}] skip: active attempt")
+        elif _completed_report(report_path) and not args.overwrite:
             report = _read_json(report_path)
             state = "skipped_complete"
+            run_identity = report.get("run_identity")
             print(f"[{run_id}] skip: complete")
         else:
             print(f"[{run_id}] run")
-            outcome = _run_case(run, case_dir)
+            outcome = _run_case(run, case_dir, run_id)
             report = outcome["report"]
             state = outcome["status"]
+            run_identity = outcome["run_identity"]
             print(f"[{run_id}] {state}")
         manifest.append(
             {
@@ -263,11 +499,19 @@ def main() -> int:
                 "state": state,
                 "device": run.get("device"),
                 "df_backend": run.get("df_backend"),
+                "run_identity": run_identity,
                 "report_path": str(report_path),
                 "progress_path": str(case_dir / "progress.json"),
             }
         )
-        summary_rows.append(_summary_row(run_id, case_dir, report))
+        summary_rows.append(
+            _summary_row(
+                run_id,
+                case_dir,
+                report,
+                queue_state=state,
+            )
+        )
         _write_json(
             output_root / "queue_manifest.json",
             {
