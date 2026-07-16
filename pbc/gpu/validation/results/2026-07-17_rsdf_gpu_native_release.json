@@ -1,0 +1,65 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_rsdf_gpu_native_release_v1",
+  "overall_status": "pass",
+  "water64_executed_by_codex": false,
+  "scope": {
+    "reference": "RHF/KRHF",
+    "target_xc": ["PBE", "SCAN", "R2SCAN"],
+    "kpoint_scope": ["Gamma", "sampled-k"],
+    "derivative": "fixed-cell analytic nuclear gradient"
+  },
+  "correctness": {
+    "cpu_gpu_energy_tolerance_ha": 1e-8,
+    "cpu_gpu_gradient_tolerance_ha_per_bohr": 1e-7,
+    "gamma_pbe_cpu_gpu": "pass",
+    "sampled_k_pbe_cpu_gpu": "pass",
+    "gamma_scan_cpu_gpu": "pass",
+    "sampled_k_r2scan_cpu_gpu_complex_warning_as_error": "pass",
+    "selected_fd_max_abs_error_ha_per_bohr": 2.6961410881654047e-10,
+    "selected_fd_tolerance_ha_per_bohr": 1e-5,
+    "z_vector_residual_max_abs": 2.5793603364299145e-14,
+    "z_vector_residual_tolerance": 1e-8,
+    "silent_cpu_fallback": false,
+    "dropped_component_or_pair": false
+  },
+  "regression": {
+    "rsdf_test_count": 14,
+    "mgga_test_count": 4,
+    "rsdf_mgga_elapsed_s": 311.173,
+    "package_and_final_gamma_kpoint_test_count": 4,
+    "package_and_final_gamma_kpoint_elapsed_s": 45.285,
+    "shared_gdf_fused_test_count": 2,
+    "shared_gdf_fused_elapsed_s": 63.394,
+    "forced_batch_one": "pass",
+    "transactional_oom_rebatch": "pass",
+    "full_tensor_and_resolved_reference": "pass"
+  },
+  "performance": {
+    "water8_n3_median_wall_s": 5.884372713975608,
+    "water8_n4_median_wall_s": 4.2994936583563685,
+    "water8_speedup_percent": 26.93369595462728,
+    "water20_n3_wall_s": 32.467983606271446,
+    "water20_n4_wall_s": 21.201679370366037,
+    "water20_speedup_percent": 34.69973489123369,
+    "production_response_mode": "native_source_native_metric_fused_adjoint"
+  },
+  "distribution": {
+    "source_import": "pass",
+    "cpu_wheel": {
+      "filename": "pyscf_pbc_dcdft-0.1.0a0-cp311-cp311-linux_x86_64.whl",
+      "sha256": "3c5fdd7693a520d259370472102538328b0145f97f2c0b750b33d3bc68c2cb1f"
+    },
+    "gpu_wheel": {
+      "filename": "gpu4pyscf_pbc_dcdft-0.1.0a0-py3-none-any.whl",
+      "sha256": "817f1dcd46a41eabc25e33e9cb875544e812f7d808a0c9e8046dece223db66c7"
+    },
+    "wheel_install_and_import": "pass",
+    "cpu_rsdf_public_example": "pass",
+    "gpu_rsdf_public_example": "pass"
+  },
+  "selected_fd_result": "pbc/benchmark/results/rsdf_n5_release_2026-07-17/003_water8_water8_selected_fd_gpu_rsdf/report.json",
+  "supporting_validation": [
+    "pbc/gpu/validation/results/2026-07-17_rsdf_native_metric.json",
+    "pbc/gpu/validation/results/2026-07-17_rsdf_fused_observables.json"
+  ]
+}

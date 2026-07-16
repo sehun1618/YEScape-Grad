@@ -51,6 +51,16 @@ local pseudopotential part 2 H1 primitive, sampled-k metric derivative의 upstre
 primitive와 Ewald nuclear term은 explicit host boundary다. CPU DC-DFT
 energy/gradient로 silent fallback하지 않는다.
 
+RSDF production gradient는 source와 metric response를 full atom-resolved
+`dCDERI/dJ/dK`로 만들지 않는다. Target-J와 restricted-HF Z-bilinear의 CDERI adjoint를
+먼저 더한 뒤 native short-range/reciprocal source derivative와 reciprocal
+metric/Cholesky adjoint에 한 번만 수축한다. Metadata의
+`response_mode="native_source_native_metric_fused_adjoint"`와
+`gradient_partition="explicit_response_coupled"`가 이 경로를 표시한다. Central RSDF
+CDERI setup과 production PySCF convention을 보존하는 exact screened short-range metric
+`ip1/ip2`는 명시적인 host boundary다. 성분별 진단은 low-level builder의
+`observable_mode="resolved"`를 사용한다.
+
 Public examples:
 
 ```text

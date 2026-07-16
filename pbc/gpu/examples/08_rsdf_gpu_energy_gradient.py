@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """Compute sampled-k-point DC-PBE energy and analytic gradient with GPU RSDF.
 
-PySCF generates the periodic RSDF integral primitives at the explicit host
-boundary.  Canonical CDERI storage, source/target J/K contractions, metric and
-CDERI response algebra, AX/Z-vector, and final electronic assembly are owned
-by the GPU package.  No CPU DC-DFT energy or gradient routine is called.
+PySCF generates the central periodic RSDF factors and exact screened
+short-range metric ``ip1/ip2`` at explicit host boundaries.  Native source
+derivatives, reciprocal metric/Cholesky adjoints, fused target-J/Z-bilinear
+response, AX/Z-vector, and final electronic assembly are owned by the GPU
+package.  No CPU DC-DFT energy or gradient routine is called.
 
 Coordinates and lattice vectors are in Bohr.  The gradient is ``dE/dR`` in
 Hartree/Bohr; force would have the opposite sign.

@@ -202,7 +202,7 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 | N2 GPU source derivative | `complete` | SR/LR+vbar native contraction, Gamma/sampled-k canonical orientation, source adjoint algebra, bounded reciprocal rebatch 및 shared two-observable traversal; RSDF 12개와 MGGA 4개 test 통과 | regression 유지 |
 | N3 GPU metric derivative | `complete` | exact host SR `ip1/ip2` + GPU reciprocal metric/Cholesky adjoint; RSDF 14개와 MGGA 4개 test, Water20 35.2% N2 대비 개선 | regression 유지 |
 | N4 conditional remainder | `complete` | Water20 source SR 21.330 s 병목을 exact fused adjoint로 10.676 s까지 축소; Water8 median 26.9%, Water20 34.7% end-to-end 개선 | fused/resolved regression 유지 |
-| N5 release gate | `in progress` | RSDF 14개 + MGGA 4개 회귀 통과 | selected FD, package/wheel/example smoke 및 최종 ledger 고정 |
+| N5 release gate | `complete` | selected FD $2.70\times10^{-10}$ Ha/Bohr, Z residual $2.58\times10^{-14}$; wheel install/import, CPU/GPU example 및 GDF 교차 회귀 통과 | release regression 유지 |
 
 ## 7. 완료 정의
 
@@ -334,3 +334,22 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 - RSDF test 14개와 SCAN/r2SCAN MGGA test 4개, 총 18개가 311.173 s에 통과했다.
   Gamma/sampled-k, mixed ownership, batch-1 및 transactional OOM 계약을 포함한다.
   Water64는 실행하지 않았다.
+
+## 13. 2026-07-17 N5 release record
+
+- Water8/Gamma/r2SCAN의 atom 0 z component를 $h=10^{-4}$ Bohr central FD로 다시
+  검증했다. Fused analytic gradient와 FD의 차이는
+  $2.696\times10^{-10}$ Ha/Bohr이고 Z-vector residual은
+  $2.579\times10^{-14}$이다.
+- Gamma 및 sampled-k PBE CPU/GPU, Gamma SCAN, sampled-k r2SCAN을 통과했다. Sampled-k
+  r2SCAN test는 `ComplexWarning`을 error로 승격한다. Source reciprocal forced block-1,
+  transactional OOM rebatch, host/native ownership 조합과 full-tensor witness도 통과했다.
+- 공유 `grad/gdf.py`의 coupled 조립 회귀를 막기 위해 GDF Gamma/sampled-k fused
+  full-gradient test 2개를 추가 확인했다. 두 test 모두 통과했다.
+- CPU/GPU package wheel을 생성하고 임시 target에 설치해 source tree 밖에서 import했다.
+  CPU/GPU sampled-k RSDF 공개 예제도 각각 완료됐다. Wheel SHA256은 validation JSON에
+  고정했다.
+- Public capability와 gradient metadata는 native source derivative, reciprocal
+  metric/Cholesky adjoint, fused target-J/Z-bilinear, exact host short-range metric 및
+  central-CDERI boundary를 구분해 보고한다. Silent CPU fallback과 누락 block은 없다.
+- N0--N5 전체 goal이 완료됐다. Water64는 실행하지 않았다.

@@ -914,6 +914,7 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertLess(abs(cpu.e_tot - gpu.e_tot), 1.0e-8)
         self.assertLess(np.max(np.abs(cpu_gradient - gpu_gradient)), 1.0e-7)
         metadata = gpu_gradient_object.result.metadata()
+        capability = gpu.with_df.capability()
         self.assertEqual(metadata["backend"], "rsdf")
         self.assertFalse(metadata["silent_cpu_fallback"])
         self.assertTrue(metadata["native_one_electron"])
@@ -939,6 +940,11 @@ class RSDFGPUParityTest(unittest.TestCase):
             "explicit_response_coupled",
         )
         self.assertFalse(metadata["target_coulomb_component_resolved"])
+        self.assertEqual(
+            capability["response_mode"],
+            "native_source_native_metric_fused_adjoint",
+        )
+        self.assertFalse(capability["silent_cpu_fallback"])
         self.assertEqual(
             profile["host_source_derivative_seconds"],
             0.0,

@@ -98,16 +98,19 @@ class RSDF(GDF):
             "auxbasis": self.auxbasis,
             "energy": True,
             "analytic_gradient": True,
-            "gradient_status": "source_contracted_release_gate_passed",
+            "gradient_status": "fused_adjoint_release_gate_passed",
             "target_xc": ["PBE", "SCAN", "R2SCAN"],
             "central_cderi": "PySCF RSDF host setup, canonical CuPy storage",
-            "jk_contraction": (
-                "project-local CuPy source-contracted component stream"
+            "gradient_response": (
+                "GPU-native source derivative, reciprocal metric derivative, "
+                "and fused target-J/Z-bilinear adjoint contraction"
             ),
+            "response_mode": "native_source_native_metric_fused_adjoint",
             "silent_cpu_fallback": False,
             "host_boundaries": [
-                "RSDF central and derivative periodic integral generation",
-                "GTH hcore and H1 integral generation",
+                "RSDF central 2-center/3-center integral and CDERI setup",
+                "exact screened short-range metric ip1/ip2",
+                "GTH local-part-2 H1 primitive generation",
                 "PySCF Cell/AuxCell metadata",
             ],
         }
