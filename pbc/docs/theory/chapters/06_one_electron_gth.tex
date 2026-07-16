@@ -1,0 +1,121 @@
+\section{One-electron operator와 GTH pseudopotential derivative}
+\label{sec:gth-one-electron}
+
+\subsection{Periodic one-electron Hamiltonian}
+
+GTH pseudopotential을 사용하는 one-electron Hamiltonian은
+\begin{equation}
+  \hat h
+  =-\frac12\nabla^2
+   +\sum_A\hat V_{\mathrm{loc}}^A
+   +\sum_A\hat V_{\mathrm{nl}}^A
+  \label{eq:gth-hamiltonian}
+\end{equation}
+이다. All-electron electron--nuclear $-Z_A/r$ 대신 smooth local potential과 finite-rank
+nonlocal projector를 사용한다. Kinetic operator 자체는 핵 좌표에 명시적으로 의존하지
+않지만 atom-centered AO basis가 움직이므로 kinetic AO matrix derivative는 0이 아니다.
+
+\subsection{Local GTH potential}
+
+대표적인 local form은
+\begin{equation}
+  V_{\mathrm{loc}}^A(r)
+  =-\frac{Z_A^{\mathrm{ion}}}{r}
+    \operatorname{erf}\!\left(\frac{r}{\sqrt2 r_{\mathrm{loc},A}}\right)
+   +e^{-r^2/(2r_{\mathrm{loc},A}^2)}
+    \sum_{n=1}^{4}C_{nA}
+    \left(\frac{r}{r_{\mathrm{loc},A}}\right)^{2n-2}
+  \label{eq:gth-local-real}
+\end{equation}
+이다. Periodic FFT representation에서는 원자 위치 dependence가 structure factor
+$e^{-i\vG\cdot\mathbf R_A}$에 들어가므로
+\begin{equation}
+  \frac{\partial}{\partial R_{Ax}}
+  \left[e^{-i\vG\cdot\mathbf R_A}V_{\mathrm{loc}}^A(\vG)\right]
+  =-iG_xe^{-i\vG\cdot\mathbf R_A}V_{\mathrm{loc}}^A(\vG).
+  \label{eq:gth-local-structure-derivative}
+\end{equation}
+$\vG=0$에서는 $G_x=0$이지만 constant term, charge convention과 Ewald compensation을
+central hcore와 같은 방식으로 처리해야 한다.
+
+AO matrix는
+\begin{equation}
+  V_{\mu\nu,\mathrm{loc}}^{\vk}
+  =\langle\phi_{\mu\vk}|\hat V_{\mathrm{loc}}|\phi_{\nu\vk}\rangle
+  \label{eq:gth-local-ao}
+\end{equation}
+이며 derivative에는 potential center $A$, bra AO center, ket AO center의 이동이 모두
+포함된다. Translation identity를 사용하면 potential-center derivative를 AO derivative와
+reciprocal structure-factor derivative의 조합으로 계산할 수 있다.
+
+\subsection{Nonlocal projectors}
+
+Nonlocal GTH operator는 angular momentum channel별 separable form
+\begin{equation}
+  \hat V_{\mathrm{nl}}^A
+  =\sum_{l m}\sum_{ij}
+   |p_{i,lm}^{A}\rangle h_{ij}^{A,l}
+   \langle p_{j,lm}^{A}|
+  \label{eq:gth-nonlocal-operator}
+\end{equation}
+이다. AO matrix element를 projector overlap
+\begin{equation}
+  P_{i,lm;\mu}^{A\vk}
+  =\langle p_{i,lm}^{A}|\phi_{\mu\vk}\rangle
+  \label{eq:gth-projector-overlap}
+\end{equation}
+로 쓰면
+\begin{equation}
+  V_{\mu\nu,\mathrm{nl}}^{\vk}
+  =\sum_{A,lm,ij}
+   P_{i,lm;\mu}^{A\vk *}h_{ij}^{A,l}
+   P_{j,lm;\nu}^{A\vk}.
+  \label{eq:gth-nonlocal-matrix}
+\end{equation}
+Product rule로
+\begin{align}
+  V_{\mu\nu,\mathrm{nl}}^{\vk,Ax}
+  =\sum_{l m i j}
+  \bigg[&P_{i,lm;\mu}^{A\vk,Ax *}h_{ij}^{A,l}
+         P_{j,lm;\nu}^{A\vk}
+  \notag\\
+       +&P_{i,lm;\mu}^{A\vk *}h_{ij}^{A,l}
+         P_{j,lm;\nu}^{A\vk,Ax}\bigg]
+  +\text{AO-center terms}
+  \label{eq:gth-nonlocal-derivative}
+\end{align}
+를 얻는다. Projector radial table $h_{ij}^{A,l}$ 자체는 원자와 함께 rigid하게 이동하므로
+핵 좌표에 대한 parameter derivative는 없다.
+
+\subsection{AO-row convention과 full matrix}
+
+Integral engine은 흔히 AO row center에 대한 derivative matrix
+$h_{\mu\nu}^{(1)}$를 반환한다. Atom $A$의 full matrix derivative를 만들려면
+\begin{equation}
+  h^{Ax}=h_{\mathrm{row},A}^{x}
+       +h_{\mathrm{row},A}^{x\dagger}
+       +h_{\mathrm{operator},A}^{x}
+  \label{eq:hcore-full-derivative}
+\end{equation}
+처럼 bra/ket와 operator-center ownership을 합쳐야 한다. Complex k-point에서 두 번째
+항은 단순 transpose가 아니라 conjugate transpose다.
+
+Overlap derivative도 같은 AO-center logic으로
+\begin{equation}
+  S^{Ax}=S_{\mathrm{row},A}^{x}+S_{\mathrm{row},A}^{x\dagger}
+  \label{eq:overlap-full-derivative}
+\end{equation}
+를 만족한다. $h^{Ax}$와 $S^{Ax}$는 explicit target gradient뿐 아니라 source HF CPHF
+source 식~\eqref{eq:cphf-source}에도 사용된다.
+
+\subsection{Pseudopotential 일관성}
+
+Source density를 HF로 만들었다는 이유로 ``HF pseudopotential''이라는 별도의 analytic
+형식이 생기지는 않는다. GTH-HF와 같은 label은 pseudopotential parameter set을 뜻한다.
+Source HF와 target DFA energy/gradient는 동일한 GTH parameter와 valence ionic charge를
+사용해야 한다. 서로 다른 pseudopotential로 source와 target을 계산하면 식
+\eqref{eq:scope-dc-energy}의 한 energy surface를 미분하는 문제가 아니게 된다.
+
+검증에서는 local, nonlocal, kinetic/overlap, ion--ion component를 분리해 FD와 비교한 뒤
+전체 hcore derivative를 확인한다. 특히 nonlocal projector의 angular channel이 늘어나는
+basis/pseudopotential에서 atom slice와 conjugation 오류가 잘 드러난다.

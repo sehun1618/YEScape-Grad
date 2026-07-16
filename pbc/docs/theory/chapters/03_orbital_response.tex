@@ -1,0 +1,121 @@
+\section{Periodic orbital response와 Z-vector}
+\label{sec:orbital-response}
+
+\subsection{Orthonormality response}
+
+핵 변위 $R_{Ax}$에서 AO overlap이 변하므로 MO coefficient derivative는 단순한
+unitary rotation만이 아니다. 식~\eqref{eq:mo-orthonormality}을 미분하면
+\begin{equation}
+  C^{\vk\dagger}S^{\vk}C^{\vk,Ax}
+  +C^{\vk,Ax\dagger}S^{\vk}C^{\vk}
+  +C^{\vk\dagger}S^{\vk,Ax}C^{\vk}=0
+  \label{eq:orthonormality-response}
+\end{equation}
+이다. $U^{\vk,Ax}=C^{\vk\dagger}S^{\vk}C^{\vk,Ax}$라 두면
+\begin{equation}
+  U^{\vk,Ax}+U^{\vk,Ax\dagger}
+  =-S_{\mathrm{MO}}^{\vk,Ax},
+  \qquad
+  S_{\mathrm{MO}}^{\vk,Ax}=C^{\vk\dagger}S^{\vk,Ax}C^{\vk}
+  \label{eq:u-overlap-constraint}
+\end{equation}
+이다. Occupied--occupied와 virtual--virtual gauge는 선택할 수 있지만 occupied--virtual
+block은 HF response equation으로 결정된다.
+
+\subsection{CPHF equation}
+
+HF stationarity condition $F_{ai}^{\vk}=0$을 핵 좌표로 미분하면
+\begin{equation}
+  \sum_{\vk'bj}A_{ai\vk,bj\vk'}U_{bj}^{\vk',Ax}
+  =-B_{ai}^{\vk,Ax}
+  \label{eq:cphf-equation}
+\end{equation}
+을 얻는다. $A$는 periodic restricted HF orbital Hessian이고 $B^{Ax}$는 nuclear
+perturbation source다. Canonical-orbital notation에서 Hessian action은 개략적으로
+\begin{equation}
+  (AU)_{ai}^{\vk}
+  =(\varepsilon_a^{\vk}-\varepsilon_i^{\vk})U_{ai}^{\vk}
+  +\left[C_v^{\vk\dagger}\,\delta G_{\mathrm{HF}}[D^{(1)}(U)]^{\vk}
+  C_o^{\vk}\right]_{ai}
+  \label{eq:hf-hessian-action}
+\end{equation}
+이다. $\delta G_{\mathrm{HF}}=\delta J-\tfrac12\delta K$이며, 따라서 선택한
+FFTDF/GDF/RSDF의 transition-density J/K가 AX operation의 핵심이다.
+
+Nuclear source는 one-electron, two-electron과 overlap 항을 함께 포함한다.
+\begin{equation}
+  B_{ai}^{\vk,Ax}
+  =\left[C_v^{\vk\dagger}
+    \left(h^{\vk,Ax}+G_{\mathrm{HF}}^{\vk,Ax}
+          -\varepsilon_i^{\vk}S^{\vk,Ax}\right)
+    C_o^{\vk}\right]_{ai}
+  +B_{ai,\mathrm{basis}}^{\vk,Ax}.
+  \label{eq:cphf-source}
+\end{equation}
+$G_{\mathrm{HF}}^{Ax}$는 density를 고정한 integral derivative이고 마지막 항은 chosen
+AO-row/column convention에 따라 식의 다른 항에 흡수될 수 있다. Production code와
+문서가 같은 convention을 사용해야 한다.
+
+\subsection{Adjoint Z-vector}
+
+모든 $3N_{\mathrm{atom}}$ 변위에 대해 식~\eqref{eq:cphf-equation}을 풀면 비용이 크다.
+Target orbital gradient를 vector $g$로 모아 adjoint equation
+\begin{equation}
+  A^{\Herm}z=-g
+  \label{eq:zvector-equation}
+\end{equation}
+을 한 번 푼다. 그러면 chain-rule contribution은
+\begin{equation}
+  g_{Ax}^{\mathrm{resp}}
+  =z^{\Herm}B^{Ax}
+  \label{eq:zvector-contraction}
+\end{equation}
+으로 계산된다. 식~\eqref{eq:zvector-equation}과
+\eqref{eq:zvector-contraction}의 부호는 CPHF equation을 $AU=-B$로 정의한 것과
+연동된다. $B$ 또는 $g$ 정의를 바꾸면 두 식의 부호를 함께 바꿔야 한다.
+
+\subsection{Complex k-point의 real-linear 문제}
+
+Complex orbital rotation $U=X+iY$가 만드는 Hermitian first-order density는
+\begin{equation}
+  D^{(1),\vk}(U)
+  =2\left(C_v^{\vk}U^{\vk}C_o^{\vk\dagger}
+          +C_o^{\vk}U^{\vk\dagger}C_v^{\vk\dagger}\right)
+  \label{eq:first-order-density}
+\end{equation}
+이다. $U^*$가 동시에 나타나므로 map $U\mapsto D^{(1)}$는 complex-linear가 아니라
+real-linear다. 따라서 solver coordinate를
+\begin{equation}
+  u_R=\begin{pmatrix}\operatorname{Re}U\\\operatorname{Im}U\end{pmatrix}
+  \label{eq:realified-coordinate}
+\end{equation}
+로 두고
+\begin{equation}
+  A_Ru_R=-B_R,
+  \qquad A_R^Tz_R=-g_R
+  \label{eq:realified-zvector}
+\end{equation}
+를 푼다. Gamma에서 matrix가 실수라는 사실은 이 일반식을 축약하는 특수 경우다.
+
+\subsection{k-point normalization과 momentum structure}
+
+Nuclear perturbation은 primitive-cell periodicity를 유지하므로 같은 $\vk$ 안에서 VO
+response를 만든다. 그러나 $J/K$ Hessian action은 모든 k-point density response를
+couple한다. Equal-weight convention에서 AX와 최종 scalar contraction 모두 정확히
+$1/N_k$를 한 번 포함해야 한다. Transition density가 occupation factor를 이미 포함하는지
+확인하지 않고 별도의 factor $2$를 곱하면 Gamma에서는 우연히 맞아도 sampled k-point에서
+일관성이 깨질 수 있다.
+
+\subsection{Gauge, 작은 gap과 residual}
+
+Occupied 또는 virtual subspace 안의 unitary rotation은 density를 바꾸지 않는다.
+Degenerate orbital에서는 개별 $U_{ai}$보다 subspace-invariant density response가
+물리량이다. Solver는 VO 공간만 사용하고, denominator가 작은 경우 regularization을
+숨겨 적용하지 않는다. Report에는 최소한
+\begin{equation}
+  r_{\max}=\|A_R^Tz_R+g_R\|_\infty
+  \label{eq:zvector-residual}
+\end{equation}
+와 response dimension, condition estimate를 기록한다. Gradient--FD agreement가 좋아도
+$r_{\max}$가 크면 특정 perturbation에서 cancellation에 의존할 수 있으므로 완료 근거로
+충분하지 않다.

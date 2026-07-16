@@ -1,0 +1,56 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,amsthm,bm,booktabs,geometry,hyperref,mathtools,xcolor}
+\usepackage{array,longtable}
+\usepackage{kotex}
+\geometry{margin=25mm}
+\emergencystretch=2em
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\vk}{\mathbf{k}}
+\newcommand{\vR}{\mathbf{R}}
+\newcommand{\vq}{\mathbf{q}}
+\newcommand{\vG}{\mathbf{G}}
+\newcommand{\vT}{\mathbf{T}}
+\newcommand{\vc}{\mathbf{c}}
+\newcommand{\gradR}[2]{\frac{\partial #1}{\partial R_{#2}}}
+\newcommand{\Herm}{\mathrm{H}}
+
+\theoremstyle{definition}
+\newtheorem{definition}{정의}[section]
+\newtheorem{remark}{주의}[section]
+
+\title{Periodic Density-Corrected DFT Analytic Gradients}
+\author{PBC DC-DFT Package Project}
+\date{Active scope: FFTDF/GDF/RSDF, PBE/SCAN/r2SCAN}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+이 문서는 restricted closed-shell periodic Hartree--Fock density에서 semilocal target
+functional을 평가하는 density-corrected DFT의 energy와 fixed-cell nuclear analytic
+gradient를 유도한다. 핵심은 target energy가 HF orbital에 대해 stationary하지 않다는
+점이며, 이로 인해 HF CPHF orbital Hessian과 adjoint Z-vector가 필요하다. FFTDF,
+Gaussian density fitting(GDF), range-separated density fitting(RSDF), GTH
+pseudopotential, Gamma 및 sampled k-point, PBE와 SCAN/r2SCAN의 수식과 구현 convention을
+한 흐름으로 정리한다. Stress, cell derivative, target-only multigrid와 open-shell
+response는 이 판의 active 범위가 아니다.
+\end{abstract}
+\tableofcontents
+
+\input{chapters/00_scope}
+\input{chapters/01_notation}
+\input{chapters/02_fixed_density_energy}
+\input{chapters/03_orbital_response}
+\input{chapters/04_periodic_density_fitting}
+\input{chapters/05_dc_lagrangian_gradient}
+\input{chapters/06_one_electron_gth}
+\input{chapters/07_fftdf}
+\input{chapters/08_gdf}
+\input{chapters/09_mgga_scan_r2scan}
+\input{chapters/10_rsdf}
+\input{chapters/11_validation_units}
+\input{chapters/12_appendices}
+
+\end{document}

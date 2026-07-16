@@ -1,0 +1,146 @@
+\section{Periodic notation, matrix conventions, and units}
+\label{sec:notation}
+
+\subsection{Direct and reciprocal lattices}
+
+Using the column convention, define the primitive lattice matrix as
+\begin{equation}
+  \mathbf A=(\mathbf a_1\;\mathbf a_2\;\mathbf a_3)
+\end{equation}
+and the cell volume as
+\begin{equation}
+  \Omega=\det\mathbf A>0.
+  \label{eq:cell-volume}
+\end{equation}
+The reciprocal-lattice matrix is
+\begin{equation}
+  \mathbf B=2\pi\mathbf A^{-\Herm},
+  \qquad
+  \mathbf a_i\cdot\mathbf b_j=2\pi\delta_{ij}.
+  \label{eq:reciprocal-lattice}
+\end{equation}
+A lattice translation is $\vT=\mathbf A\mathbf n$ with
+$\mathbf n\in\mathbb Z^3$, and a reciprocal vector is
+$\vG=\mathbf B\mathbf m$.
+
+Integrals over one cell are denoted by $\int_\Omega\dd\mathbf r$.  Constants
+in a Fourier pair depend on the FFT normalization used by an implementation;
+here we adopt
+\begin{equation}
+  \rho(\vG)=\int_\Omega e^{-i\vG\cdot\mathbf r}\rho(\mathbf r)\dd\mathbf r,
+  \qquad
+  \rho(\mathbf r)=\frac{1}{\Omega}\sum_{\vG}
+  e^{i\vG\cdot\mathbf r}\rho(\vG).
+  \label{eq:fourier-pair}
+\end{equation}
+
+\subsection{Bloch AOs and k-point weights}
+
+From an atom-centered Gaussian $\chi_\mu$, define a Bloch AO by
+\begin{equation}
+  \phi_{\mu\vk}(\mathbf r)
+  =\frac{1}{\sqrt{N_{\mathrm c}}}
+   \sum_{\vT}e^{i\vk\cdot\vT}
+   \chi_\mu(\mathbf r-\vT),
+  \label{eq:bloch-ao}
+\end{equation}
+where $N_{\mathrm c}$ is the number of primitive cells in the Born--von Karman
+supercell; it cancels from the final intensive quantities.  A Bloch orbital is
+\begin{equation}
+  \psi_{p\vk}(\mathbf r)
+  =\sum_\mu C_{\mu p}^{\vk}\phi_{\mu\vk}(\mathbf r).
+  \label{eq:bloch-mo}
+\end{equation}
+
+General weights are normalized as $\sum_\vk w_\vk=1$.  Regular meshes in this
+package use equal weights, $w_\vk=1/N_k$.  Thus, an explicit factor $1/N_k$
+below denotes the equal-weight convention.  A Gamma-only calculation is not a
+separate scalar theory; it is the same tensor convention with $N_k=1$ and
+$\vk=\mathbf0$.
+
+The AO overlap and one-electron matrices are
+\begin{align}
+  S_{\mu\nu}^{\vk}
+  &=\langle\phi_{\mu\vk}|\phi_{\nu\vk}\rangle,\\
+  h_{\mu\nu}^{\vk}
+  &=\langle\phi_{\mu\vk}|\hat h|\phi_{\nu\vk}\rangle,
+  \label{eq:ao-matrices}
+\end{align}
+and the MO coefficients satisfy
+\begin{equation}
+  C^{\vk\dagger}S^{\vk}C^{\vk}=I.
+  \label{eq:mo-orthonormality}
+\end{equation}
+
+\subsection{Restricted density matrix}
+
+For closed-shell occupations $f_{p\vk}\in\{0,2\}$, the AO density is
+\begin{equation}
+  D_{\mu\nu}^{\vk}
+  =\sum_p f_{p\vk}C_{\mu p}^{\vk}C_{\nu p}^{\vk *}
+  =2\sum_i C_{\mu i}^{\vk}C_{\nu i}^{\vk *}.
+  \label{eq:restricted-density}
+\end{equation}
+This definition already contains the occupation factor of two.  Whether an
+additional factor of two is required in an energy or response contraction
+therefore depends on whether an occupied-only tensor is being used in place of
+$D$.
+
+The matrix-trace convention is
+\begin{equation}
+  \Tr[D^{\vk}X^{\vk}]
+  =\sum_{\mu\nu}D_{\nu\mu}^{\vk}X_{\mu\nu}^{\vk}.
+  \label{eq:trace-convention}
+\end{equation}
+At complex k-points, $D^{\vk}$ and a Hermitian operator are Hermitian, but an
+individual derivative block need not be.  The real part is taken only for the
+final scalar; intermediate imaginary components must not be discarded
+arbitrarily.
+
+\subsection{Indices and derivative notation}
+
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+Index & Meaning \\
+\midrule
+$\mu,\nu,\lambda,\sigma$ & primary AO \\
+$P,Q$ & auxiliary AO \\
+$i,j$ & occupied MO \\
+$a,b$ & virtual MO \\
+$p,q$ & arbitrary MO \\
+$A,B$ & atom \\
+$x,y$ & Cartesian component \\
+$\vk,\vk'$ & sampled k-point \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A total derivative with respect to $R_{Ax}$ is written as a superscript $Ax$
+or as $\partial_{Ax}$; for example,
+$h^{Ax}=\partial h/\partial R_{Ax}$.  Because the AO basis moves with the
+nuclei, a matrix derivative must be distinguished from the orbital-coefficient
+response.  The cell is fixed, so $\mathbf A^{Ax}=0$, and the reciprocal vectors
+and discrete mesh are also fixed.
+
+\subsection{Canonical units}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Quantity & Canonical unit & Comment \\
+\midrule
+Energy & Hartree (Ha) & public energy \\
+Position/lattice & Bohr & PySCF internal unit \\
+Nuclear gradient & Ha/Bohr & $\dd E/\dd R$ \\
+Force & Ha/Bohr & $-\dd E/\dd R$ \\
+k-point & Bohr$^{-1}$ & Cartesian reciprocal coordinate \\
+Plane-wave cutoff & Ha & $G_{\max}^2/2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Even when an input XYZ file is given in angstrom, the coordinates are in Bohr
+after the cell is built.  Converting a gradient array to eV/angstrom requires
+both energy and length conversions.  Changing the sign is not a unit
+conversion; it converts a gradient into a force.

@@ -1,0 +1,122 @@
+\appendix
+\section{Tensor shapes, complex conventions, and the equation map}
+\label{sec:appendices}
+
+\subsection{Canonical tensor shapes}
+
+The following table defines the canonical shapes used by the implementation
+guide and source docstrings.
+
+\begin{center}
+\begin{longtable}{p{0.27\textwidth}p{0.28\textwidth}p{0.34\textwidth}}
+\toprule
+Quantity & Shape & Convention \\
+\midrule
+$D^{\vk}$ & $(N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & includes occupation factor $2$ \\
+$F_{\mathrm t}^{\vk}$ & $(N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & Hermitian \\
+$F_{vo}^{\vk}$ & per-k $(N_v,N_o)$ & target Z right-hand side \\
+$z^{\vk}$ & per-k $(N_v,N_o)$ & complex; realified solver \\
+$h^{Ax,\vk}$ & $(N_A,3,N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & full AO-matrix derivative \\
+$S^{Ax,\vk}$ & same & full overlap derivative \\
+$C^{ij}_{P\mu\nu}$ & per-pair $(N_{\mathrm{aux}},N_{\mathrm{AO}},N_{\mathrm{AO}})$ & canonical k-pair \\
+$C^{ij,Ax}_{P\mu\nu}$ & atom/axis + CDERI shape & source + metric response \\
+$g_{Ax}$ & $(N_A,3)$ & Ha/Bohr; not a force \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+At Gamma, the singleton k-axis is retained internally and restored to the
+public PySCF shape only at the API boundary.  This prevents Gamma and k-point
+implementations from silently adopting different equations.
+
+\subsection{Complex-to-real Hessian blocks}
+
+For a complex response $U=X+iY$, suppose the real-linear map has the form
+\begin{equation}
+  \delta F(U)=\mathcal A U+\mathcal B U^*.
+  \label{eq:appendix-complex-map}
+\end{equation}
+Its realified operator is
+\begin{equation}
+  \begin{pmatrix}
+    \operatorname{Re}\delta F\\
+    \operatorname{Im}\delta F
+  \end{pmatrix}
+  =
+  \begin{pmatrix}
+    \operatorname{Re}(\mathcal A+\mathcal B) &
+    -\operatorname{Im}(\mathcal A-\mathcal B)\\
+    \operatorname{Im}(\mathcal A+\mathcal B) &
+    \operatorname{Re}(\mathcal A-\mathcal B)
+  \end{pmatrix}
+  \begin{pmatrix}X\\Y\end{pmatrix}.
+  \label{eq:appendix-real-hessian}
+\end{equation}
+Production code need not materialize the full four-block matrix; it can supply
+the same map through matrix-vector products.
+
+\subsection{Summary of the Cholesky-response gauge}
+
+For $M=LL^\dagger$ and $W=L^{-1}M^{Ax}L^{-\dagger}$, define
+\begin{equation}
+  \Phi(W)_{ij}
+  =\begin{cases}
+    W_{ij},&i>j,\\
+    \tfrac12W_{ii},&i=j,\\
+    0,&i<j.
+  \end{cases}
+  \label{eq:appendix-cholesky-phi}
+\end{equation}
+Then $L^{Ax}=L\Phi(W)$.  If the metric is complex Hermitian, diagonal imaginary
+noise may be removed within tolerance, but a large anti-Hermitian residual is
+an error.
+
+\subsection{A \texorpdfstring{$G=0$ and $q=0$}{G=0 and q=0} checklist}
+
+\begin{enumerate}
+  \item The neutral Hartree $G=0$ convention must be identical in the central
+        energy and derivative.
+  \item Check the constant local-GTH term together with the ionic Ewald charge.
+  \item Keep the GDF/RSDF source $vbar$ and metric correction separate.
+  \item Diagonal pairs in sampled-k calculations also have $q=0$.
+  \item Include the overlap derivative of the exchange
+        \texttt{exxdiv='ewald'} correction.
+  \item Do not use Gamma-only success as evidence for general $q=0$ handling.
+\end{enumerate}
+
+\subsection{Principles for linking equations to code}
+
+Actual function names and validation tests are maintained in
+\path{docs/implementation/Equation_Code_Map.md}.  Each mapping records an
+equation label, public or private function, input/output shapes, dtype, device,
+unit, and validation test.  If an equation and source implementation diverge,
+the map and test are updated in the same change rather than modifying only one
+side.
+
+The principal links are
+\begin{center}
+\begin{longtable}{ll}
+\toprule
+Equation & Physical implementation owner \\
+\midrule
+\eqref{eq:dc-energy-components} & fixed-density target energy \\
+\eqref{eq:zvector-equation} & common CPU/GPU adjoint response \\
+\eqref{eq:final-gradient-assembly} & backend-independent gradient assembly \\
+\eqref{eq:gth-nonlocal-derivative} & GTH nonlocal-projector response \\
+\eqref{eq:fftdf-hartree-derivative} & FFTDF J derivative \\
+\eqref{eq:gdf-cderi-derivative} & GDF source/metric response \\
+\eqref{eq:mgga-tau-derivative} & SCAN/r2SCAN explicit XC derivative \\
+\eqref{eq:rsdf-cderi-derivative} & RSDF independent source/metric response \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\section{References and reproducibility notes}
+
+PySCF and GPU4PySCF source files and examples are the primary references for
+API and tensor conventions.  CP2K source and data provide comparison points
+for GTH pseudopotentials, periodic $G=0$ treatment, cutoff/grid behavior, and
+force formulations; their GPW and auxiliary-density algorithms must not be
+identified with the PySCF GDF/RSDF equations.  When external source code is
+consulted, its license and attribution requirements are checked and the
+private-API version is retained in result metadata.

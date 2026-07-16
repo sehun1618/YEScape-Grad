@@ -1,0 +1,139 @@
+\section{RSDF: range-separated source와 metric response}
+\label{sec:rsdf}
+
+\subsection{Range separation의 목적}
+
+Range-separated density fitting(RSDF)은 Coulomb kernel의 exact identity
+\begin{equation}
+  \frac1r
+  =\frac{\operatorname{erfc}(\omega r)}{r}
+   +\frac{\operatorname{erf}(\omega r)}{r}
+  \equiv v_{\mathrm{SR}}(r;\omega)+v_{\mathrm{LR}}(r;\omega)
+  \label{eq:rsdf-range-separation}
+\end{equation}
+를 사용한다. Short-range part는 real-space lattice sum에서 빠르게 감쇠하고 long-range
+part는 smooth reciprocal-space sum으로 계산하기 쉽다. Infinite sum에서는 $\omega$와
+무관하지만 finite screening과 finite mesh에서는 $\omega$가 numerical representation의
+일부다.
+
+\subsection{Source와 metric parameter는 독립적이다}
+
+Three-center source builder와 two-center metric builder가 최적화하는 exponent 분포가
+다르므로 PySCF RSDF는 서로 다른 parameter를 선택할 수 있다. 이를
+\begin{align}
+  B^{ij}
+  &=B_{\mathrm{SR}}^{ij}(\omega_B,\epsilon_B)
+    +B_{\mathrm{LR}}^{ij}(\omega_B,\mathcal G_B)
+    +\delta_{\vq,0}B_{vbar}^{ij},
+  \label{eq:rsdf-source-split}\\
+  M^{\vq}
+  &=M_{\mathrm{SR}}^{\vq}(\omega_M,\epsilon_M)
+    +M_{\mathrm{LR}}^{\vq}(\omega_M,\mathcal G_M)
+    +\delta_{\vq,0}M_0
+  \label{eq:rsdf-metric-split}
+\end{align}
+로 쓴다. 일반적으로
+\begin{equation}
+  \omega_B\ne\omega_M,
+  \qquad \mathcal G_B\ne\mathcal G_M.
+  \label{eq:rsdf-independent-parameters}
+\end{equation}
+이다. Source parameter를 metric derivative에 재사용하는 것은 approximation이 아니라
+다른 central CDERI를 미분하는 오류다.
+
+\subsection{Fixed-cell nuclear derivative}
+
+Cell, resolved source/metric mesh와 $\omega_B$, $\omega_M$를 고정하면
+\begin{align}
+  B^{ij,Ax}
+  &=B_{\mathrm{SR}}^{ij,Ax}
+    +B_{\mathrm{LR}}^{ij,Ax}
+    +\delta_{\vq,0}B_{vbar}^{ij,Ax},
+  \label{eq:rsdf-source-derivative}\\
+  M^{\vq,Ax}
+  &=M_{\mathrm{SR}}^{\vq,Ax}
+    +M_{\mathrm{LR}}^{\vq,Ax}
+    +\delta_{\vq,0}M_0^{Ax}.
+  \label{eq:rsdf-metric-derivative}
+\end{align}
+Short-range derivative는 central source/metric과 같은 lattice image list 및 screening
+precision을 사용한다. Long-range derivative는 같은 reciprocal vectors와 structure
+factor를 사용한다. Nuclear derivative에서 integer mesh는 변하지 않는다.
+
+Resolved metric을 Cholesky factorization한 뒤 식~\eqref{eq:gdf-cderi-derivative}을
+그대로 적용한다. 즉 RSDF에서도
+\begin{equation}
+  C^{Ax}=L^{-1}B^{Ax}-L^{-1}L^{Ax}C
+  \label{eq:rsdf-cderi-derivative}
+\end{equation}
+이며 source와 metric response를 모두 보존해야 한다.
+
+\subsection{\texorpdfstring{$q=0$}{q=0} correction}
+
+$\vq=0$은 Gamma-only를 뜻하지 않는다. Sampled k-point의 $(\vk_i,\vk_i)$ diagonal pair도
+$\vq=0$이다. 따라서
+\begin{equation}
+  \delta_{\vq,0}
+  =\begin{cases}
+    1,&\|\vk_j-\vk_i-\vG\|<\epsilon_q\ \text{for some reciprocal }\vG,\\
+    0,&\text{otherwise}
+   \end{cases}
+  \label{eq:rsdf-qzero-test}
+\end{equation}
+처럼 reciprocal equivalence를 고려한다. Source $vbar$, metric $M_0$, Ewald exchange
+correction의 value와 derivative가 같은 pair orientation을 사용해야 한다.
+
+\subsection{Canonical pair storage}
+
+Memory를 줄이기 위해 canonical $(i,j)$ pair만 저장할 수 있다. Reverse pair는
+\begin{equation}
+  C_{P,\nu\mu}^{ji}
+  =C_{P,\mu\nu}^{ij *}
+  \label{eq:rsdf-reverse-pair}
+\end{equation}
+로 복원하고 derivative도
+\begin{equation}
+  C_{P,\nu\mu}^{ji,Ax}
+  =C_{P,\mu\nu}^{ij,Ax *}
+  \label{eq:rsdf-reverse-pair-derivative}
+\end{equation}
+를 따라야 한다. AO transpose만 하고 complex conjugate를 빠뜨리면 Gamma test는 통과할
+수 있지만 non-Gamma k-point에서 imaginary leakage와 gradient error가 발생한다.
+
+\subsection{RSDF response가 사용되는 곳}
+
+RSDF CDERI derivative는 GDF와 마찬가지로 target Hartree explicit derivative, source HF
+$J/K$ nuclear derivative와 CPHF source에 사용된다. AX operation은 central RSDF J/K를
+transition density에 적용한다. 전체 구조는
+\begin{equation}
+  g_{Ax}^{\mathrm{RSDF}}
+  =g_{Ax}^{1e}+g_{Ax}^{\mathrm H}[C,C^{Ax}]
+   +g_{Ax}^{\mathrm{xc}}+g_{Ax}^{\mathrm{Pulay,t}}
+   +g_{Ax}^{\mathrm{NN}}+z^\Herm B_{\mathrm{HF}}^{Ax}[C,C^{Ax}]
+  \label{eq:rsdf-total-gradient}
+\end{equation}
+로 요약할 수 있다.
+
+\subsection{GPU host boundary}
+
+현재 GPU4PySCF에는 RSDF periodic two-/three-center derivative primitive를 모두 만드는
+device integral engine이 없다. 따라서 host에서 central/derivative integral metadata를
+만들고 CuPy로 옮긴 뒤 metric factorization, $dC$, $dJ/dR$, $dK/dR$, AX/Z-vector와 final
+assembly를 device에서 수행한다. 이 경계는 metadata에 명시하며 CPU DC-DFT gradient
+kernel로의 silent fallback과 구분한다.
+
+\subsection{RSDF completion checks}
+
+RSDF validation은 다음 순서를 따른다.
+
+\begin{enumerate}
+  \item 실제 provider가 resolve한 $\omega_B$, source mesh, $\omega_M$, metric mesh를 기록한다.
+  \item Response builder의 central CDERI와 SCF storage의 value parity를 확인한다.
+  \item Source-only, metric-only, total $dC$를 component FD와 비교한다.
+  \item $dJ/dR$, $dK/dR$, target explicit와 Z response를 각각 검사한다.
+  \item Gamma 및 sampled k-point full-energy central FD를 수행한다.
+  \item CPU/GPU parity와 translation sum rule을 확인한다.
+\end{enumerate}
+
+Auxiliary basis 또는 source/metric mesh를 바꿔도 error가 특정 molecule에서만 작아지는
+경험적 correction은 completion evidence로 인정하지 않는다.

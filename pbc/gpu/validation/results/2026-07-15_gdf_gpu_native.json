@@ -1,0 +1,136 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_gdf_validation_v1",
+  "overall_status": "pass",
+  "cases": [
+    {
+      "case": "h2_gamma_szv",
+      "status": "pass",
+      "gpu_energy_ha": -1.2179932973801582,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          3.724029337043324e-17,
+          1.2265922077015005e-17,
+          0.12481658577660534
+        ],
+        [
+          -5.1053676378416703e-17,
+          6.626808779630492e-17,
+          -0.12435494469711528
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          1.5543122344752192e-12,
+          3.552713678800501e-12,
+          0.12481665024832722
+        ],
+        [
+          -1.7763568394002505e-12,
+          -2.886579864025407e-12,
+          -0.12435501418961437
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -1.5542749941818487e-12,
+          -3.552701412878424e-12,
+          -6.447172187784567e-08
+        ],
+        [
+          1.776305785723872e-12,
+          2.8866461321132034e-12,
+          6.949249908849708e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 6.949249908849708e-08,
+      "cpu_gpu_energy_abs_error_ha": 5.260061275436101e-10,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 3.094013656390615e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 20.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 13.738955297507346,
+        "gpu_analytic_gradient": 34.24504218250513,
+        "gpu_full_fd_gradient": 156.09783163666725
+      },
+      "gradient_metadata": {
+        "backend": "gdf",
+        "device": "gpu",
+        "gdf_setup_mode": "native",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "omega": 0.0,
+        "source_omega": 0.0,
+        "metric_omega": 0.0,
+        "source_mesh": null,
+        "metric_mesh": null,
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": null,
+        "z_vector_dimension": 2,
+        "z_vector_residual_max_abs": 0.0,
+        "z_vector_condition_number": 1.2991089725902403,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "GDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting",
+          "GPU4PySCF mapped-host CDERI storage/bookkeeping",
+          "GDF local-part-2 pseudopotential value setup"
+        ],
+        "device_owned_operations": [
+          "source HF GDF SCF J/K iterations",
+          "target-DFA energy/Fock/Veff contractions",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly",
+          "native GDF CDERI generation",
+          "source-contracted GDF J/K nuclear derivatives",
+          "bilinear Z-vector two-electron response"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 5.218561317771673,
+          "hf_ax_and_zvector": 0.07967815268784761,
+          "one_electron_host_integrals": 0.3175228610634804,
+          "one_electron_total": 0.33134944550693035,
+          "gdf_native_target_j_derivative": 12.440365725196898,
+          "target_explicit_device_assembly": 0.008738229982554913,
+          "z_nuclear_device_contraction": 16.166101385839283,
+          "final_host_reporting": 0.00015907268971204758,
+          "gradient_total": 34.24497171398252
+        }
+      }
+    }
+  ]
+}

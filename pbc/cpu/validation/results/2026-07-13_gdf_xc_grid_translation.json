@@ -1,0 +1,96 @@
+{
+  "schema": "pyscf_pbc_dcdft_xc_grid_translation_v1",
+  "status": "pass",
+  "threshold_ha_per_bohr": 1e-06,
+  "system": "distorted_h2o_gamma_gdf_gth_szv",
+  "coordinates_bohr": [
+    [
+      0.1,
+      -0.2,
+      0.3
+    ],
+    [
+      1.55,
+      0.15,
+      0.05
+    ],
+    [
+      -0.35,
+      1.25,
+      -0.25
+    ]
+  ],
+  "cell_bohr": [
+    [
+      7.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      7.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      7.0
+    ]
+  ],
+  "interpretation": "Non-XC terms are translationally closed at the first mesh; the fixed uniform-grid XC egg-box term converges separately.",
+  "records": [
+    {
+      "mesh": [
+        17,
+        17,
+        17
+      ],
+      "target_xc_net_ha_per_bohr": [
+        -0.018450924730868484,
+        -0.02158416894620989,
+        0.09741482726955612
+      ],
+      "target_xc_net_norm_ha_per_bohr": 0.10146901765800319,
+      "complete_net_ha_per_bohr": [
+        -0.018450924566122434,
+        -0.02158416886942438,
+        0.097414827190654
+      ],
+      "non_xc_net_ha_per_bohr": [
+        1.647460501352782e-10,
+        7.678550850709343e-11,
+        -7.890212094796567e-11
+      ],
+      "non_xc_net_norm_ha_per_bohr": 1.9814847978714325e-10,
+      "wall_time_s": 15.856896536424756
+    },
+    {
+      "mesh": [
+        81,
+        81,
+        81
+      ],
+      "target_xc_net_ha_per_bohr": [
+        -1.3165030850109671e-05,
+        1.664207162480058e-06,
+        1.0286762604110045e-05
+      ],
+      "target_xc_net_norm_ha_per_bohr": 1.6790030007040076e-05,
+      "wall_time_s": 6.7926466930657625
+    },
+    {
+      "mesh": [
+        225,
+        225,
+        225
+      ],
+      "target_xc_net_ha_per_bohr": [
+        -3.841285600297839e-07,
+        3.6360571388505125e-07,
+        -1.6877658035735488e-07
+      ],
+      "target_xc_net_norm_ha_per_bohr": 5.552021252458745e-07,
+      "wall_time_s": 120.88098845258355
+    }
+  ]
+}

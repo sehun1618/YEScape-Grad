@@ -1,0 +1,134 @@
+\section{HF density에서의 target DFA energy}
+\label{sec:fixed-density-energy}
+
+\subsection{Source HF problem}
+
+Source orbital은 periodic RHF/KRHF equation
+\begin{equation}
+  F_{\mathrm{HF}}^{\vk}C^{\vk}
+  =S^{\vk}C^{\vk}\varepsilon^{\vk}
+  \label{eq:hf-roothaan}
+\end{equation}
+을 self-consistent하게 풀어 얻는다. Restricted HF Fock은
+\begin{equation}
+  F_{\mathrm{HF}}^{\vk}
+  =h^{\vk}+J^{\vk}[D]-\frac12K^{\vk}[D]
+  \label{eq:hf-fock}
+\end{equation}
+이다. $D$는 occupation factor $2$를 포함한 식~\eqref{eq:restricted-density}의 density다.
+HF energy per primitive cell은
+\begin{equation}
+  E_{\mathrm{HF}}
+  =\frac{1}{N_k}\sum_{\vk}\Tr[D^{\vk}h^{\vk}]
+   +\frac{1}{2N_k}\sum_{\vk}\Tr\!\left[
+      D^{\vk}\left(J^{\vk}-\frac12K^{\vk}\right)\right]
+   +E_{\mathrm{NN}}
+  \label{eq:hf-energy}
+\end{equation}
+이다. Source HF 계산에서 FFTDF, GDF 또는 RSDF는 $J$와 $K$의 numerical
+representation을 정한다.
+
+\subsection{Frozen-HF-density target energy}
+
+Source HF가 수렴하면 density를 고정한 채 target RKS/KRKS object를 만들고 target
+functional의 energy를 평가한다. Semilocal target DFA에서
+\begin{equation}
+  E_{\mathrm{DC-DFA}}[D]
+  =E_1[D]+E_{\mathrm H}[D]+E_{\mathrm{xc}}^{\mathrm{DFA}}[D]
+   +E_{\mathrm{NN}}
+  \label{eq:dc-energy-components}
+\end{equation}
+이며
+\begin{align}
+  E_1[D]
+  &=\frac{1}{N_k}\sum_{\vk}\Tr[D^{\vk}h^{\vk}],
+  \label{eq:dc-one-electron-energy}\\
+  E_{\mathrm H}[D]
+  &=\frac{1}{2N_k}\sum_{\vk}\Tr[D^{\vk}J^{\vk}[D]].
+  \label{eq:dc-hartree-energy}
+\end{align}
+Target PBE, SCAN, r2SCAN은 pure semilocal functional이므로 target energy에 exact
+exchange $K$는 없다. 그러나 $D$가 HF solution이므로 orbital response를 정하는
+Hessian에는 source HF exchange가 반드시 남는다.
+
+Target Fock, 즉 $E_{\mathrm{DC-DFA}}$의 density derivative는
+\begin{equation}
+  F_{\mathrm t}^{\vk}
+  =h^{\vk}+J^{\vk}[D]+V_{\mathrm{xc}}^{\vk}[D]
+  \label{eq:target-fock}
+\end{equation}
+이다. 여기서 subscript $\mathrm t$는 target을 뜻한다. Energy evaluation에서
+$D_{\mathrm{HF}}$를 넘긴 뒤 target KS orbital optimization을 수행하지 않는다.
+
+\subsection{Density와 semilocal variables}
+
+Real-space density는
+\begin{equation}
+  \rho(\mathbf r)
+  =\frac{1}{N_k}\sum_{\vk}\sum_{\mu\nu}
+    D_{\mu\nu}^{\vk}
+    \phi_{\nu\vk}^{*}(\mathbf r)
+    \phi_{\mu\vk}(\mathbf r)
+  \label{eq:real-space-density}
+\end{equation}
+이다. Spin-unpolarized GGA는
+\begin{equation}
+  E_{\mathrm{xc}}^{\mathrm{GGA}}
+  =\int_\Omega
+    f\!\left(\rho,\sigma\right)\dd\mathbf r,
+  \qquad
+  \sigma=|\nabla\rho|^2
+  \label{eq:gga-energy}
+\end{equation}
+로 쓸 수 있다.
+
+SCAN과 r2SCAN은 positive kinetic-energy density
+\begin{equation}
+  \tau(\mathbf r)
+  =\frac{1}{2N_k}\sum_{\vk}\sum_{\mu\nu}
+   D_{\mu\nu}^{\vk}
+   \nabla\phi_{\nu\vk}^{*}(\mathbf r)\cdot
+   \nabla\phi_{\mu\vk}(\mathbf r)
+  \label{eq:tau-definition}
+\end{equation}
+에도 의존하여
+\begin{equation}
+  E_{\mathrm{xc}}^{\mathrm{MGGA}}
+  =\int_\Omega f(\rho,\sigma,\tau)\dd\mathbf r
+  \label{eq:mgga-energy}
+\end{equation}
+가 된다. PySCF의 SCAN/r2SCAN route는 density Laplacian channel을 사용하지 않는다.
+식~\eqref{eq:tau-definition}의 $1/2$는 convention의 일부이므로 $v_\tau=\partial
+f/\partial\tau$ contraction에서 정확히 한 번 반영해야 한다.
+
+\subsection{Nonvariational orbital gradient}
+
+MO coefficient를 occupied--virtual anti-Hermitian rotation으로 변화시키자.
+\begin{equation}
+  C^{\vk}\longrightarrow C^{\vk}e^{\kappa^{\vk}},
+  \qquad \kappa^{\vk\dagger}=-\kappa^{\vk}.
+  \label{eq:orbital-rotation}
+\end{equation}
+Closed-shell energy의 first variation은 convention에 따라 factor $2$를 포함해
+\begin{equation}
+  \delta E_{\mathrm{DC-DFA}}
+  =\frac{2}{N_k}\operatorname{Re}
+   \sum_{\vk ai}F_{\mathrm t,ai}^{\vk}\,
+   \delta\kappa_{ai}^{\vk}
+  \label{eq:target-orbital-gradient}
+\end{equation}
+로 쓸 수 있다. Source HF canonical orbital은
+$F_{\mathrm{HF},ai}^{\vk}=0$을 만족하지만 일반적으로
+\begin{equation}
+  F_{\mathrm t,ai}^{\vk}\ne0.
+  \label{eq:target-vo-nonzero}
+\end{equation}
+이 nonzero target VO block이 Z-vector right-hand side다.
+
+\subsection{Energy object가 보존해야 할 metadata}
+
+같은 이름의 DFA라도 basis, pseudopotential, cell, k-point, DF backend와 numerical
+grid가 다르면 서로 다른 finite energy다. 재현 가능한 energy object는 최소한 target
+functional, source reference, $N_k$, lattice와 coordinate unit, primary/auxiliary basis,
+GTH pseudopotential, DF backend, FFT mesh 또는 RSDF source/metric parameter를 함께
+기록해야 한다. Gradient는 이 energy object와 동일한 설정을 미분해야 한다.

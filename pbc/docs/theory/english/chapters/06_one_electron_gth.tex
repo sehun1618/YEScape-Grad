@@ -1,0 +1,127 @@
+\section{One-electron operators and GTH pseudopotential derivatives}
+\label{sec:gth-one-electron}
+
+\subsection{The periodic one-electron Hamiltonian}
+
+With a GTH pseudopotential, the one-electron Hamiltonian is
+\begin{equation}
+  \hat h
+  =-\frac12\nabla^2
+   +\sum_A\hat V_{\mathrm{loc}}^A
+   +\sum_A\hat V_{\mathrm{nl}}^A.
+  \label{eq:gth-hamiltonian}
+\end{equation}
+The all-electron electron--nuclear potential $-Z_A/r$ is replaced by a smooth
+local potential and a finite-rank nonlocal projector.  Although the kinetic
+operator has no explicit nuclear-coordinate dependence, its AO matrix
+derivative is nonzero because the atom-centered basis moves.
+
+\subsection{The local GTH potential}
+
+A representative local form is
+\begin{equation}
+  V_{\mathrm{loc}}^A(r)
+  =-\frac{Z_A^{\mathrm{ion}}}{r}
+    \operatorname{erf}\!\left(\frac{r}{\sqrt2 r_{\mathrm{loc},A}}\right)
+   +e^{-r^2/(2r_{\mathrm{loc},A}^2)}
+    \sum_{n=1}^{4}C_{nA}
+    \left(\frac{r}{r_{\mathrm{loc},A}}\right)^{2n-2}.
+  \label{eq:gth-local-real}
+\end{equation}
+In a periodic FFT representation, the position dependence is carried by the
+structure factor $e^{-i\vG\cdot\mathbf R_A}$, and therefore
+\begin{equation}
+  \frac{\partial}{\partial R_{Ax}}
+  \left[e^{-i\vG\cdot\mathbf R_A}V_{\mathrm{loc}}^A(\vG)\right]
+  =-iG_xe^{-i\vG\cdot\mathbf R_A}V_{\mathrm{loc}}^A(\vG).
+  \label{eq:gth-local-structure-derivative}
+\end{equation}
+At $\vG=0$, $G_x=0$, but the constant term, charge convention, and Ewald
+compensation must still match those used by the central hcore.
+
+The AO matrix is
+\begin{equation}
+  V_{\mu\nu,\mathrm{loc}}^{\vk}
+  =\langle\phi_{\mu\vk}|\hat V_{\mathrm{loc}}|\phi_{\nu\vk}\rangle.
+  \label{eq:gth-local-ao}
+\end{equation}
+Its derivative contains the motion of potential center $A$, the bra AO center,
+and the ket AO center.  Translational identities can express the
+potential-center derivative through a combination of AO derivatives and the
+reciprocal-space structure-factor derivative.
+
+\subsection{Nonlocal projectors}
+
+The nonlocal GTH operator has a separable form for each angular-momentum
+channel,
+\begin{equation}
+  \hat V_{\mathrm{nl}}^A
+  =\sum_{l m}\sum_{ij}
+   |p_{i,lm}^{A}\rangle h_{ij}^{A,l}
+   \langle p_{j,lm}^{A}|.
+  \label{eq:gth-nonlocal-operator}
+\end{equation}
+Using the projector overlap
+\begin{equation}
+  P_{i,lm;\mu}^{A\vk}
+  =\langle p_{i,lm}^{A}|\phi_{\mu\vk}\rangle,
+  \label{eq:gth-projector-overlap}
+\end{equation}
+the AO matrix element is
+\begin{equation}
+  V_{\mu\nu,\mathrm{nl}}^{\vk}
+  =\sum_{A,lm,ij}
+   P_{i,lm;\mu}^{A\vk *}h_{ij}^{A,l}
+   P_{j,lm;\nu}^{A\vk}.
+  \label{eq:gth-nonlocal-matrix}
+\end{equation}
+The product rule gives
+\begin{align}
+  V_{\mu\nu,\mathrm{nl}}^{\vk,Ax}
+  =\sum_{l m i j}
+  \bigg[&P_{i,lm;\mu}^{A\vk,Ax *}h_{ij}^{A,l}
+         P_{j,lm;\nu}^{A\vk}
+  \notag\\
+       +&P_{i,lm;\mu}^{A\vk *}h_{ij}^{A,l}
+         P_{j,lm;\nu}^{A\vk,Ax}\bigg]
+  +\text{AO-center terms}.
+  \label{eq:gth-nonlocal-derivative}
+\end{align}
+The radial projector table $h_{ij}^{A,l}$ moves rigidly with the atom and has
+no parameter derivative with respect to the nuclear coordinate.
+
+\subsection{AO-row conventions and the full matrix}
+
+An integral engine often returns a derivative matrix $h_{\mu\nu}^{(1)}$ with
+respect to the AO-row center.  The full matrix derivative for atom $A$ must
+combine bra, ket, and operator-center ownership,
+\begin{equation}
+  h^{Ax}=h_{\mathrm{row},A}^{x}
+       +h_{\mathrm{row},A}^{x\dagger}
+       +h_{\mathrm{operator},A}^{x}.
+  \label{eq:hcore-full-derivative}
+\end{equation}
+At complex k-points, the second term is a conjugate transpose, not merely a
+transpose.
+
+The overlap derivative obeys the analogous AO-center identity
+\begin{equation}
+  S^{Ax}=S_{\mathrm{row},A}^{x}+S_{\mathrm{row},A}^{x\dagger}.
+  \label{eq:overlap-full-derivative}
+\end{equation}
+Both $h^{Ax}$ and $S^{Ax}$ enter the explicit target gradient and the source
+HF CPHF source in Eq.~\eqref{eq:cphf-source}.
+
+\subsection{Pseudopotential consistency}
+
+Using an HF source density does not create a distinct analytic form called an
+``HF pseudopotential.''  A label such as GTH-HF identifies a pseudopotential
+parameter set.  The source HF calculation and the target-DFA energy and
+gradient must use the same GTH parameters and valence ionic charges.  Using
+different pseudopotentials for source and target would no longer correspond to
+differentiating a single energy surface of Eq.~\eqref{eq:scope-dc-energy}.
+
+Validation first compares local, nonlocal, kinetic/overlap, and ion--ion
+components separately with finite differences and then checks the full hcore
+derivative.  Atom-slice and conjugation errors become especially visible when
+the nonlocal projector contains more angular channels.

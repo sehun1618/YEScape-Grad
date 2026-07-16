@@ -1,0 +1,131 @@
+\section{Periodic orbital response and the Z-vector}
+\label{sec:orbital-response}
+
+\subsection{Response of the orthonormality constraint}
+
+Under a nuclear displacement $R_{Ax}$, the AO overlap changes, so the MO
+coefficient derivative is not merely a unitary rotation.  Differentiating
+Eq.~\eqref{eq:mo-orthonormality} gives
+\begin{equation}
+  C^{\vk\dagger}S^{\vk}C^{\vk,Ax}
+  +C^{\vk,Ax\dagger}S^{\vk}C^{\vk}
+  +C^{\vk\dagger}S^{\vk,Ax}C^{\vk}=0.
+  \label{eq:orthonormality-response}
+\end{equation}
+Defining $U^{\vk,Ax}=C^{\vk\dagger}S^{\vk}C^{\vk,Ax}$ yields
+\begin{equation}
+  U^{\vk,Ax}+U^{\vk,Ax\dagger}
+  =-S_{\mathrm{MO}}^{\vk,Ax},
+  \qquad
+  S_{\mathrm{MO}}^{\vk,Ax}=C^{\vk\dagger}S^{\vk,Ax}C^{\vk}.
+  \label{eq:u-overlap-constraint}
+\end{equation}
+The occupied--occupied and virtual--virtual gauges may be chosen, whereas the
+occupied--virtual block is determined by the HF response equation.
+
+\subsection{The CPHF equation}
+
+Differentiating the HF stationarity condition $F_{ai}^{\vk}=0$ with respect to
+a nuclear coordinate gives
+\begin{equation}
+  \sum_{\vk'bj}A_{ai\vk,bj\vk'}U_{bj}^{\vk',Ax}
+  =-B_{ai}^{\vk,Ax}.
+  \label{eq:cphf-equation}
+\end{equation}
+Here $A$ is the periodic restricted HF orbital Hessian and $B^{Ax}$ is the
+nuclear perturbation source.  In canonical-orbital notation, the Hessian
+action has the schematic form
+\begin{equation}
+  (AU)_{ai}^{\vk}
+  =(\varepsilon_a^{\vk}-\varepsilon_i^{\vk})U_{ai}^{\vk}
+  +\left[C_v^{\vk\dagger}\,\delta G_{\mathrm{HF}}[D^{(1)}(U)]^{\vk}
+  C_o^{\vk}\right]_{ai}.
+  \label{eq:hf-hessian-action}
+\end{equation}
+Since $\delta G_{\mathrm{HF}}=\delta J-\tfrac12\delta K$, applying the selected
+FFTDF/GDF/RSDF $J/K$ provider to a transition density is the core AX
+operation.
+
+The nuclear source contains one-electron, two-electron, and overlap terms,
+\begin{equation}
+  B_{ai}^{\vk,Ax}
+  =\left[C_v^{\vk\dagger}
+    \left(h^{\vk,Ax}+G_{\mathrm{HF}}^{\vk,Ax}
+          -\varepsilon_i^{\vk}S^{\vk,Ax}\right)
+    C_o^{\vk}\right]_{ai}
+  +B_{ai,\mathrm{basis}}^{\vk,Ax}.
+  \label{eq:cphf-source}
+\end{equation}
+$G_{\mathrm{HF}}^{Ax}$ is the integral derivative at fixed density.  The final
+term may be redistributed among other terms depending on the chosen AO-row or
+AO-column convention; production code and its documentation must use the same
+convention.
+
+\subsection{The adjoint Z-vector}
+
+Solving Eq.~\eqref{eq:cphf-equation} independently for all
+$3N_{\mathrm{atom}}$ displacements is expensive.  Collect the target orbital
+gradient into a vector $g$ and solve the adjoint equation once,
+\begin{equation}
+  A^{\Herm}z=-g.
+  \label{eq:zvector-equation}
+\end{equation}
+The chain-rule contribution then becomes
+\begin{equation}
+  g_{Ax}^{\mathrm{resp}}
+  =z^{\Herm}B^{Ax}.
+  \label{eq:zvector-contraction}
+\end{equation}
+The signs in Eqs.~\eqref{eq:zvector-equation} and
+\eqref{eq:zvector-contraction} follow from defining the CPHF equation as
+$AU=-B$.  If the definition of $B$ or $g$ changes, both signs must be changed
+consistently.
+
+\subsection{The real-linear problem at complex k-points}
+
+For a complex orbital rotation $U=X+iY$, the Hermitian first-order density is
+\begin{equation}
+  D^{(1),\vk}(U)
+  =2\left(C_v^{\vk}U^{\vk}C_o^{\vk\dagger}
+          +C_o^{\vk}U^{\vk\dagger}C_v^{\vk\dagger}\right).
+  \label{eq:first-order-density}
+\end{equation}
+Because $U^*$ also appears, the map $U\mapsto D^{(1)}$ is real-linear rather
+than complex-linear.  The solver coordinate is therefore realified as
+\begin{equation}
+  u_R=\begin{pmatrix}\operatorname{Re}U\\\operatorname{Im}U\end{pmatrix},
+  \label{eq:realified-coordinate}
+\end{equation}
+and the equations solved are
+\begin{equation}
+  A_Ru_R=-B_R,
+  \qquad A_R^Tz_R=-g_R.
+  \label{eq:realified-zvector}
+\end{equation}
+The fact that Gamma-point matrices can be real is merely a simplifying special
+case of this general formulation.
+
+\subsection{k-point normalization and momentum structure}
+
+A nuclear perturbation preserves primitive-cell periodicity and therefore
+generates a VO response within each $\vk$.  The $J/K$ Hessian action, however,
+couples density responses from all k-points.  Under the equal-weight
+convention, both AX and the final scalar contraction must contain exactly one
+factor $1/N_k$.  Adding another factor of two without checking whether the
+transition density already contains the occupation factor may accidentally
+work at Gamma while breaking sampled-k consistency.
+
+\subsection{Gauge freedom, small gaps, and residuals}
+
+Unitary rotations within the occupied or virtual subspaces leave the density
+unchanged.  For degenerate orbitals, the subspace-invariant density response,
+not an individual $U_{ai}$, is the physical quantity.  The solver operates only
+in the VO space and must not silently regularize small denominators.  At a
+minimum, the report records
+\begin{equation}
+  r_{\max}=\|A_R^Tz_R+g_R\|_\infty
+  \label{eq:zvector-residual}
+\end{equation}
+together with the response dimension and a condition estimate.  Even good
+gradient--FD agreement is insufficient evidence if $r_{\max}$ is large,
+because the result may depend on cancellation for a particular perturbation.

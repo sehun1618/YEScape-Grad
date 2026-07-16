@@ -1,0 +1,44 @@
+{
+  "output_root": "results/example_benchmark_queue",
+  "defaults": {
+    "atom_file": "structures/h2.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [
+      [6.0, 0.0, 0.0],
+      [0.0, 6.0, 0.0],
+      [0.0, 0.0, 6.0]
+    ],
+    "lattice_unit": "Bohr",
+    "basis": "gth-dzvp",
+    "pseudo": "gth-hf",
+    "auxbasis": "gth-dzvp",
+    "gdf_setup_mode": "native",
+    "ke_cutoff_ha": 200.0,
+    "precision": 1e-09,
+    "kmesh": [1, 1, 1],
+    "xc": "PBE",
+    "conv_tol": 1e-18,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "run_fd": false,
+    "fd_step_bohr": 0.0001,
+    "fd_atoms": "all",
+    "fd_axes": "all"
+  },
+  "jobs": [
+    {
+      "name": "timing_matrix",
+      "devices": ["cpu", "gpu"],
+      "df_backends": ["fftdf", "gdf", "rsdf"]
+    },
+    {
+      "name": "selected_fd_check",
+      "devices": ["cpu", "gpu"],
+      "df_backends": ["fftdf"],
+      "run_fd": true,
+      "fd_atoms": ["all"],
+      "fd_axes": ["all"]
+    }
+  ]
+}

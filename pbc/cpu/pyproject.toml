@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77", "wheel", "pyscf>=2.13"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyscf-pbc-dcdft"
+version = "0.1.0a0"
+description = "Restricted periodic density-corrected DFT energy and analytic gradients"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES/*"]
+authors = [{name = "Sehun"}]
+dependencies = [
+  "numpy>=1.24",
+  "pyscf>=2.13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "build>=1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

@@ -1,0 +1,500 @@
+{
+  "schema": "pyscf_pbc_dcdft_fftdf_cpu_validation_v1",
+  "overall_status": "pass",
+  "cases": [
+    {
+      "case": "h2_gamma_szv",
+      "status": "pass",
+      "threshold_ha_per_bohr": 1e-05,
+      "energy_ha": -1.2029918789022893,
+      "analytic_gradient_ha_per_bohr": [
+        [
+          -1.1794117866043064e-13,
+          2.91893936078381e-14,
+          0.13545047179456027
+        ],
+        [
+          -8.542491965985388e-14,
+          1.4044601059307322e-13,
+          -0.13343821527643718
+        ]
+      ],
+      "fd_gradient_ha_per_bohr": [
+        [
+          1.1546319456101628e-11,
+          -1.199040866595169e-11,
+          0.13545052530994361
+        ],
+        [
+          -4.440892098500626e-13,
+          0.0,
+          -0.1334382996502903
+        ]
+      ],
+      "analytic_minus_fd_ha_per_bohr": [
+        [
+          -1.1664260634762059e-11,
+          1.2019598059559529e-11,
+          -5.351538334696926e-08
+        ],
+        [
+          3.586642901902087e-13,
+          1.4044601059307322e-13,
+          8.437385312642931e-08
+        ]
+      ],
+      "max_abs_error_ha_per_bohr": 8.437385312642931e-08,
+      "net_analytic_gradient_ha_per_bohr": [
+        -2.0336609832028452e-13,
+        1.6963540420091133e-13,
+        0.00201225651812309
+      ],
+      "input": {
+        "atoms": [
+          "H",
+          "H"
+        ],
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 20.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "dc_energy": 0.33258969988673925,
+        "analytic_gradient": 0.5534175038337708,
+        "full_fd_gradient": 3.7584892278537154
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "cpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": 20.0,
+        "gradient_shape": [
+          2,
+          3
+        ],
+        "z_vector_dimension": 2,
+        "z_vector_residual_max_abs": 1.6738668474926609e-38,
+        "z_vector_condition_number": 1.343711201436584,
+        "z_vector_equation": "adjoint",
+        "component_max_abs": {
+          "one_electron": 0.4745303366642461,
+          "target_coulomb_xc": 0.027786902723251586,
+          "target_overlap_pulay": 0.10169978480361815,
+          "nuclear": 0.4785731335735224,
+          "orbital_response": 2.2251303871872417e-07
+        }
+      }
+    },
+    {
+      "case": "h2_k211_dzvp",
+      "status": "pass",
+      "threshold_ha_per_bohr": 1e-05,
+      "energy_ha": -1.2215644119743276,
+      "analytic_gradient_ha_per_bohr": [
+        [
+          3.8831660553583624e-15,
+          -1.4960099189325366e-14,
+          0.042663663214719996
+        ],
+        [
+          8.650516179284464e-15,
+          -1.5111423207671676e-14,
+          -0.03130669515585476
+        ]
+      ],
+      "fd_gradient_ha_per_bohr": [
+        [
+          -6.661338147750939e-13,
+          0.0,
+          0.042663711301349494
+        ],
+        [
+          -6.661338147750939e-13,
+          -8.881784197001252e-13,
+          -0.03130685312013881
+        ]
+      ],
+      "analytic_minus_fd_ha_per_bohr": [
+        [
+          6.700169808304523e-13,
+          -1.4960099189325366e-14,
+          -4.8086629497734457e-08
+        ],
+        [
+          6.747843309543784e-13,
+          8.730669964924535e-13,
+          1.5796428404907248e-07
+        ]
+      ],
+      "max_abs_error_ha_per_bohr": 1.5796428404907248e-07,
+      "net_analytic_gradient_ha_per_bohr": [
+        1.2533682234642826e-14,
+        -3.007152239699704e-14,
+        0.011356968058865234
+      ],
+      "input": {
+        "atoms": [
+          "H",
+          "H"
+        ],
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-dzvp",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          13,
+          13,
+          13
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "dc_energy": 0.40440539084374905,
+        "analytic_gradient": 3.7477630618959665,
+        "full_fd_gradient": 4.828719940967858
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "cpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "mesh": [
+          13,
+          13,
+          13
+        ],
+        "ke_cutoff_ha": 15.0,
+        "gradient_shape": [
+          2,
+          3
+        ],
+        "z_vector_dimension": 36,
+        "z_vector_residual_max_abs": 3.469446951953614e-18,
+        "z_vector_condition_number": 6.041749887018015,
+        "z_vector_equation": "adjoint",
+        "component_max_abs": {
+          "one_electron": 0.6352433010581974,
+          "target_coulomb_xc": 0.07809179077035192,
+          "target_overlap_pulay": 0.1217709654631734,
+          "nuclear": 0.4785731335735224,
+          "orbital_response": 0.01188589359299553
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_gamma_szv",
+      "status": "pass",
+      "threshold_ha_per_bohr": 1e-05,
+      "energy_ha": -16.136887110151235,
+      "analytic_gradient_ha_per_bohr": [
+        [
+          -0.2710406544683243,
+          0.2642303711413847,
+          2.2771389703080285
+        ],
+        [
+          -0.1266536867814062,
+          -0.0034220738564731353,
+          -0.14630722438403265
+        ],
+        [
+          0.3655654232855067,
+          -0.059243844790703756,
+          -0.3077384996662042
+        ]
+      ],
+      "fd_gradient_ha_per_bohr": [
+        [
+          -0.27103974754361104,
+          0.2642355495030557,
+          2.27713247809902
+        ],
+        [
+          -0.12665380012322203,
+          -0.003422115142370785,
+          -0.1463072348695249
+        ],
+        [
+          0.3655654512702,
+          -0.05924390812594993,
+          -0.30773852826904147
+        ]
+      ],
+      "analytic_minus_fd_ha_per_bohr": [
+        [
+          -9.069247132731384e-07,
+          -5.178361671021037e-06,
+          6.492209008612804e-06
+        ],
+        [
+          1.1334181582167702e-07,
+          4.128589764984189e-08,
+          1.0485492252243489e-08
+        ],
+        [
+          -2.798469334042153e-08,
+          6.333524617263553e-08,
+          2.860283726535684e-08
+        ]
+      ],
+      "max_abs_error_ha_per_bohr": 6.492209008612804e-06,
+      "net_analytic_gradient_ha_per_bohr": [
+        -0.032128917964223846,
+        0.2015644524942078,
+        1.8230932462577918
+      ],
+      "input": {
+        "atoms": [
+          "O",
+          "H",
+          "H"
+        ],
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            1.43,
+            0.0,
+            1.1
+          ],
+          [
+            -1.2,
+            0.2,
+            1.0
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 25.0,
+        "mesh": [
+          17,
+          17,
+          17
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "dc_energy": 0.8838933631777763,
+        "analytic_gradient": 2.672064737416804,
+        "full_fd_gradient": 16.004323605448008
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "cpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "mesh": [
+          17,
+          17,
+          17
+        ],
+        "ke_cutoff_ha": 25.0,
+        "gradient_shape": [
+          3,
+          3
+        ],
+        "z_vector_dimension": 16,
+        "z_vector_residual_max_abs": 3.469446951953614e-18,
+        "z_vector_condition_number": 6.9541823489068335,
+        "z_vector_equation": "adjoint",
+        "component_max_abs": {
+          "one_electron": 1.7180268188560175,
+          "target_coulomb_xc": 0.39760570348674784,
+          "target_overlap_pulay": 0.08468513497046803,
+          "nuclear": 2.521494215119669,
+          "orbital_response": 0.0756933086931762
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_k211_szv",
+      "status": "pass",
+      "threshold_ha_per_bohr": 1e-05,
+      "energy_ha": -15.518502628398632,
+      "analytic_gradient_ha_per_bohr": [
+        [
+          -0.32564008448550447,
+          0.4103025653447392,
+          3.5434378807130154
+        ],
+        [
+          -0.13930890683648012,
+          -0.005163190755621411,
+          -0.11716198847323978
+        ],
+        [
+          0.38865061739111606,
+          -0.049236777445503956,
+          -0.33591943825012077
+        ]
+      ],
+      "fd_gradient_ha_per_bohr": [
+        [
+          -0.3256396355411084,
+          0.41029690708072053,
+          3.543430924937141
+        ],
+        [
+          -0.13930898500991162,
+          -0.005163197380753104,
+          -0.11716206583578526
+        ],
+        [
+          0.388650623466269,
+          -0.049236813124409196,
+          -0.33591947119937515
+        ]
+      ],
+      "analytic_minus_fd_ha_per_bohr": [
+        [
+          -4.489443960475903e-07,
+          5.658264018659764e-06,
+          6.955775874395442e-06
+        ],
+        [
+          7.817343150584577e-08,
+          6.625131693249742e-09,
+          7.736254548085242e-08
+        ],
+        [
+          -6.075152936269035e-09,
+          3.567890523997752e-08,
+          3.2949254380465476e-08
+        ]
+      ],
+      "max_abs_error_ha_per_bohr": 6.955775874395442e-06,
+      "net_analytic_gradient_ha_per_bohr": [
+        -0.07629837393086852,
+        0.3559025971436138,
+        3.090356453989655
+      ],
+      "input": {
+        "atoms": [
+          "O",
+          "H",
+          "H"
+        ],
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            1.43,
+            0.0,
+            1.1
+          ],
+          [
+            -1.2,
+            0.2,
+            1.0
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "dc_energy": 0.6993514532223344,
+        "analytic_gradient": 3.2208182234317064,
+        "full_fd_gradient": 12.593731696717441
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "cpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": 15.0,
+        "gradient_shape": [
+          3,
+          3
+        ],
+        "z_vector_dimension": 32,
+        "z_vector_residual_max_abs": 1.734723475976807e-17,
+        "z_vector_condition_number": 7.636037379134068,
+        "z_vector_equation": "adjoint",
+        "component_max_abs": {
+          "one_electron": 1.672785355300531,
+          "target_coulomb_xc": 0.40186112863306656,
+          "target_overlap_pulay": 0.06311380224980725,
+          "nuclear": 2.521494215119669,
+          "orbital_response": 0.1580747225848808
+        }
+      }
+    }
+  ]
+}

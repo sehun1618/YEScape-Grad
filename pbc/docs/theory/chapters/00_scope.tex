@@ -1,0 +1,83 @@
+\section{목적, 전제와 읽는 방법}
+\label{sec:scope}
+
+\subsection{계산하려는 물리량}
+
+원자핵 좌표를 모은 벡터를 $\vR$라 하자. 이 자료의 중심 대상은 periodic
+restricted Hartree--Fock(HF) density matrix $D_{\mathrm{HF}}(\vR)$를 먼저 얻은 뒤,
+같은 density에서 별도의 semilocal density functional approximation(DFA)을 평가한
+energy
+\begin{equation}
+  E_{\mathrm{DC-DFA}}(\vR)
+  = E_{\mathrm{DFA}}\!\left[D_{\mathrm{HF}}(\vR);\vR\right]
+  \label{eq:scope-dc-energy}
+\end{equation}
+와 fixed-cell nuclear gradient
+\begin{equation}
+  g_{Ax}
+  = \frac{\dd E_{\mathrm{DC-DFA}}}{\dd R_{Ax}}
+  \label{eq:scope-gradient}
+\end{equation}
+이다. $A$는 원자, $x\in\{x,y,z\}$는 Cartesian component다. Public API가 반환하는
+값은 gradient이며 force는
+\begin{equation}
+  F_{Ax}=-g_{Ax}
+  \label{eq:scope-force-sign}
+\end{equation}
+이다.
+
+식~\eqref{eq:scope-dc-energy}는 ``HF energy에 DFA correction을 더한 식''이라는 뜻이
+아니다. Target DFA의 kinetic, electron--nuclear, Hartree, XC, ion--ion energy를 모두
+HF density에서 새로 평가한다. HF 계산의 energy는 source orbital을 만드는 reference와
+diagnostic으로만 남는다.
+
+\subsection{왜 ordinary KS gradient와 다른가}
+
+Self-consistent KS-DFA에서는 orbital variation $\kappa$에 대해 같은 DFA energy가
+stationary하다. 반면 DC-DFA에서는 orbital을 정하는 functional과 energy를 평가하는
+functional이 다르므로
+\begin{equation}
+  \left.
+  \frac{\partial E_{\mathrm{DC-DFA}}}{\partial\kappa_{ai}^{\vk}}
+  \right|_{D_{\mathrm{HF}}}
+  \ne 0
+  \label{eq:scope-nonstationary}
+\end{equation}
+이다. 따라서 핵이 움직일 때 HF orbital이 변하는 효과를 무시할 수 없다. 모든 핵
+변위마다 CPHF를 직접 푸는 대신 HF orbital Hessian의 adjoint equation, 즉 Z-vector
+equation을 한 번 풀어 response를 모은다.
+
+\subsection{Active 범위}
+
+이 판에서 하나의 완결된 이론 대상으로 다루는 범위는 다음과 같다.
+
+\begin{itemize}
+  \item restricted closed-shell RHF/KRHF source density,
+  \item three-dimensional periodic boundary condition,
+  \item GTH pseudopotential과 atom-centered Gaussian AO,
+  \item Gamma-point 및 일반 sampled k-point mesh,
+  \item PBE, SCAN, r2SCAN target DFA,
+  \item FFTDF, GDF, RSDF two-electron representation,
+  \item CPU와 GPU implementation,
+  \item fixed lattice에서의 energy 및 nuclear analytic gradient.
+\end{itemize}
+
+Stress/cell derivative, target-only multigrid, larger-angular-momentum completion
+matrix와 open-shell/UHF response는 active 범위에서 제외되어 별도 archive에 보존된다.
+따라서 이 문서에서 ``analytic gradient''라는 말은 항상 cell을 고정한
+$\partial E/\partial R_{Ax}$를 뜻한다.
+
+\subsection{필요한 사전 지식과 장 구성}
+
+독자는 AO 기반 HF와 KS-DFT, density matrix, Gaussian integral, reciprocal lattice의
+기초를 알고 있다고 가정한다. 제~\ref{sec:notation}장은 periodic notation과 단위를,
+제~\ref{sec:fixed-density-energy}장은 fixed-HF-density target energy를 정의한다.
+제~\ref{sec:orbital-response}장과 제~\ref{sec:dc-lagrangian}장은 nonvariational
+response와 전체 gradient를 유도한다. 이후 GTH, FFTDF, GDF, MGGA, RSDF 순으로 각
+explicit derivative를 설명하고 마지막에 검증 방법을 정리한다.
+
+수식에서 ``정확하다''는 말은 두 층위를 구분해야 한다. 첫째, 선택한 finite basis,
+mesh, auxiliary basis와 k-point representation에서 analytic derivative가 같은
+representation의 full-energy finite difference와 일치해야 한다. 둘째, 그 finite
+representation 자체가 cutoff, basis와 k-mesh에 대해 수렴해야 한다. 첫 번째는 구현
+정확도이고 두 번째는 물리적 수렴도다.

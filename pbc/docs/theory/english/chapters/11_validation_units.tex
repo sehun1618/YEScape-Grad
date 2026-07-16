@@ -1,0 +1,166 @@
+\section{Numerical validation, convergence, and reporting units}
+\label{sec:validation}
+
+\subsection{Full-energy central finite differences}
+
+The authoritative numerical reference for an analytic gradient is
+\begin{equation}
+  g_{Ax}^{\mathrm{FD}}(h)
+  =\frac{E_{\mathrm{DC-DFA}}(\vR+h\mathbf e_{Ax})
+         -E_{\mathrm{DC-DFA}}(\vR-h\mathbf e_{Ax})}{2h}.
+  \label{eq:central-fd}
+\end{equation}
+At each displaced geometry, the source HF problem is reconverged with the same
+tolerances and the target-DFA energy is evaluated anew.  Holding the central
+density or MOs fixed while differentiating only an operator is a component
+diagnostic, not Eq.~\eqref{eq:central-fd}.
+
+The leading truncation error is $O(h^2)$.  If $h$ is too small, SCF and
+floating-point noise are amplified as $O(\epsilon/h)$.  One should locate a
+plateau over several steps $h$, $h/2$, and $h/4$, and verify that the analytic
+gradient agrees with that plateau.
+
+\subsection{Error norms}
+
+For a selected component set $\mathcal I$, record
+\begin{align}
+  \Delta_{\max}
+  &=\max_{(A,x)\in\mathcal I}|g_{Ax}-g_{Ax}^{\mathrm{FD}}|,
+  \label{eq:fd-max-error}\\
+  \Delta_{\mathrm{RMS}}
+  &=\sqrt{\frac1{|\mathcal I|}\sum_{(A,x)\in\mathcal I}
+          |g_{Ax}-g_{Ax}^{\mathrm{FD}}|^2}.
+  \label{eq:fd-rms-error}
+\end{align}
+A calculation that agrees for only one axis or one atom is not a full-gradient
+validation.  A completion gate includes all $3N_{\mathrm{atom}}$ components of
+a distorted geometry.
+
+\subsection{SCF and Z-vector residuals}
+
+The energy and density tolerances of each displaced HF calculation must be
+tighter than the target gradient accuracy.  The HF orbital residual, density
+change, and energy change are recorded together.  For the Z-vector, record the
+maximum residual of Eq.~\eqref{eq:zvector-residual} and a condition estimate.
+Even if CPU and GPU produce the same gradient, parity is not established if
+both rely on cancellation with a large residual.
+
+\subsection{Convergence of the representation}
+
+After analytic--FD agreement is established, converge one numerical parameter
+at a time:
+\begin{itemize}
+  \item primary Gaussian basis and GTH pseudopotential,
+  \item FFTDF cutoff and resolved integer mesh,
+  \item target-XC integration mesh,
+  \item GDF/RSDF auxiliary basis,
+  \item GDF screening and reciprocal mesh,
+  \item RSDF source $\omega_B$/mesh and metric $\omega_M$/mesh, and
+  \item k-point mesh.
+\end{itemize}
+
+Do not report a cutoff without its resolved mesh.  The same cutoff gives a
+different integer mesh when the lattice length changes.  RSDF metadata must
+not collapse source and metric parameters into a single \texttt{omega} or
+\texttt{mesh}.
+
+\subsection{Symmetry-independent checks}
+
+Define the translational sum-rule error as
+\begin{equation}
+  \Delta_{\mathrm{trans}}
+  =\left\|\sum_A\mathbf g_A\right\|_2.
+  \label{eq:translation-error}
+\end{equation}
+With only symmetric H$_2$, missing terms can cancel by symmetry.  A mandatory
+test therefore uses H$_2$O with slightly distorted bonds, angle, and overall
+orientation.  Both Gamma and sampled k-points, and both real and complex
+tensor paths, are included.
+
+Equivalent Gamma representations must satisfy
+\begin{equation}
+  E_{\Gamma}=E_{N_k=1},
+  \qquad
+  \mathbf g_{\Gamma}=\mathbf g_{N_k=1}.
+  \label{eq:gamma-one-kpoint-parity}
+\end{equation}
+This catches shape-adapter errors that incorrectly remove or retain a
+singleton k-axis.
+
+\subsection{CPU/GPU parity}
+
+For identical cells, bases, pseudopotentials, meshes, k-points, and SCF
+tolerances, record
+\begin{align}
+  \Delta_E^{\mathrm{CPU/GPU}}
+  &=|E_{\mathrm{CPU}}-E_{\mathrm{GPU}}|,
+  \label{eq:cpu-gpu-energy-error}\\
+  \Delta_g^{\mathrm{CPU/GPU}}
+  &=\max_{Ax}|g_{Ax}^{\mathrm{CPU}}-g_{Ax}^{\mathrm{GPU}}|.
+  \label{eq:cpu-gpu-gradient-error}
+\end{align}
+GDF/RSDF integral generation may be an explicit GPU host boundary.  A GPU path
+that simply calls the CPU package's final gradient and returns that value is
+not parity; it is fallback.  Ownership is verified through capability and
+timing metadata.
+
+\subsection{Initial acceptance thresholds}
+
+The initial completion targets for this project are
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Test & Threshold \\
+\midrule
+Analytic vs converged full-energy FD & $\Delta_{\max}\le10^{-5}$ Ha/Bohr \\
+CPU/GPU energy & $\Delta_E\le10^{-8}$ Ha \\
+CPU/GPU gradient & $\Delta_g\le10^{-7}$ Ha/Bohr \\
+Translation norm & $\Delta_{\mathrm{trans}}\le10^{-6}$ Ha/Bohr \\
+\bottomrule
+\end{tabular}
+\end{center}
+Thresholds are interpreted together with basis, cutoff, and FD-step
+convergence evidence.  Exact analytic--FD agreement on a coarse mesh does not
+imply that the resulting gradient is the converged physical gradient.
+
+\subsection{Result metadata}
+
+An energy/gradient result preserves at least the following information in a
+machine-readable form:
+\begin{itemize}
+  \item method, target XC, source reference, charge, and spin,
+  \item atomic coordinates, lattice, and the unit of each,
+  \item basis and pseudopotential,
+  \item Gamma/k-point list and weights,
+  \item DF backend and auxiliary basis,
+  \item cutoff and resolved FFT/XC meshes,
+  \item RSDF source and metric settings,
+  \item HF convergence and energy timings,
+  \item Z dimension, residual, condition estimate, and gradient-component
+        timings,
+  \item device, host boundaries, and a silent-fallback flag, and
+  \item gradient-array unit and the force-sign convention.
+\end{itemize}
+
+The canonical gradient output is a NumPy array in Ha/Bohr.  Rather than
+duplicate large arrays in JSON, metadata may record the shape, dtype, unit,
+checksum, and path to an NPY file.
+
+\subsection{Common failure signatures}
+
+\begin{center}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.35\textwidth}
+                  >{\raggedright\arraybackslash}p{0.55\textwidth}}
+\toprule
+Observation & First causes to inspect \\
+\midrule
+Gamma passes but k-points fail & $1/N_k$, conjugation, reverse pairs, $q=0$ \\
+GDF error grows from small to larger systems & metric/auxiliary-center response \\
+Error changes discontinuously with cutoff & different resolved meshes at displaced geometries \\
+Only MGGA has a large net translation & $\tau$ factor, second AO derivatives, grid aliasing \\
+RSDF value parity fails & mixed source/metric $\omega$ or mesh \\
+Z residual is small but full FD fails & explicit hcore/J/XC/Pulay derivative \\
+Only CPU/GPU totals agree, components differ & silent fallback or different ownership \\
+\bottomrule
+\end{longtable}
+\end{center}

@@ -1,0 +1,142 @@
+\section{Periodic notation, matrix convention과 단위}
+\label{sec:notation}
+
+\subsection{Lattice와 reciprocal lattice}
+
+Primitive lattice matrix를 column convention으로
+\begin{equation}
+  \mathbf A=(\mathbf a_1\;\mathbf a_2\;\mathbf a_3)
+\end{equation}
+라 하고 cell volume을
+\begin{equation}
+  \Omega=\det\mathbf A>0
+  \label{eq:cell-volume}
+\end{equation}
+로 둔다. Reciprocal lattice matrix는
+\begin{equation}
+  \mathbf B=2\pi\mathbf A^{-\Herm},
+  \qquad
+  \mathbf a_i\cdot\mathbf b_j=2\pi\delta_{ij}
+  \label{eq:reciprocal-lattice}
+\end{equation}
+이다. Lattice translation은 $\vT=\mathbf A\mathbf n$,
+$\mathbf n\in\mathbb Z^3$이고 reciprocal vector는 $\vG=\mathbf B\mathbf m$다.
+
+Cell 안의 적분은 $\int_\Omega\dd\mathbf r$로 표기한다. Fourier pair는 implementation의
+FFT normalization에 따라 상수 위치가 달라질 수 있으므로, 이 문서에서는
+\begin{equation}
+  \rho(\vG)=\int_\Omega e^{-i\vG\cdot\mathbf r}\rho(\mathbf r)\dd\mathbf r,
+  \qquad
+  \rho(\mathbf r)=\frac{1}{\Omega}\sum_{\vG}
+  e^{i\vG\cdot\mathbf r}\rho(\vG)
+  \label{eq:fourier-pair}
+\end{equation}
+를 사용한다.
+
+\subsection{Bloch AO와 k-point weight}
+
+원자 중심 Gaussian $\chi_\mu$로부터 Bloch AO를
+\begin{equation}
+  \phi_{\mu\vk}(\mathbf r)
+  =\frac{1}{\sqrt{N_{\mathrm c}}}
+   \sum_{\vT}e^{i\vk\cdot\vT}
+   \chi_\mu(\mathbf r-\vT)
+  \label{eq:bloch-ao}
+\end{equation}
+로 정의한다. $N_{\mathrm c}$는 Born--von Karman supercell의 cell 수이며 최종 intensive
+quantity에서는 소거된다. Bloch orbital은
+\begin{equation}
+  \psi_{p\vk}(\mathbf r)
+  =\sum_\mu C_{\mu p}^{\vk}\phi_{\mu\vk}(\mathbf r)
+  \label{eq:bloch-mo}
+\end{equation}
+이다.
+
+일반 weight $w_\vk$는 $\sum_\vk w_\vk=1$로 normalization한다. 이 package의 regular
+mesh는 equal weight를 사용하므로 $w_\vk=1/N_k$다. 아래 식에서 $1/N_k$가 보이면
+equal-weight convention을 뜻한다. Gamma-only도 별도 scalar theory가 아니라
+$N_k=1$, $\vk=\mathbf0$인 같은 tensor convention으로 다룬다.
+
+AO overlap과 one-electron matrix는
+\begin{align}
+  S_{\mu\nu}^{\vk}
+  &=\langle\phi_{\mu\vk}|\phi_{\nu\vk}\rangle,\\
+  h_{\mu\nu}^{\vk}
+  &=\langle\phi_{\mu\vk}|\hat h|\phi_{\nu\vk}\rangle
+  \label{eq:ao-matrices}
+\end{align}
+이고 MO coefficient는
+\begin{equation}
+  C^{\vk\dagger}S^{\vk}C^{\vk}=I
+  \label{eq:mo-orthonormality}
+\end{equation}
+를 만족한다.
+
+\subsection{Restricted density matrix}
+
+Closed-shell occupation $f_{p\vk}\in\{0,2\}$를 사용하면 AO density는
+\begin{equation}
+  D_{\mu\nu}^{\vk}
+  =\sum_p f_{p\vk}C_{\mu p}^{\vk}C_{\nu p}^{\vk *}
+  =2\sum_i C_{\mu i}^{\vk}C_{\nu i}^{\vk *}
+  \label{eq:restricted-density}
+\end{equation}
+이다. 이 정의는 occupation factor $2$를 이미 포함한다. 따라서 energy와 response
+contraction에서 factor $2$를 다시 넣는지 여부는 사용한 occupied-only tensor가
+$D$를 대체하는지에 따라 결정해야 한다.
+
+Matrix trace convention은
+\begin{equation}
+  \Tr[D^{\vk}X^{\vk}]
+  =\sum_{\mu\nu}D_{\nu\mu}^{\vk}X_{\mu\nu}^{\vk}
+  \label{eq:trace-convention}
+\end{equation}
+이다. Complex k-point에서 $D^{\vk}$와 Hermitian operator는 Hermitian이지만 개별
+derivative block은 반드시 Hermitian일 필요가 없다. 최종 scalar에는 실수부를 취하되,
+중간 단계의 imaginary part를 임의로 버리지 않는다.
+
+\subsection{Index와 derivative notation}
+
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+Index & 의미 \\
+\midrule
+$\mu,\nu,\lambda,\sigma$ & primary AO \\
+$P,Q$ & auxiliary AO \\
+$i,j$ & occupied MO \\
+$a,b$ & virtual MO \\
+$p,q$ & arbitrary MO \\
+$A,B$ & atom \\
+$x,y$ & Cartesian component \\
+$\vk,\vk'$ & sampled k-point \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+핵 좌표 $R_{Ax}$에 대한 total derivative는 superscript $Ax$ 또는
+$\partial_{Ax}$로 쓴다. 예를 들어 $h^{Ax}=\partial h/\partial R_{Ax}$다. AO basis가
+핵과 함께 움직이므로 matrix derivative와 orbital coefficient response를 구분해야 한다.
+Cell은 고정되어 있어 $\mathbf A^{Ax}=0$이고 reciprocal vectors와 discrete mesh도
+고정된다.
+
+\subsection{Canonical unit}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Quantity & Canonical unit & 비고 \\
+\midrule
+Energy & Hartree (Ha) & public energy \\
+Position/lattice & Bohr & PySCF internal \\
+Nuclear gradient & Ha/Bohr & $\dd E/\dd R$ \\
+Force & Ha/Bohr & $-\dd E/\dd R$ \\
+k-point & Bohr$^{-1}$ & Cartesian reciprocal coordinate \\
+Plane-wave cutoff & Ha & $G_{\max}^2/2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+입력 XYZ가 Angstrom이어도 cell을 build한 뒤 내부 좌표는 Bohr다. Gradient array를
+eV/Angstrom으로 내보낼 때는 energy와 length conversion을 동시에 적용하며, 부호를
+바꾸는 것은 unit conversion이 아니라 force 변환이다.

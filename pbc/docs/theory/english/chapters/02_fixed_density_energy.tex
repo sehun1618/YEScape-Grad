@@ -1,0 +1,142 @@
+\section{Target DFA energy evaluated on the HF density}
+\label{sec:fixed-density-energy}
+
+\subsection{The source HF problem}
+
+The source orbitals are obtained by solving the periodic RHF/KRHF equation
+self-consistently,
+\begin{equation}
+  F_{\mathrm{HF}}^{\vk}C^{\vk}
+  =S^{\vk}C^{\vk}\varepsilon^{\vk}.
+  \label{eq:hf-roothaan}
+\end{equation}
+The restricted HF Fock matrix is
+\begin{equation}
+  F_{\mathrm{HF}}^{\vk}
+  =h^{\vk}+J^{\vk}[D]-\frac12K^{\vk}[D],
+  \label{eq:hf-fock}
+\end{equation}
+where $D$ is the density of Eq.~\eqref{eq:restricted-density}, including the
+occupation factor of two.  The HF energy per primitive cell is
+\begin{equation}
+  E_{\mathrm{HF}}
+  =\frac{1}{N_k}\sum_{\vk}\Tr[D^{\vk}h^{\vk}]
+   +\frac{1}{2N_k}\sum_{\vk}\Tr\!\left[
+      D^{\vk}\left(J^{\vk}-\frac12K^{\vk}\right)\right]
+   +E_{\mathrm{NN}}.
+  \label{eq:hf-energy}
+\end{equation}
+FFTDF, GDF, or RSDF determines the numerical representation of $J$ and $K$ in
+the source HF calculation.
+
+\subsection{Target energy at a frozen HF density}
+
+After the source HF calculation has converged, a target RKS/KRKS object is
+constructed and the target functional is evaluated while the density remains
+fixed.  For a semilocal target DFA,
+\begin{equation}
+  E_{\mathrm{DC-DFA}}[D]
+  =E_1[D]+E_{\mathrm H}[D]+E_{\mathrm{xc}}^{\mathrm{DFA}}[D]
+   +E_{\mathrm{NN}},
+  \label{eq:dc-energy-components}
+\end{equation}
+with
+\begin{align}
+  E_1[D]
+  &=\frac{1}{N_k}\sum_{\vk}\Tr[D^{\vk}h^{\vk}],
+  \label{eq:dc-one-electron-energy}\\
+  E_{\mathrm H}[D]
+  &=\frac{1}{2N_k}\sum_{\vk}\Tr[D^{\vk}J^{\vk}[D]].
+  \label{eq:dc-hartree-energy}
+\end{align}
+PBE, SCAN, and r2SCAN are pure semilocal target functionals, so the target
+energy contains no exact-exchange matrix $K$.  Nevertheless, because $D$ is an
+HF solution, source HF exchange remains in the orbital Hessian that determines
+the response.
+
+The target Fock matrix, namely the density derivative of
+$E_{\mathrm{DC-DFA}}$, is
+\begin{equation}
+  F_{\mathrm t}^{\vk}
+  =h^{\vk}+J^{\vk}[D]+V_{\mathrm{xc}}^{\vk}[D].
+  \label{eq:target-fock}
+\end{equation}
+The subscript $\mathrm t$ denotes ``target.''  Once $D_{\mathrm{HF}}$ has been
+passed to the target object, no KS orbital optimization is performed.
+
+\subsection{Density and semilocal variables}
+
+The real-space density is
+\begin{equation}
+  \rho(\mathbf r)
+  =\frac{1}{N_k}\sum_{\vk}\sum_{\mu\nu}
+    D_{\mu\nu}^{\vk}
+    \phi_{\nu\vk}^{*}(\mathbf r)
+    \phi_{\mu\vk}(\mathbf r).
+  \label{eq:real-space-density}
+\end{equation}
+A spin-unpolarized GGA may be written as
+\begin{equation}
+  E_{\mathrm{xc}}^{\mathrm{GGA}}
+  =\int_\Omega
+    f\!\left(\rho,\sigma\right)\dd\mathbf r,
+  \qquad
+  \sigma=|\nabla\rho|^2.
+  \label{eq:gga-energy}
+\end{equation}
+
+SCAN and r2SCAN also depend on the positive kinetic-energy density
+\begin{equation}
+  \tau(\mathbf r)
+  =\frac{1}{2N_k}\sum_{\vk}\sum_{\mu\nu}
+   D_{\mu\nu}^{\vk}
+   \nabla\phi_{\nu\vk}^{*}(\mathbf r)\cdot
+   \nabla\phi_{\mu\vk}(\mathbf r),
+  \label{eq:tau-definition}
+\end{equation}
+so that
+\begin{equation}
+  E_{\mathrm{xc}}^{\mathrm{MGGA}}
+  =\int_\Omega f(\rho,\sigma,\tau)\dd\mathbf r.
+  \label{eq:mgga-energy}
+\end{equation}
+The PySCF SCAN/r2SCAN route does not use a density-Laplacian channel.  The
+factor $1/2$ in Eq.~\eqref{eq:tau-definition} is part of the convention and
+must be included exactly once in the contraction with
+$v_\tau=\partial f/\partial\tau$.
+
+\subsection{Nonvariational orbital gradient}
+
+Apply an occupied--virtual anti-Hermitian rotation to the MO coefficients,
+\begin{equation}
+  C^{\vk}\longrightarrow C^{\vk}e^{\kappa^{\vk}},
+  \qquad \kappa^{\vk\dagger}=-\kappa^{\vk}.
+  \label{eq:orbital-rotation}
+\end{equation}
+Including the conventional closed-shell factor of two, the first variation of
+the energy may be written as
+\begin{equation}
+  \delta E_{\mathrm{DC-DFA}}
+  =\frac{2}{N_k}\operatorname{Re}
+   \sum_{\vk ai}F_{\mathrm t,ai}^{\vk}\,
+   \delta\kappa_{ai}^{\vk}.
+  \label{eq:target-orbital-gradient}
+\end{equation}
+Canonical source HF orbitals satisfy $F_{\mathrm{HF},ai}^{\vk}=0$, but in
+general
+\begin{equation}
+  F_{\mathrm t,ai}^{\vk}\ne0.
+  \label{eq:target-vo-nonzero}
+\end{equation}
+This nonzero target virtual--occupied block is the right-hand side of the
+Z-vector equation.
+
+\subsection{Metadata required by the energy object}
+
+Even for the same named DFA, different bases, pseudopotentials, cells,
+k-points, DF backends, and numerical grids define different finite energies.
+A reproducible energy object must record at least the target functional, source
+reference, $N_k$, lattice and coordinate units, primary and auxiliary bases,
+GTH pseudopotential, DF backend, and either the FFT mesh or the RSDF source and
+metric parameters.  The gradient must differentiate precisely this same
+energy object and its resolved settings.

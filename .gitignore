@@ -1,0 +1,51 @@
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Native build products
+*.so
+*.o
+*.a
+
+# Environments and editor state
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+*.swp
+*~
+
+# Scientific runtime artifacts
+*.chk
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.prof
+*.log
+
+# Generated documentation
+docs/**/*.aux
+docs/**/*.bbl
+docs/**/*.blg
+docs/**/*.fdb_latexmk
+docs/**/*.fls
+docs/**/*.log
+docs/**/*.out
+docs/**/*.pdf
+docs/**/*.synctex.gz
+docs/**/*.toc
+
+# Benchmark output is machine- and run-specific
+**/benchmark/results/
+**/benchmarks/results/

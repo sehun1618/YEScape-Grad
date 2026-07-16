@@ -1,0 +1,59 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,amsthm,bm,booktabs,geometry,hyperref,mathtools}
+\usepackage{array,longtable}
+\geometry{margin=25mm}
+\emergencystretch=2em
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\vk}{\mathbf{k}}
+\newcommand{\vR}{\mathbf{R}}
+\newcommand{\vq}{\mathbf{q}}
+\newcommand{\vG}{\mathbf{G}}
+\newcommand{\vT}{\mathbf{T}}
+\newcommand{\vc}{\mathbf{c}}
+\newcommand{\gradR}[2]{\frac{\partial #1}{\partial R_{#2}}}
+\newcommand{\Herm}{\mathrm{H}}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Note}[section]
+
+\title{Periodic Density-Corrected DFT Analytic Gradients\\
+Theory and Implementation Conventions}
+\author{PBC DC-DFT Package Project}
+\date{Active scope: FFTDF/GDF/RSDF, PBE/SCAN/r2SCAN}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This document derives the energy and fixed-cell nuclear analytic gradient of
+density-corrected density functional theory evaluated with semilocal target
+functionals on restricted closed-shell periodic Hartree--Fock densities.  The
+central complication is that the target energy is not stationary with respect
+to the HF orbitals.  Consequently, the gradient requires the HF CPHF orbital
+Hessian and an adjoint Z-vector equation.  The presentation develops the
+notation and implementation conventions for FFTDF, Gaussian density fitting
+(GDF), range-separated density fitting (RSDF), GTH pseudopotentials, Gamma and
+sampled k-points, and the PBE and SCAN/r2SCAN target functionals in one
+consistent framework.  Stress, cell derivatives, target-only multigrid, and
+open-shell response are outside the active scope of this edition.
+\end{abstract}
+\tableofcontents
+
+\input{english/chapters/00_scope}
+\input{english/chapters/01_notation}
+\input{english/chapters/02_fixed_density_energy}
+\input{english/chapters/03_orbital_response}
+\input{english/chapters/04_periodic_density_fitting}
+\input{english/chapters/05_dc_lagrangian_gradient}
+\input{english/chapters/06_one_electron_gth}
+\input{english/chapters/07_fftdf}
+\input{english/chapters/08_gdf}
+\input{english/chapters/09_mgga_scan_r2scan}
+\input{english/chapters/10_rsdf}
+\input{english/chapters/11_validation_units}
+\input{english/chapters/12_appendices}
+
+\end{document}

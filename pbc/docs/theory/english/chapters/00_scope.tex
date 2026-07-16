@@ -1,0 +1,88 @@
+\section{Purpose, assumptions, and how to read this document}
+\label{sec:scope}
+
+\subsection{The physical quantities of interest}
+
+Let $\vR$ denote the vector collecting all nuclear coordinates.  The primary
+objects studied here are obtained by first solving for the periodic restricted
+Hartree--Fock (HF) density matrix $D_{\mathrm{HF}}(\vR)$ and then evaluating a
+separate semilocal density functional approximation (DFA) on that same
+density.  The resulting energy is
+\begin{equation}
+  E_{\mathrm{DC-DFA}}(\vR)
+  = E_{\mathrm{DFA}}\!\left[D_{\mathrm{HF}}(\vR);\vR\right],
+  \label{eq:scope-dc-energy}
+\end{equation}
+and its fixed-cell nuclear gradient is
+\begin{equation}
+  g_{Ax}
+  = \frac{\dd E_{\mathrm{DC-DFA}}}{\dd R_{Ax}}.
+  \label{eq:scope-gradient}
+\end{equation}
+Here, $A$ labels an atom and $x\in\{x,y,z\}$ is a Cartesian component.  The
+public API returns the gradient; the force has the opposite sign,
+\begin{equation}
+  F_{Ax}=-g_{Ax}.
+  \label{eq:scope-force-sign}
+\end{equation}
+
+Equation~\eqref{eq:scope-dc-energy} does not mean ``add a DFA correction to the
+HF energy.''  The kinetic, electron--nuclear, Hartree, exchange--correlation,
+and ion--ion terms of the target DFA energy are all re-evaluated on the HF
+density.  The HF energy is retained only as the reference that generated the
+source orbitals and as a diagnostic quantity.
+
+\subsection{Why this differs from an ordinary KS gradient}
+
+In a self-consistent KS-DFA calculation, the same DFA energy is stationary with
+respect to orbital rotations $\kappa$.  In DC-DFA, the functional that defines
+the orbitals differs from the functional used to evaluate the energy, so that
+\begin{equation}
+  \left.
+  \frac{\partial E_{\mathrm{DC-DFA}}}{\partial\kappa_{ai}^{\vk}}
+  \right|_{D_{\mathrm{HF}}}
+  \ne 0.
+  \label{eq:scope-nonstationary}
+\end{equation}
+The change of the HF orbitals under nuclear motion therefore cannot be
+discarded.  Rather than solve a separate CPHF equation for every nuclear
+displacement, one solves a single adjoint equation for the HF orbital Hessian,
+the Z-vector equation, and contracts that solution with all perturbations.
+
+\subsection{Active scope}
+
+This edition treats the following as one complete theoretical and numerical
+scope:
+\begin{itemize}
+  \item restricted closed-shell RHF/KRHF source densities,
+  \item three-dimensional periodic boundary conditions,
+  \item GTH pseudopotentials and atom-centered Gaussian AOs,
+  \item Gamma-point and general sampled k-point meshes,
+  \item PBE, SCAN, and r2SCAN target DFAs,
+  \item FFTDF, GDF, and RSDF two-electron representations,
+  \item CPU and GPU implementations, and
+  \item energies and nuclear analytic gradients at fixed lattice vectors.
+\end{itemize}
+
+Stress and cell derivatives, target-only multigrid, the larger-angular-momentum
+completion matrix, and open-shell/UHF response are excluded from the active
+scope and preserved in a separate archive.  Accordingly, ``analytic gradient''
+always denotes $\partial E/\partial R_{Ax}$ at fixed cell in this document.
+
+\subsection{Prerequisites and organization}
+
+The reader is assumed to know AO-based HF and KS-DFT, density matrices,
+Gaussian integrals, and elementary reciprocal-lattice theory.
+Section~\ref{sec:notation} fixes the periodic notation and units, and
+Sec.~\ref{sec:fixed-density-energy} defines the target energy evaluated on a
+fixed HF density.  Sections~\ref{sec:orbital-response} and
+\ref{sec:dc-lagrangian} derive the nonvariational response and the total
+gradient.  Subsequent sections develop the explicit derivatives for GTH,
+FFTDF, GDF, MGGA, and RSDF, followed by numerical validation procedures.
+
+The word ``exact'' must be interpreted at two distinct levels.  First, within
+a chosen finite basis, mesh, auxiliary basis, and k-point representation, the
+analytic derivative must agree with the full-energy finite difference of the
+same representation.  Second, the finite representation itself must converge
+with cutoff, basis, and k-mesh.  The first criterion measures implementation
+correctness; the second measures physical convergence.

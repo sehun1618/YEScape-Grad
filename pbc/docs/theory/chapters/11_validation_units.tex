@@ -1,0 +1,159 @@
+\section{수치 검증, convergence와 보고 단위}
+\label{sec:validation}
+
+\subsection{Full-energy central finite difference}
+
+Analytic gradient의 authoritative numerical reference는
+\begin{equation}
+  g_{Ax}^{\mathrm{FD}}(h)
+  =\frac{E_{\mathrm{DC-DFA}}(\vR+h\mathbf e_{Ax})
+         -E_{\mathrm{DC-DFA}}(\vR-h\mathbf e_{Ax})}{2h}
+  \label{eq:central-fd}
+\end{equation}
+이다. 두 displaced geometry 각각에서 source HF를 같은 convergence tolerance로 다시
+수렴시키고 target DFA energy를 새로 평가한다. Central density 또는 MO를 그대로 두고
+operator만 미분한 값은 component diagnostic이지 식~\eqref{eq:central-fd}가 아니다.
+
+Leading truncation error는 $O(h^2)$이고 너무 작은 $h$에서는 SCF와 floating-point noise가
+$O(\epsilon/h)$로 증폭된다. 여러 step $h$, $h/2$, $h/4$에서 plateau를 찾고 analytic
+gradient가 그 plateau와 일치하는지 본다.
+
+\subsection{Error norm}
+
+Selected component 집합 $\mathcal I$에 대해
+\begin{align}
+  \Delta_{\max}
+  &=\max_{(A,x)\in\mathcal I}|g_{Ax}-g_{Ax}^{\mathrm{FD}}|,
+  \label{eq:fd-max-error}\\
+  \Delta_{\mathrm{RMS}}
+  &=\sqrt{\frac1{|\mathcal I|}\sum_{(A,x)\in\mathcal I}
+          |g_{Ax}-g_{Ax}^{\mathrm{FD}}|^2}
+  \label{eq:fd-rms-error}
+\end{align}
+를 기록한다. 한 축 또는 한 원자만 맞는 결과를 full-gradient validation이라고 부르지
+않는다. Completion gate는 distorted geometry의 모든 $3N_{\mathrm{atom}}$ component를
+포함한다.
+
+\subsection{SCF와 Z-vector residual}
+
+Displaced HF의 energy/density tolerance가 gradient target보다 충분히 작아야 한다. HF
+orbital residual, density change와 energy change를 함께 기록한다. Z-vector는 식
+\eqref{eq:zvector-residual}의 maximum residual과 condition estimate를 저장한다. CPU와 GPU
+solver가 같은 gradient를 내더라도 서로 다른 큰 residual에 cancellation으로 도달했다면
+parity 근거가 아니다.
+
+\subsection{Representation convergence}
+
+Analytic--FD agreement를 확인한 다음 다음 numerical parameter를 한 번에 하나씩
+수렴시킨다.
+
+\begin{itemize}
+  \item primary Gaussian basis와 GTH pseudopotential,
+  \item FFTDF cutoff와 resolved integer mesh,
+  \item target XC integration mesh,
+  \item GDF/RSDF auxiliary basis,
+  \item GDF screening와 reciprocal mesh,
+  \item RSDF source $\omega_B$/mesh와 metric $\omega_M$/mesh,
+  \item k-point mesh.
+\end{itemize}
+
+Cutoff를 보고할 때 mesh를 생략하지 않는다. 같은 cutoff라도 lattice 길이가 달라지면
+integer mesh가 달라진다. RSDF는 source와 metric parameter를 하나의
+\texttt{omega} 또는 \texttt{mesh}로 축약해 저장하지 않는다.
+
+\subsection{Symmetry-independent checks}
+
+Translation sum rule error를
+\begin{equation}
+  \Delta_{\mathrm{trans}}
+  =\left\|\sum_A\mathbf g_A\right\|_2
+  \label{eq:translation-error}
+\end{equation}
+로 정의한다. Symmetric H$_2$만 사용하면 누락 항이 대칭으로 상쇄될 수 있으므로 bond,
+angle과 전체 orientation을 조금 왜곡한 H$_2$O를 필수로 사용한다. Gamma와 sampled
+k-point, 실수와 complex tensor 경로를 모두 포함한다.
+
+Equivalent Gamma representation은
+\begin{equation}
+  E_{\Gamma}=E_{N_k=1},
+  \qquad
+  \mathbf g_{\Gamma}=\mathbf g_{N_k=1}
+  \label{eq:gamma-one-kpoint-parity}
+\end{equation}
+를 만족해야 한다. 이 검사는 singleton k-axis를 제거하거나 유지하는 shape adapter의
+오류를 찾는다.
+
+\subsection{CPU/GPU parity}
+
+같은 cell, basis, pseudopotential, mesh, k-point와 SCF tolerance에서
+\begin{align}
+  \Delta_E^{\mathrm{CPU/GPU}}
+  &=|E_{\mathrm{CPU}}-E_{\mathrm{GPU}}|,
+  \label{eq:cpu-gpu-energy-error}\\
+  \Delta_g^{\mathrm{CPU/GPU}}
+  &=\max_{Ax}|g_{Ax}^{\mathrm{CPU}}-g_{Ax}^{\mathrm{GPU}}|
+  \label{eq:cpu-gpu-gradient-error}
+\end{align}
+를 기록한다. GDF/RSDF host integral generation은 명시적인 GPU host boundary일 수 있지만
+GPU path가 CPU package의 final gradient를 호출해서 같은 값을 반환하는 것은 parity가
+아니라 fallback이다. Capability와 timing metadata로 ownership을 확인한다.
+
+\subsection{초기 acceptance threshold}
+
+이 project의 초기 completion target은 다음과 같다.
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Test & Threshold \\
+\midrule
+Analytic vs converged full-energy FD & $\Delta_{\max}\le10^{-5}$ Ha/Bohr \\
+CPU/GPU energy & $\Delta_E\le10^{-8}$ Ha \\
+CPU/GPU gradient & $\Delta_g\le10^{-7}$ Ha/Bohr \\
+Translation norm & $\Delta_{\mathrm{trans}}\le10^{-6}$ Ha/Bohr \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Threshold는 basis/cutoff/FD-step convergence evidence와 함께 해석한다. Coarse mesh에서
+analytic과 FD가 정확히 일치해도 그 gradient가 converged physical gradient라는 뜻은
+아니다.
+
+\subsection{Result metadata}
+
+Energy/gradient result는 최소한 다음 정보를 machine-readable form으로 보존한다.
+
+\begin{itemize}
+  \item method, target XC, source reference, charge/spin,
+  \item atom coordinates와 lattice 및 각 unit,
+  \item basis와 pseudopotential,
+  \item Gamma/k-point list와 weights,
+  \item DF backend와 auxiliary basis,
+  \item cutoff, resolved FFT/XC mesh,
+  \item RSDF source/metric settings,
+  \item HF convergence와 energy timings,
+  \item Z dimension/residual/condition과 gradient component timings,
+  \item device, host boundaries와 silent-fallback flag,
+  \item gradient array unit와 force-sign convention.
+\end{itemize}
+
+Canonical gradient output은 NumPy array in Ha/Bohr다. JSON에는 큰 array를 중복 저장하기보다
+shape, dtype, unit, checksum과 NPY path를 기록할 수 있다.
+
+\subsection{흔한 failure signature}
+
+\begin{center}
+\begin{longtable}{p{0.35\textwidth}p{0.55\textwidth}}
+\toprule
+관찰 & 우선 확인할 원인 \\
+\midrule
+Gamma는 맞고 k-point가 틀림 & $1/N_k$, conjugation, reverse pair, $q=0$ \\
+작은 system은 맞고 큰 system에서 GDF 오차 증가 & metric/auxiliary-center response \\
+Cutoff에 따라 error가 불연속 & displaced geometry의 resolved mesh 불일치 \\
+MGGA만 net translation이 큼 & $\tau$ factor, second AO derivative, grid aliasing \\
+RSDF value parity 실패 & source/metric $\omega$ 또는 mesh 혼용 \\
+Z residual은 작고 전체 FD만 틀림 & explicit hcore/J/XC/Pulay derivative \\
+CPU/GPU total만 같고 component가 다름 & silent fallback 또는 서로 다른 ownership \\
+\bottomrule
+\end{longtable}
+\end{center}
