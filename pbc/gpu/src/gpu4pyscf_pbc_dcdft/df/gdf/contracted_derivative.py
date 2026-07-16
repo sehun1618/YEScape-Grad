@@ -23,6 +23,24 @@ from gpu4pyscf.pbc.grad.rhf import jk_energy_per_atom
 
 
 _DERIVATIVE_BATCH_PATCH_LOCK = RLock()
+_GAMMA_DERIVATIVE_OMEGA_SCALE = 1.5
+
+
+def _build_gamma_derivative_optimizer(provider):
+    """Build the exact SR/LR split tuned for Gamma derivative throughput."""
+
+    from gpu4pyscf.pbc.df.int3c2e import SRInt3c2eOpt
+    from gpu4pyscf.pbc.df.rsdf_builder import _guess_omega
+
+    omega = _GAMMA_DERIVATIVE_OMEGA_SCALE * float(
+        _guess_omega(provider.cell)
+    )
+    return SRInt3c2eOpt(
+        provider.cell,
+        provider.auxcell,
+        omega,
+        None,
+    ).build()
 
 
 @contextmanager
@@ -167,12 +185,13 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
     response_density,
     *,
     exxdiv="ewald",
+    memory_diagnostics=None,
 ):
-    """Evaluate the Gamma bilinear derivative with one native traversal.
+    """Evaluate the production Gamma bilinear derivative in one traversal.
 
-    This is an explicit optimization candidate.  The production dispatcher
-    remains on :func:`restricted_hf_bilinear_derivative` until the sampled-k
-    implementation and promotion gates are complete.
+    Sampled k-points use their separately validated momentum-aware one-pass
+    implementation.  The two-pass polarization route remains available as a
+    component-level reference, not as the default Gamma production path.
     """
 
     if not getattr(provider, "uses_native_integrals", False):
@@ -186,17 +205,9 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
             "one-pass signed GDF derivative currently supports Gamma only"
         )
 
-    from gpu4pyscf.pbc.df.int3c2e import SRInt3c2eOpt
-    from gpu4pyscf.pbc.df.rsdf_builder import _guess_omega
-
     from .signed_gamma_native import gamma_signed_energy_derivative
 
-    optimizer = SRInt3c2eOpt(
-        provider.cell,
-        provider.auxcell,
-        _guess_omega(provider.cell),
-        None,
-    ).build()
+    optimizer = _build_gamma_derivative_optimizer(provider)
     with _bounded_sr_derivative_batches(provider, None):
         value = gamma_signed_energy_derivative(
             optimizer,
@@ -204,6 +215,11 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
             response_density,
             exxdiv=exxdiv,
             omega=0.0,
+            memory_diagnostics=memory_diagnostics,
+        )
+    if memory_diagnostics is not None:
+        memory_diagnostics["derivative_omega_scale"] = (
+            _GAMMA_DERIVATIVE_OMEGA_SCALE
         )
     return cp.asarray(value, dtype=cp.float64)
 
@@ -214,6 +230,7 @@ def restricted_hf_bilinear_derivative_one_pass(
     response_density,
     *,
     exxdiv="ewald",
+    memory_diagnostics=None,
 ):
     """Evaluate the signed RHF bilinear derivative in one native traversal.
 
@@ -234,6 +251,7 @@ def restricted_hf_bilinear_derivative_one_pass(
             reference_density,
             response_density,
             exxdiv=exxdiv,
+            memory_diagnostics=memory_diagnostics,
         )
 
     from gpu4pyscf.pbc.df.int3c2e import SRInt3c2eOpt
@@ -272,6 +290,7 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
     response_density,
     *,
     exxdiv="ewald",
+    memory_diagnostics=None,
 ):
     """Fuse target-J and Z-bilinear GDF derivatives into one traversal.
 
@@ -295,12 +314,7 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
             gamma_target_j_plus_signed_energy_derivative,
         )
 
-        optimizer = SRInt3c2eOpt(
-            provider.cell,
-            provider.auxcell,
-            _guess_omega(provider.cell),
-            None,
-        ).build()
+        optimizer = _build_gamma_derivative_optimizer(provider)
         with _bounded_sr_derivative_batches(provider, None):
             value = gamma_target_j_plus_signed_energy_derivative(
                 optimizer,
@@ -308,6 +322,11 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
                 response_density,
                 exxdiv=exxdiv,
                 omega=0.0,
+                memory_diagnostics=memory_diagnostics,
+            )
+        if memory_diagnostics is not None:
+            memory_diagnostics["derivative_omega_scale"] = (
+                _GAMMA_DERIVATIVE_OMEGA_SCALE
             )
         return cp.asarray(value, dtype=cp.float64)
 
@@ -355,6 +374,20 @@ def _quadratic_energy_derivative(
         )
     provider._ensure_built()
     dm, kpts = _format_density(provider, density)
+    if kpts is None:
+        optimizer = _build_gamma_derivative_optimizer(provider)
+        with _bounded_sr_derivative_batches(provider, None):
+            value = gpu_gdf_grad_rhf._jk_energy_per_atom(
+                optimizer,
+                dm,
+                hermi=1,
+                j_factor=float(j_factor),
+                k_factor=float(k_factor),
+                exxdiv=exxdiv,
+                omega=0.0,
+            )
+        return cp.asarray(value, dtype=cp.float64)
+
     method = SimpleNamespace(with_df=provider, rsjk=None)
     with _bounded_sr_derivative_batches(provider, kpts):
         value = jk_energy_per_atom(

@@ -8,6 +8,7 @@ on the GPU for Gamma and sampled k-points without a CPU DC-DFT fallback.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import cupy as cp
 import numpy as np
@@ -37,6 +38,7 @@ from gpu4pyscf_pbc_dcdft.df.gdf.contracted_derivative import (
     target_j_plus_restricted_hf_bilinear_derivative_one_pass,
 )
 from gpu4pyscf.gto import mole as gpu_mole
+from gpu4pyscf.pbc.df.int3c2e import POOL_SIZE
 from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
     contract_restricted_hf_bilinear_energy_derivative,
     contract_restricted_hf_energy_derivative,
@@ -46,6 +48,9 @@ from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
 from gpu4pyscf_pbc_dcdft.df.gdf.local_part1_derivative import (
     NativeGDFLocalPart1Derivative,
     _validate_short_range_batches,
+)
+from gpu4pyscf_pbc_dcdft.df.gdf.reciprocal_memory import (
+    plan_gamma_reciprocal_blocks,
 )
 from gpu4pyscf_pbc_dcdft.df.gdf.signed_gamma_native import (
     _gamma_coulomb_vector,
@@ -325,6 +330,62 @@ class GDFGPUAlgebraTest(unittest.TestCase):
         self.assertLess(
             float(cp.max(cp.abs(one_pass - two_pass))),
             1.0e-9,
+        )
+
+    def test_native_gamma_forced_reciprocal_multiblock_parity(self):
+        _cpu, gpu = _methods((1, 1, 1))
+        gpu.kernel()
+        reference = cp.asarray(gpu.source_scf.make_rdm1())
+        rng = np.random.default_rng(111)
+        raw = cp.asarray(rng.normal(size=reference.shape))
+        response = 0.02 * (raw + raw.T)
+        expected = restricted_hf_bilinear_derivative_one_pass_gamma(
+            gpu.with_df,
+            reference,
+            response,
+            exxdiv=gpu.exxdiv,
+        )
+
+        def force_multiple_blocks(*args, **kwargs):
+            ngrids = int(args[0])
+            return plan_gamma_reciprocal_blocks(
+                *args,
+                **kwargs,
+                block_alignment=1,
+                max_block_size=max(1, ngrids // 2),
+            )
+
+        diagnostics = {}
+        with patch(
+            "gpu4pyscf_pbc_dcdft.df.gdf.signed_gamma_native."
+            "plan_gamma_reciprocal_blocks",
+            side_effect=force_multiple_blocks,
+        ):
+            actual = restricted_hf_bilinear_derivative_one_pass_gamma(
+                gpu.with_df,
+                reference,
+                response,
+                exxdiv=gpu.exxdiv,
+                memory_diagnostics=diagnostics,
+            )
+
+        self.assertLess(float(cp.max(cp.abs(actual - expected))), 1.0e-9)
+        self.assertLess(
+            diagnostics["plan"]["initial_block_size"],
+            diagnostics["plan"]["ngrids"],
+        )
+        self.assertEqual(diagnostics["derivative_omega_scale"], 1.5)
+        self.assertGreater(diagnostics["short_range_omega"], 0.0)
+        for phase in ("zero_order_execution", "derivative_execution"):
+            self.assertEqual(
+                diagnostics[phase]["completed_count"],
+                diagnostics["plan"]["ngrids"],
+            )
+            self.assertGreater(diagnostics[phase]["block_count"], 1)
+        short_range = diagnostics["short_range_device_timing"]
+        self.assertLessEqual(
+            short_range["maximum_tasks_per_batch"],
+            POOL_SIZE,
         )
 
     def test_native_kpoint_signed_one_pass_matches_two_pass(self):
@@ -841,6 +902,19 @@ class GDFGPUGradientTest(unittest.TestCase):
         )
         metadata = gpu_gradient_object.result.metadata()
         self.assertEqual(metadata["gdf_bilinear_mode"], "one_pass")
+        if kmesh == (1, 1, 1):
+            reciprocal = metadata["gdf_reciprocal_memory"]
+            self.assertEqual(reciprocal["route"], "gamma")
+            self.assertEqual(
+                reciprocal["zero_order_execution"]["completed_count"],
+                reciprocal["plan"]["ngrids"],
+            )
+            self.assertEqual(
+                reciprocal["derivative_execution"]["completed_count"],
+                reciprocal["plan"]["ngrids"],
+            )
+        else:
+            self.assertIsNone(metadata["gdf_reciprocal_memory"])
         self.assertEqual(
             metadata["z_nuclear_response_batch_plan"]["component_count"],
             3 * gpu.cell.natm,

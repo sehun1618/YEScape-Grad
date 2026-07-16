@@ -222,6 +222,110 @@ analytic contraction을 여러 safe CUDA launch로 나눌 뿐이다. Source HF J
 upstream wrapper도 `contracted_derivative.py::_bounded_sr_derivative_batches`에서 같은
 제약을 적용한다.
 
+### 6.2 Gamma reciprocal derivative의 bounded-memory policy
+
+Gamma one-pass derivative의 long-range 항은 reciprocal vector를 block으로 나누어
+처리한다. 이전 block estimator는 주로 `pair_g`와 `tmp`만 세었기 때문에 큰 occupied
+space에서 동시에 살아 있는 `occupied_g`, auxiliary Fourier tensor 및 derivative
+source를 누락했다. Water64/DZVP 사용자 계산에서 zero-order context가
+
+```text
+occupied_g.shape = (nocc, nocc, 2 * ngrid_block)
+```
+
+를 할당하던 중 `cudaErrorMemoryAllocation`이 발생한 이유다. 이 실패는 SCF나 Z-vector
+수렴 문제가 아니라 block이 실제 peak memory보다 크게 계획된 문제였다.
+
+`df/gdf/reciprocal_memory.py::plan_gamma_reciprocal_blocks`는 한 reciprocal vector당
+명시적 live memory를 zero-order build와 derivative phase에 대해 각각 계산한다. 모든
+배열은 complex128 한 원소에 해당하는 16 byte 단위로 센다.
+
+$$
+B_{\mathrm{build}}/N_G
+=16\left(N_{AO}^2+N_{occ}N_{AO}+N_{occ}^2+2N_{aux}\right),
+$$
+
+$$
+B_{\mathrm{deriv}}/N_G
+=16\left(2N_{AO}^2+N_{occ}N_{AO}+N_{occ}^2+4N_{aux}+2\right).
+$$
+
+실제 block은 두 값 중 큰 값을 사용하며, CuPy pool, FFT 및 contraction workspace를 위해
+가용 device memory를 모두 소비하지 않는다.
+
+$$
+B_{\mathrm{budget}}
+=\min\left(0.65B_{\mathrm{free}},
+B_{\mathrm{free}}-512\ \mathrm{MiB}\right).
+$$
+
+기본 block은 이 budget 안에서 32-vector alignment를 만족하는 최대값이다. 마지막
+block은 32보다 작을 수 있다. 한 vector도 들어가지 않으면 kernel launch 전에 필요한
+byte와 가용 byte를 포함한 `MemoryError`를 낸다.
+
+실행 중 allocator fragmentation이나 외부 GPU 사용 때문에 allocation이 실패할 수도
+있다. 이때 `execute_adaptive_reciprocal_blocks`는 실패한 interval의 시작점을 그대로 둔
+채 block을 절반으로 줄여 다시 시도한다. Worker가 block-local 결과를 모두 만든 뒤에만
+global accumulator에 commit하므로 retry 과정에서 reciprocal vector가 빠지거나 두 번
+더해지지 않는다. Block size 1도 실패하면 CPU fallback 없이 명시적으로 종료한다.
+
+Zero-order phase는 state마다 새 `tmp`와 `occupied_g`를 만들지 않고 최대 occupied 크기의
+workspace를 재사용한다. Derivative phase도 별도 `exchange_source`를 없애고 exchange를
+`ao_source`에 바로 contraction하며, occupied/tmp workspace와 weighted auxiliary Fourier
+tensor를 block 안에서 재사용한다.
+
+성공한 gradient report의 `gdf_reciprocal_memory`에는 다음이 저장된다.
+
+- 계획 당시 free, reserve 및 budget bytes
+- build/derivative bytes per grid와 선택된 최초 block size
+- zero-order 및 derivative의 최종 block size, block 수와 OOM rebatch 횟수
+- 두 phase에서 완료한 reciprocal vector 수
+
+Synthetic Water64/DZ dimension test는 planner가 예전 estimator보다 작은 block과 최소
+35% reserve를 선택하는지 검사하지만, Water64 자체는 자동 test에서 실행하지 않는다.
+강제 OOM test는 같은 실패 interval을 더 작은 block으로 재시도해 모든 vector를 정확히
+한 번 commit하는지 확인한다. 강제 Gamma multi-block 결과와 단일-block 결과는
+$10^{-9}$ Ha/Bohr 이내이며, 전체 GDF GPU module의 35개 Gamma/sampled-k 회귀 test가
+통과했다. 실제 Water64 재실행은 사용자 release evidence로 남긴다.
+
+### 6.3 Gamma derivative의 SR/LR workload balance
+
+GDF derivative의 range separation은 Coulomb operator를 바꾸는 근사가 아니다.
+
+$$
+\frac{1}{r}
+=\frac{\operatorname{erfc}(\omega r)}{r}
++\frac{\operatorname{erf}(\omega r)}{r}.
+$$
+
+첫 항은 real-space short-range kernel, 둘째 항은 reciprocal-space long-range kernel이
+담당한다. 두 항을 충분히 수렴시키면 합은 $\omega$와 무관하다. 다만 같은 정확도에서도
+$\omega$가 작으면 SR image/integral task가 많고, 너무 크면 필요한 reciprocal vector가
+많아진다.
+
+Upstream `_guess_omega(cell)`은 일반 RSDF build를 위한 보수적 heuristic이다. Water8 fused
+gradient의 CUDA-event profile에서는 기본값에서 2.502 s 중 SR derivative kernel이
+2.057 s로 82%를 차지했고 LR derivative는 0.099 s뿐이었다. Source contraction은
+0.0015 s여서 contraction micro-optimization 대상이 아니었다.
+
+Gamma derivative는 기존 heuristic의 1.5배를 사용한다.
+
+$$
+\omega_{\mathrm{Gamma\ deriv}}
+=1.5\,\omega_{\mathrm{guess}}.
+$$
+
+Water8에서 reciprocal vector 수는 3375에서 9261로 늘었지만 SR kernel은 0.856 s로
+줄고 LR derivative는 0.241 s가 됐다. 2.0배에서는 reciprocal vector가 19683개로 늘어 LR
+비용이 다시 커졌으므로 1.5배가 더 빨랐다. 이 scale은 Gamma target-J, component-resolved
+bilinear 및 fused traversal에 공통 적용한다. sampled-k 경로는 변경하지 않았다.
+
+이 변경은 screening threshold나 Coulomb 식을 바꾸지 않는다. Water8/20의 이전 validated
+gradient와 최대 차이는 각각 $7.38\times10^{-12}$와
+$1.65\times10^{-11}$ Ha/Bohr였고, water8 선택 FD 오차는
+$2.09\times10^{-9}$ Ha/Bohr였다. Report에는 `short_range_omega`,
+`derivative_omega_scale`, phase별 CUDA time 및 SR kernel/task layout이 저장된다.
+
 DC-DFT Z-vector에는 reference density $D$와 Hermitian transition density $T_Z$ 사이의
 bilinear derivative가 필요하다. Quadratic RHF two-electron derivative를 $Q(D)$라 하면
 
@@ -404,6 +508,26 @@ maximum gap은 $3.78\times10^{-14}$ Ha/Bohr였다. Synthetic OOM test는 첫 ran
 실패시킨 뒤 batch를 절반으로 줄여 모든 component를 순서대로 정확히 한 번 commit하는지
 검증한다.
 
+2026-07-16 Gamma reciprocal-memory repair 뒤 water8 r2SCAN/Gamma/SZV, 400 Ha를 독립
+process에서 3회씩 다시 측정했다. `one_pass` gradient median은 6.2552 s이고
+`one_pass_fused` median은 4.7703 s였다. 이전 `one_pass` median 7.0863 s와 비교하면 새
+workspace/lifetime policy가 11.7% 빨랐고, fused route는 새 component-resolved route보다
+23.7% 빨랐다. Water8 7개 analytic gradient의 최대 route/run 차이는
+$7.50\times10^{-14}$ Ha/Bohr이고 선택 FD 한 성분의 오차는
+$2.09\times10^{-9}$ Ha/Bohr다.
+
+제한된 water20 no-FD gate는 32.1472 s에 완료됐으며 이전 검증 gradient와 최대
+$3.23\times10^{-14}$ Ha/Bohr 차이를 보였다. Water8과 water20 모두 3375 reciprocal
+vector를 3360+15의 두 block으로 완전히 처리했고 OOM rebatch는 0회였다. 이 입력에서는
+계획된 working set이 각각 약 0.506 GB와 3.122 GB였고, planner는 약 35.0 GB를 reserve로
+남겼다. Raw queue 정의는 `benchmark/gdf_post_memory_repair_timing.json`, compact evidence는
+`gpu/validation/results/2026-07-16_gdf_optimization.json`에 있다.
+
+같은 queue를 Gamma derivative omega 최적화 뒤 다시 3회 실행했다. `one_pass` median은
+4.3592 s로 30.3%, fused median은 3.6517 s로 23.4% 더 빨랐다. Water20 limited no-FD는
+32.1472 s에서 21.1607 s로 줄었다. 최종 GDF GPU 35-test module은 551.310 s에 모두
+통과했다.
+
 ## 9. Gamma와 sampled k-point 차이
 
 Gamma에서는 `nkpts=1`, 모든 central value는 실수로 축약할 수 있다. sampled k-point에서는
@@ -504,3 +628,7 @@ python examples/03_gdf_gpu_kpoint.py
    `_ft_ip_ovlp`가 나타나면 새 source가 아닌 이전 process/wheel을 사용 중인지 먼저
    확인한다. 어느 경우에도 metadata의 `silent_cpu_fallback`과 `host_boundaries`를 함께
    확인한다.
+7. **Gamma large-system reciprocal OOM**: report의 `gdf_reciprocal_memory.plan`에서 free,
+   reserve, bytes-per-grid 및 최초 block을 확인하고, execution의 `rebatch_count`와
+   `completed_count`를 검사한다. Block size 1 실패는 input이 현재 device memory에 맞지
+   않는 명시적 한계이며 CPU fallback으로 숨기지 않는다.

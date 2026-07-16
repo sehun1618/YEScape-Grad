@@ -23,9 +23,9 @@ combines the quadratic sources for ``D + T`` and ``D - T`` before applying
 the nuclear derivative kernels.  The expensive SR, LR, metric, auxiliary
 centre, and Ewald derivative traversals are therefore each executed once.
 
-The route is deliberately private and Gamma-only.  Sampled k-points require
-momentum-pair bookkeeping and must pass their own parity gate before this
-implementation can replace the authoritative two-pass production route.
+The route is deliberately private and Gamma-only.  Sampled k-points use a
+separate momentum-pair implementation, while the two-pass polarization route
+is retained as an independent reference for parity checks.
 """
 
 from __future__ import annotations
@@ -62,6 +62,11 @@ from gpu4pyscf.pbc.tools.pbc import madelung
 from pyscf import lib
 from pyscf.gto import ATOM_OF
 
+from .reciprocal_memory import (
+    execute_adaptive_reciprocal_blocks,
+    plan_gamma_reciprocal_blocks,
+)
+
 
 @dataclass
 class _QuadraticState:
@@ -81,6 +86,35 @@ class _QuadraticState:
         return int(self.factor_l.shape[1])
 
 
+class _DevicePhaseTimeline:
+    """Record non-synchronizing CUDA-event boundaries for one traversal."""
+
+    def __init__(self, enabled):
+        self.enabled = bool(enabled)
+        self._events = []
+
+    def mark(self, name):
+        if not self.enabled:
+            return
+        event = cp.cuda.Event()
+        event.record()
+        self._events.append((str(name), event))
+
+    def metadata(self):
+        phases = {}
+        for (_previous_name, previous), (name, current) in zip(
+            self._events, self._events[1:]
+        ):
+            phases[name] = float(
+                cp.cuda.get_elapsed_time(previous, current) * 1.0e-3
+            )
+        return {
+            "measurement": "CUDA event elapsed time; host-only work excluded",
+            "phases_s": phases,
+            "total_s": float(sum(phases.values())),
+        }
+
+
 def gamma_signed_energy_derivative(
     int3c2e_opt,
     reference_density,
@@ -89,6 +123,7 @@ def gamma_signed_energy_derivative(
     exxdiv="ewald",
     omega=0.0,
     verbose=None,
+    memory_diagnostics=None,
 ):
     """Return ``Q(D+T)-Q(D-T)`` with one native derivative traversal.
 
@@ -113,6 +148,7 @@ def gamma_signed_energy_derivative(
         exxdiv=exxdiv,
         omega=omega,
         verbose=verbose,
+        memory_diagnostics=memory_diagnostics,
     )
 
 
@@ -124,6 +160,7 @@ def gamma_target_j_plus_signed_energy_derivative(
     exxdiv="ewald",
     omega=0.0,
     verbose=None,
+    memory_diagnostics=None,
 ):
     """Return target-J plus the RHF bilinear derivative in one traversal.
 
@@ -157,6 +194,7 @@ def gamma_target_j_plus_signed_energy_derivative(
         exxdiv=exxdiv,
         omega=omega,
         verbose=verbose,
+        memory_diagnostics=memory_diagnostics,
     )
 
 
@@ -184,9 +222,12 @@ def _weighted_energy_derivative(
     exxdiv,
     omega,
     verbose,
+    memory_diagnostics,
 ):
     """Apply one native derivative traversal to weighted quadratic states."""
 
+    timeline = _DevicePhaseTimeline(memory_diagnostics is not None)
+    timeline.mark("start")
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
     reference = states[0].original_density
@@ -215,6 +256,7 @@ def _weighted_energy_derivative(
         batch_size=batch_size,
         block_size=block_size,
     )
+    timeline.mark("short_range_zero_order")
 
     precision = auxcell.precision * 1.0e-6
     auxcell.rcut = _estimate_sr_2c2e_rcut(
@@ -222,6 +264,7 @@ def _weighted_energy_derivative(
     )
     int2c2e_opt = Int2c2eOpt(auxcell)
     j2c = int2c2e_opt.int2c2e(sort_output=False)
+    timeline.mark("two_center_metric")
 
     reciprocal = _ReciprocalContext.build(
         int3c2e_opt,
@@ -231,16 +274,19 @@ def _weighted_energy_derivative(
         j_addr=j_addr,
         omega=omega,
     )
+    timeline.mark("reciprocal_zero_order")
     metric = _metric_inverse_in_primitive_basis(auxcell, reciprocal.j2c)
     for state in states:
         state.j3c_oo = cp.einsum(
             "uv,vij->uij", metric, state.j3c_oo, optimize=True
         )
         state.auxvec = state.j3c_oo.trace(axis1=1, axis2=2)
+    timeline.mark("metric_factorization_and_state_solve")
     metric_source = _signed_metric_source(states, naux)
     result = -int2c2e_opt.energy_ip1_per_atom(metric_source)
+    timeline.mark("metric_derivative")
 
-    result += _long_range_derivative(
+    long_range, derivative_execution = _long_range_derivative(
         int3c2e_opt,
         reciprocal,
         states,
@@ -248,6 +294,9 @@ def _weighted_energy_derivative(
         nao=nao,
         naux=naux,
     )
+    result += long_range
+    timeline.mark("long_range_derivative")
+    short_range_device_timing = {}
     result += _short_range_derivative(
         int3c2e_opt,
         states,
@@ -256,15 +305,34 @@ def _weighted_energy_derivative(
         block_size=block_size,
         nao=nao,
         naux=naux,
+        device_timing=short_range_device_timing,
     )
+    timeline.mark("short_range_derivative")
     result += _ewald_derivative(
         cell,
         states,
         exxdiv=exxdiv,
         omega=omega,
     )
+    timeline.mark("ewald_derivative")
     log.debug1("completed one-pass Gamma signed GDF derivative")
-    return np.asarray(result, dtype=float)
+    host_result = np.asarray(result, dtype=float)
+    if memory_diagnostics is not None:
+        memory_diagnostics.clear()
+        memory_diagnostics.update(
+            {
+                "route": "gamma",
+                "short_range_omega": float(int3c2e_opt.omega),
+                "plan": reciprocal.memory_plan.metadata(),
+                "zero_order_execution": (
+                    reciprocal.zero_order_execution.metadata()
+                ),
+                "derivative_execution": derivative_execution.metadata(),
+                "device_phase_timing": timeline.metadata(),
+                "short_range_device_timing": short_range_device_timing,
+            }
+        )
+    return host_result
 
 
 def _prepare_state(
@@ -369,6 +437,8 @@ class _ReciprocalContext:
     coulomb: cp.ndarray
     vectors: cp.ndarray
     block_size: int
+    memory_plan: object
+    zero_order_execution: object
 
     @classmethod
     def build(
@@ -408,49 +478,116 @@ class _ReciprocalContext:
             ngrids=len(vectors),
         )
         free = int(get_avail_mem(exclude_memory_pool=True))
-        nao = states[0].density.shape[0]
+        nao = int(states[0].density.shape[0])
+        naux = int(auxcell.ao_loc[-1])
         nocc_max = max(state.nocc for state in states)
-        block = max(32, int(free // max(1, (nao + nocc_max) * nao * 16)))
-        block = min(block // 32 * 32, len(vectors))
-        if block <= 0:
-            raise MemoryError("insufficient GPU memory for Gamma GDF LR block")
+        memory_plan = plan_gamma_reciprocal_blocks(
+            len(vectors),
+            nao,
+            naux,
+            nocc_max,
+            free_device_bytes=free,
+        )
 
-        for p0, p1 in lib.prange(0, len(vectors), block):
-            ngrid = p1 - p0
+        def allocate_block(p0, p1):
+            ngrid = int(p1 - p0)
             aux_g = ft_ao.ft_ao(auxcell, vectors[p0:p1]).T
-            aux_weighted = aux_g * coulomb[p0:p1]
+            aux_weighted = cp.empty_like(aux_g)
+            cp.multiply(aux_g, coulomb[p0:p1], out=aux_weighted)
+            pair_g = evaluator(vectors[p0:p1])
+            pair_g = pair_g.view(np.float64).reshape(
+                nao, nao, ngrid * 2
+            )
+            pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+            return _ZeroOrderReciprocalBlock(
+                aux_g=aux_g,
+                aux_weighted=aux_weighted,
+                pair_g=pair_g,
+                tmp=cp.empty((nocc_max, nao, ngrid * 2)),
+                occupied=cp.empty((nocc_max, nocc_max, ngrid * 2)),
+            )
+
+        def accept_block(_p0, _p1, workspace):
             contract(
                 "iG,jG->ij",
-                aux_g.view(np.float64),
-                aux_weighted.view(np.float64),
+                workspace.aux_g.view(np.float64),
+                workspace.aux_weighted.view(np.float64),
                 beta=1,
                 out=j2c,
             )
-            pair_g = evaluator(vectors[p0:p1])
-            pair_g = pair_g.view(np.float64).reshape(nao, nao, ngrid * 2)
-            pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
             for state in states:
-                tmp = cp.empty((state.nocc, nao, ngrid * 2))
-                occupied_g = cp.empty(
-                    (state.nocc, state.nocc, ngrid * 2)
+                tmp = workspace.tmp[: state.nocc]
+                occupied_g = workspace.occupied[
+                    : state.nocc, : state.nocc
+                ]
+                contract(
+                    "pqG,pi->iqG",
+                    workspace.pair_g,
+                    state.factor_r,
+                    out=tmp,
                 )
-                contract("pqG,pi->iqG", pair_g, state.factor_r, out=tmp)
-                contract("iqG,qj->ijG", tmp, state.factor_l, out=occupied_g)
+                contract(
+                    "iqG,qj->ijG",
+                    tmp,
+                    state.factor_l,
+                    out=occupied_g,
+                )
                 contract(
                     "rG,ijG->rij",
-                    aux_weighted.view(np.float64),
+                    workspace.aux_weighted.view(np.float64),
                     occupied_g,
                     beta=1,
                     out=state.j3c_oo,
                 )
+
+        execution = execute_adaptive_reciprocal_blocks(
+            len(vectors),
+            memory_plan.initial_block_size,
+            allocate_block,
+            accept_block,
+            phase="zero_order",
+            is_oom=_is_gpu_out_of_memory,
+            block_alignment=memory_plan.block_alignment,
+            on_oom=_release_cached_gpu_blocks,
+        )
         return cls(
             j2c=j2c,
             ft_opt=ft_opt,
             evaluator=evaluator,
             coulomb=coulomb,
             vectors=vectors,
-            block_size=int(block),
+            block_size=execution.final_block_size,
+            memory_plan=memory_plan,
+            zero_order_execution=execution,
         )
+
+
+@dataclass(frozen=True)
+class _ZeroOrderReciprocalBlock:
+    """Fully allocated workspace committed only after allocation succeeds."""
+
+    aux_g: cp.ndarray
+    aux_weighted: cp.ndarray
+    pair_g: cp.ndarray
+    tmp: cp.ndarray
+    occupied: cp.ndarray
+
+
+def _is_gpu_out_of_memory(error) -> bool:
+    if isinstance(error, cp.cuda.memory.OutOfMemoryError):
+        return True
+    message = str(error).lower()
+    return (
+        error.__class__.__name__ == "CUDARuntimeError"
+        and (
+            "out of memory" in message
+            or "cudaerrormemoryallocation" in message
+        )
+    )
+
+
+def _release_cached_gpu_blocks(_start, _stop, _error):
+    cp.get_default_memory_pool().free_all_blocks()
 
 
 def _gamma_coulomb_vector(coulomb, *, ngrids):
@@ -529,104 +666,49 @@ def _long_range_derivative(
     kernel = libpbc.PBC_ft_aopair_ek_ip1
     ao_derivative = cp.zeros((cell.natm, 3))
     auxiliary_partial = cp.zeros((3, naux))
+    pair_addresses = ft_opt.pair_and_diag_indices(
+        cart=True, original_ao_order=False
+    )[0]
+    i_addr, j_addr = divmod(pair_addresses, nao)
 
-    for p0, p1 in lib.prange(0, len(vectors), block_size):
-        ngrid = p1 - p0
-        pair_g = evaluator(vectors[p0:p1])
-        pair_g = pair_g.view(np.float64).reshape(nao, nao, ngrid * 2)
-        pair_addresses = ft_opt.pair_and_diag_indices(
-            cart=True, original_ao_order=False
-        )[0]
-        i_addr, j_addr = divmod(pair_addresses, nao)
-        pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
-
-        aux_g = ft_ao.ft_ao(auxcell, vectors[p0:p1]).T
-        derivative_aux_source = cp.zeros((naux, ngrid * 2))
-        ao_source = cp.zeros((nao, nao, ngrid * 2))
-
-        for state in states:
-            rho_g = cp.einsum(
-                "pqG,qp->G", pair_g, state.density, optimize=True
-            )
-            derivative_aux_source += (
-                state.coulomb_weight
-                * state.auxvec[:, None]
-                * rho_g[None, :]
-            )
-
-            tmp = cp.empty((state.nocc, nao, ngrid * 2))
-            occupied_g = cp.empty(
-                (state.nocc, state.nocc, ngrid * 2)
-            )
-            contract("pqG,pi->iqG", pair_g, state.factor_r, out=tmp)
-            contract("iqG,qj->ijG", tmp, state.factor_l, out=occupied_g)
-            contract(
-                "rji,ijG->rG",
-                state.j3c_oo,
-                occupied_g,
-                alpha=-0.5 * state.exchange_weight,
-                beta=1.0,
-                out=derivative_aux_source,
-            )
-
-            aux_weighted_conj = (
-                aux_g.conj() * coulomb[p0:p1]
-            ).view(np.float64)
-            occupied_aux_g = (
-                state.j3c_oo.reshape(naux, -1).T @ aux_weighted_conj
-            ).reshape(state.nocc, state.nocc, ngrid * 2)
-            contract("jiG,qi->jqG", occupied_aux_g, state.factor_r, out=tmp)
-            exchange_source = cp.empty((nao, nao, ngrid * 2))
-            contract("jqG,pj->pqG", tmp, state.factor_l, out=exchange_source)
-            potential_g = state.auxvec @ aux_weighted_conj
-            ao_source += (
-                state.coulomb_weight
-                * state.density[:, :, None]
-                * potential_g[None, None, :]
-                - 0.5 * state.exchange_weight * exchange_source
-            )
-
-        contract(
-            "sr,sG->rG",
+    def worker(p0, p1):
+        return _evaluate_long_range_block(
+            cell,
+            auxcell,
+            states,
             metric_source,
-            aux_g.view(np.float64),
-            alpha=-1.0,
-            beta=1.0,
-            out=derivative_aux_source,
+            vectors,
+            coulomb,
+            evaluator,
+            p0,
+            p1,
+            nao=nao,
+            naux=naux,
+            i_addr=i_addr,
+            j_addr=j_addr,
+            kernel=kernel,
+            aft_envs=aft_envs,
+            shell_offsets=shell_offsets,
+            shared_memory=shared_memory,
+            bas_ij_idx=bas_ij_idx,
+            bas_ij_img_idx=bas_ij_img_idx,
+            permutation_symmetry=ft_opt.permutation_symmetry,
         )
-        derivative_aux_source = derivative_aux_source.view(np.complex128)
-        derivative_aux_source *= coulomb[p0:p1]
-        derivative_aux_source = derivative_aux_source.view(np.float64)
 
-        derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
-        for axis in range(3):
-            cp.multiply(
-                aux_g,
-                -1j * vectors[p0:p1, axis],
-                out=derivative_aux_g,
-            )
-            auxiliary_partial[axis] += cp.einsum(
-                "ag,ag->a",
-                derivative_aux_g.view(np.float64),
-                derivative_aux_source,
-            )
+    def accept_result(_p0, _p1, value):
+        ao_derivative[:] += value.ao_derivative
+        auxiliary_partial[:] += value.auxiliary_partial
 
-        vector_transpose = cp.asarray(vectors[p0:p1].T.ravel())
-        error = kernel(
-            ctypes.cast(ao_derivative.data.ptr, ctypes.c_void_p),
-            ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
-            ctypes.cast(vector_transpose.data.ptr, ctypes.c_void_p),
-            ctypes.byref(aft_envs),
-            ctypes.c_int(len(shell_offsets) - 1),
-            ctypes.c_int(ngrid),
-            ctypes.c_int(shared_memory),
-            ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
-            ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
-            ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
-            ctypes.c_int(ft_opt.permutation_symmetry),
-        )
-        if error != 0:
-            raise RuntimeError("PBC_ft_aopair_ek_ip1 failed")
+    execution = execute_adaptive_reciprocal_blocks(
+        len(vectors),
+        block_size,
+        worker,
+        accept_result,
+        phase="long_range_derivative",
+        is_oom=_is_gpu_out_of_memory,
+        block_alignment=reciprocal.memory_plan.block_alignment,
+        on_oom=_release_cached_gpu_blocks,
+    )
 
     dimensions = auxcell.ao_loc[1:] - auxcell.ao_loc[:-1]
     atom_for_aux = np.repeat(auxcell._bas[:, ATOM_OF], dimensions)
@@ -640,7 +722,163 @@ def _long_range_derivative(
         result[np.unique(atom_for_aux)] += auxiliary_grouped
     else:
         result += auxiliary_grouped
-    return result
+    return result, execution
+
+
+@dataclass(frozen=True)
+class _LongRangeBlockResult:
+    """Block-local derivative increments committed after successful work."""
+
+    ao_derivative: cp.ndarray
+    auxiliary_partial: cp.ndarray
+
+
+def _evaluate_long_range_block(
+    cell,
+    auxcell,
+    states,
+    metric_source,
+    vectors,
+    coulomb,
+    evaluator,
+    p0,
+    p1,
+    *,
+    nao,
+    naux,
+    i_addr,
+    j_addr,
+    kernel,
+    aft_envs,
+    shell_offsets,
+    shared_memory,
+    bas_ij_idx,
+    bas_ij_img_idx,
+    permutation_symmetry,
+):
+    """Evaluate one reciprocal block without mutating global accumulators."""
+
+    ngrid = int(p1 - p0)
+    pair_g = evaluator(vectors[p0:p1])
+    pair_g = pair_g.view(np.float64).reshape(nao, nao, ngrid * 2)
+    pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+
+    aux_g = ft_ao.ft_ao(auxcell, vectors[p0:p1]).T
+    derivative_aux_source = cp.zeros((naux, ngrid * 2))
+    ao_source = cp.zeros((nao, nao, ngrid * 2))
+    aux_weighted_conj = cp.empty_like(aux_g)
+    cp.conj(aux_g, out=aux_weighted_conj)
+    aux_weighted_conj *= coulomb[p0:p1]
+    aux_weighted_real = aux_weighted_conj.view(np.float64)
+
+    nocc_max = max(state.nocc for state in states)
+    tmp_workspace = cp.empty((nocc_max, nao, ngrid * 2))
+    occupied_workspace = cp.empty(
+        (nocc_max, nocc_max, ngrid * 2)
+    )
+    rho_g = cp.empty(ngrid * 2)
+    potential_g = cp.empty(ngrid * 2)
+
+    for state in states:
+        tmp = tmp_workspace[: state.nocc]
+        occupied_g = occupied_workspace[: state.nocc, : state.nocc]
+        contract("pqG,qp->G", pair_g, state.density, out=rho_g)
+        contract(
+            "r,G->rG",
+            state.auxvec,
+            rho_g,
+            alpha=state.coulomb_weight,
+            beta=1.0,
+            out=derivative_aux_source,
+        )
+
+        contract("pqG,pi->iqG", pair_g, state.factor_r, out=tmp)
+        contract("iqG,qj->ijG", tmp, state.factor_l, out=occupied_g)
+        contract(
+            "rji,ijG->rG",
+            state.j3c_oo,
+            occupied_g,
+            alpha=-0.5 * state.exchange_weight,
+            beta=1.0,
+            out=derivative_aux_source,
+        )
+
+        contract(
+            "rij,rG->ijG",
+            state.j3c_oo,
+            aux_weighted_real,
+            out=occupied_g,
+        )
+        contract("jiG,qi->jqG", occupied_g, state.factor_r, out=tmp)
+        contract(
+            "jqG,pj->pqG",
+            tmp,
+            state.factor_l,
+            alpha=-0.5 * state.exchange_weight,
+            beta=1.0,
+            out=ao_source,
+        )
+        contract(
+            "r,rG->G",
+            state.auxvec,
+            aux_weighted_real,
+            out=potential_g,
+        )
+        contract(
+            "pq,G->pqG",
+            state.density,
+            potential_g,
+            alpha=state.coulomb_weight,
+            beta=1.0,
+            out=ao_source,
+        )
+
+    contract(
+        "sr,sG->rG",
+        metric_source,
+        aux_g.view(np.float64),
+        alpha=-1.0,
+        beta=1.0,
+        out=derivative_aux_source,
+    )
+    derivative_aux_complex = derivative_aux_source.view(np.complex128)
+    derivative_aux_complex *= coulomb[p0:p1]
+
+    derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
+    auxiliary_partial = cp.empty((3, naux))
+    for axis in range(3):
+        cp.multiply(
+            aux_g,
+            -1j * vectors[p0:p1, axis],
+            out=derivative_aux_g,
+        )
+        auxiliary_partial[axis] = cp.einsum(
+            "ag,ag->a",
+            derivative_aux_g.view(np.float64),
+            derivative_aux_source,
+        )
+
+    ao_derivative = cp.zeros((cell.natm, 3))
+    vector_transpose = cp.asarray(vectors[p0:p1].T.ravel())
+    error = kernel(
+        ctypes.cast(ao_derivative.data.ptr, ctypes.c_void_p),
+        ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
+        ctypes.cast(vector_transpose.data.ptr, ctypes.c_void_p),
+        ctypes.byref(aft_envs),
+        ctypes.c_int(len(shell_offsets) - 1),
+        ctypes.c_int(ngrid),
+        ctypes.c_int(shared_memory),
+        ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
+        ctypes.c_int(permutation_symmetry),
+    )
+    if error != 0:
+        raise RuntimeError("PBC_ft_aopair_ek_ip1 failed")
+    return _LongRangeBlockResult(
+        ao_derivative=ao_derivative,
+        auxiliary_partial=auxiliary_partial,
+    )
 
 
 def _short_range_derivative(
@@ -652,6 +890,7 @@ def _short_range_derivative(
     block_size,
     nao,
     naux,
+    device_timing=None,
 ):
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
@@ -679,6 +918,16 @@ def _short_range_derivative(
         auxcell.uniq_l_ctr,
         min(batch_size, auxiliary_shell_limit),
     )
+    auxiliary_shell_counts = np.diff(aux_shell_offsets)
+    maximum_auxiliary_shells = max(1, int(auxiliary_shell_counts.max()))
+    shell_pair_counts = np.diff(cp.asnumpy(shell_pair_offsets))
+    maximum_shell_pairs = max(1, int(shell_pair_counts.max()))
+    maximum_tasks = maximum_shell_pairs * maximum_auxiliary_shells
+    if maximum_tasks > POOL_SIZE:
+        raise RuntimeError(
+            "Gamma GDF SR derivative batch exceeds CUDA POOL_SIZE: "
+            f"{maximum_tasks} > {POOL_SIZE}"
+        )
     aux_shell_offsets_gpu = cp.asarray(aux_shell_offsets, dtype=np.int32)
     pool = cp.empty(
         gpu_specs["multiProcessorCount"]
@@ -699,8 +948,12 @@ def _short_range_derivative(
     diffuse_coefficients = cp.asarray(int3c2e_opt.diffuse_coefs)
     log_cutoff = math.log(int3c2e_opt.cutoff)
     aux0 = 0
+    timing_events = []
 
     for batch_id, _ in enumerate(aux_patterns[:, 0]):
+        source_start = cp.cuda.Event() if device_timing is not None else None
+        if source_start is not None:
+            source_start.record()
         aux_ao_offset = auxcell.ao_loc[aux_shell_offsets[batch_id]]
         naux_batch = (
             auxcell.ao_loc[aux_shell_offsets[batch_id + 1]] - aux_ao_offset
@@ -738,6 +991,10 @@ def _short_range_derivative(
             )
             aux0 = aux1
 
+        source_end = cp.cuda.Event() if device_timing is not None else None
+        if source_end is not None:
+            source_end.record()
+
         error = libpbc.PBCsr_ejk_int3c2e_ip1(
             ctypes.cast(ao_derivative.data.ptr, ctypes.c_void_p),
             ctypes.cast(auxiliary_derivative.data.ptr, ctypes.c_void_p),
@@ -766,10 +1023,43 @@ def _short_range_derivative(
         )
         if error != 0:
             raise RuntimeError("PBCsr_ejk_int3c2e_ip1 failed")
+        if device_timing is not None:
+            kernel_end = cp.cuda.Event()
+            kernel_end.record()
+            timing_events.append((source_start, source_end, kernel_end))
 
     ao_derivative *= 2.0
     auxiliary_derivative *= 2.0
-    return (ao_derivative + auxiliary_derivative).get()
+    result = (ao_derivative + auxiliary_derivative).get()
+    if device_timing is not None:
+        source_seconds = sum(
+            cp.cuda.get_elapsed_time(start, source_end) * 1.0e-3
+            for start, source_end, _kernel_end in timing_events
+        )
+        kernel_seconds = sum(
+            cp.cuda.get_elapsed_time(source_end, kernel_end) * 1.0e-3
+            for _start, source_end, kernel_end in timing_events
+        )
+        device_timing.clear()
+        device_timing.update(
+            {
+                "measurement": (
+                    "CUDA event elapsed time; host-only work excluded"
+                ),
+                "batch_count": len(timing_events),
+                "shell_pair_group_count": int(len(shell_pair_counts)),
+                "shell_pair_limit": int(shell_pair_limit),
+                "maximum_shell_pairs_per_group": maximum_shell_pairs,
+                "maximum_auxiliary_shells_per_batch": (
+                    maximum_auxiliary_shells
+                ),
+                "maximum_tasks_per_batch": int(maximum_tasks),
+                "task_pool_size": int(POOL_SIZE),
+                "source_contraction_s": float(source_seconds),
+                "integral_kernel_s": float(kernel_seconds),
+            }
+        )
+    return result
 
 
 def _ewald_derivative(cell, states, *, exxdiv, omega):

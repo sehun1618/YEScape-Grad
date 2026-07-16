@@ -82,6 +82,7 @@ class GDFGradientResult:
     z_nuclear_response_batch_plan: NuclearResponseBatchPlan | None
     z_nuclear_response_batch_execution: NuclearResponseBatchExecution | None
     gdf_bilinear_mode: str
+    gdf_reciprocal_memory: dict[str, object] | None
     target_fock_workspace_reused: bool
     timings_s: dict[str, float]
 
@@ -146,6 +147,7 @@ class GDFGradientResult:
             "device": "gpu",
             "gdf_setup_mode": self.gdf_setup_mode,
             "gdf_bilinear_mode": self.gdf_bilinear_mode,
+            "gdf_reciprocal_memory": self.gdf_reciprocal_memory,
             "gradient_partition": (
                 "explicit_response_coupled"
                 if self.fused_target_j_z_bilinear is not None
@@ -275,6 +277,7 @@ def _gaussian_df_gpu_gradient(
         nkpts=len(np.asarray(dc_mf.with_df.kpts).reshape(-1, 3)),
     )
     fused_two_electron = gdf_bilinear_mode == "one_pass_fused"
+    reciprocal_memory_diagnostics = {}
 
     if progress_callback is not None:
         progress_callback("gradient_target_fock_rhs", state="started")
@@ -506,6 +509,7 @@ def _gaussian_df_gpu_gradient(
                     context.density,
                     transition_density,
                     exxdiv=context.source_mf.exxdiv,
+                    memory_diagnostics=reciprocal_memory_diagnostics,
                 )
             )
         else:
@@ -516,6 +520,7 @@ def _gaussian_df_gpu_gradient(
                 exxdiv=context.source_mf.exxdiv,
                 mode=gdf_bilinear_mode,
                 nkpts=context.nkpts,
+                memory_diagnostics=reciprocal_memory_diagnostics,
             )
         cp.cuda.Stream.null.synchronize()
         timings[
@@ -619,6 +624,9 @@ def _gaussian_df_gpu_gradient(
         z_nuclear_response_batch_plan=z_nuclear_batch_plan,
         z_nuclear_response_batch_execution=z_nuclear_batch_execution,
         gdf_bilinear_mode=gdf_bilinear_mode,
+        gdf_reciprocal_memory=(
+            reciprocal_memory_diagnostics or None
+        ),
         target_fock_workspace_reused=target_fock_workspace_reused,
         timings_s=timings,
     )
@@ -676,6 +684,7 @@ def _native_bilinear_derivative(
     exxdiv,
     mode,
     nkpts,
+    memory_diagnostics,
 ):
     if mode == "two_pass":
         return restricted_hf_bilinear_derivative(
@@ -690,6 +699,7 @@ def _native_bilinear_derivative(
             reference_density,
             response_density,
             exxdiv=exxdiv,
+            memory_diagnostics=memory_diagnostics,
         )
     if nkpts != 1:
         raise NotImplementedError(
@@ -700,6 +710,7 @@ def _native_bilinear_derivative(
         reference_density,
         response_density,
         exxdiv=exxdiv,
+        memory_diagnostics=memory_diagnostics,
     )
 
 

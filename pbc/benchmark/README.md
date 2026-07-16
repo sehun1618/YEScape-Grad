@@ -121,6 +121,21 @@ process와 memory를 공유할 때만 더 작은 값/cap을 지정한다. `repor
 저장된다. OOM은 batch를 절반으로 줄여 같은 component부터 재시도하며 CPU fallback으로
 바뀌지 않는다.
 
+Gamma native GDF reciprocal derivative에는 별도의 자동 memory planner가 항상 적용된다.
+사용자가 block size를 추측해서 지정할 필요는 없다. `report.json`의
+`gradient_metadata.gdf_reciprocal_memory`에는 다음 정보가 저장된다.
+
+- 계획 당시 free/total GPU memory와 실제 계산에 허용한 byte budget
+- zero-order 및 derivative live-tensor estimate와 최초 reciprocal block size
+- 실제 처리한 block 수, 최소/최대 block size와 전체 reciprocal-vector 수
+- OOM 때문에 동일 interval을 줄여 다시 계산한 횟수
+- SR/LR/metric/auxiliary/Ewald phase별 CUDA event timing
+- Gamma derivative에 사용한 SR/LR 분할값 `short_range_omega`와 scale
+
+Block 결과는 해당 interval 계산이 성공한 뒤에만 commit된다. 따라서 OOM 재시도에서도
+reciprocal vector를 빠뜨리거나 두 번 더하지 않으며, block size 1도 할당할 수 없으면
+CPU fallback 대신 명시적 memory error로 종료한다.
+
 ## 3. FD 선택
 
 - `run_fd: false`: analytic energy/gradient timing만 계산하고 accuracy field는 `null`

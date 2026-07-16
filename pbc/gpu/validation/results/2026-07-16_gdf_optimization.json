@@ -1,0 +1,78 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_gdf_optimization_v1",
+  "overall_status": "pass",
+  "water64_executed_by_codex": false,
+  "tests": {
+    "reciprocal_planner_scheduler": {
+      "count": 7,
+      "status": "pass"
+    },
+    "gdf_gpu_module": {
+      "count": 35,
+      "elapsed_s": 551.310,
+      "status": "pass"
+    }
+  },
+  "bounded_memory_baseline": {
+    "water8_one_pass_median_gradient_wall_s": 6.255170932970941,
+    "water8_fused_median_gradient_wall_s": 4.770263268612325,
+    "water20_gradient_wall_s": 32.14717537537217,
+    "water8_selected_fd_max_error_ha_per_bohr": 2.0870809941397894e-09,
+    "water20_max_gap_vs_previous_gradient_ha_per_bohr": 3.22519788653608e-14,
+    "water20_reciprocal_plan": {
+      "ngrids": 3375,
+      "initial_block_size": 3360,
+      "completed_count_per_phase": 3375,
+      "rebatch_count_per_phase": 0,
+      "estimated_block_working_bytes": 3122488320,
+      "reserve_bytes": 35027940148
+    }
+  },
+  "gamma_derivative_profile": {
+    "baseline_fused_wall_s": 2.507545522414148,
+    "baseline_device_phase_s": {
+      "short_range_derivative": 2.0606162109375,
+      "long_range_derivative": 0.09874720001220703,
+      "reciprocal_zero_order": 0.035240673065185545,
+      "metric_derivative": 0.11294115447998047
+    },
+    "baseline_short_range_s": {
+      "source_contraction": 0.0014783360287547113,
+      "integral_kernel": 2.0569429931640624
+    },
+    "selected_omega_scale": 1.5,
+    "selected_omega_water8": 0.2964771423329446,
+    "selected_reciprocal_vector_count": 9261,
+    "selected_device_phase_s": {
+      "short_range_derivative": 0.8596644287109375,
+      "long_range_derivative": 0.2408901824951172,
+      "reciprocal_zero_order": 0.09119398498535157,
+      "metric_derivative": 0.047092929840087894
+    },
+    "rejected_omega_scale": 2.0,
+    "rejected_reason": "19683 reciprocal vectors increased LR cost and total time"
+  },
+  "optimized_timing": {
+    "water8_one_pass_gradient_wall_s": [
+      4.347903505899012,
+      4.359202624298632,
+      4.3620659448206425
+    ],
+    "water8_one_pass_median_gradient_wall_s": 4.359202624298632,
+    "water8_one_pass_speedup_percent": 30.310415638342985,
+    "water8_fused_gradient_wall_s": [
+      3.7377954702824354,
+      3.642656261101365,
+      3.651699174195528
+    ],
+    "water8_fused_median_gradient_wall_s": 3.651699174195528,
+    "water8_fused_speedup_percent": 23.44868682147576,
+    "water8_selected_fd_max_error_ha_per_bohr": 2.0923407728634658e-09,
+    "water8_max_gap_vs_pre_omega_gradient_ha_per_bohr": 7.381317779220353e-12,
+    "water20_gradient_wall_s": 21.16071278601885,
+    "water20_speedup_percent": 34.1749440190168,
+    "water20_z_vector_residual_max_abs": 5.71881951516584e-14,
+    "water20_max_gap_vs_pre_omega_gradient_ha_per_bohr": 1.650131420394274e-11
+  },
+  "source_queue": "pbc/benchmark/gdf_post_memory_repair_timing.json"
+}
