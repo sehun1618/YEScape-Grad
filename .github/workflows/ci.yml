@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu-and-packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build and CPU test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build pytest "pyscf>=2.13"
+
+      - name: Build and test molecular CPU package
+        run: |
+          python -m build --wheel grad/cpu
+          python -m pip install grad/cpu
+          python -m pytest -q grad/cpu/tests
+
+      - name: Build and test periodic CPU package
+        run: |
+          python -m build --wheel pbc/cpu
+          python -m pip install pbc/cpu
+          python -m unittest discover \
+            -s pbc/cpu/tests -p 'test_*.py' -v
+
+      - name: Test benchmark input layer
+        run: |
+          python -m unittest discover \
+            -s pbc/benchmark/tests -p 'test_*.py' -v
+
+      - name: Build GPU package wheels without importing CUDA
+        run: |
+          python -m build --wheel grad/gpu
+          python -m build --wheel pbc/gpu

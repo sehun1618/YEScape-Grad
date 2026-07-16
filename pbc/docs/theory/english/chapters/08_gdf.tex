@@ -1,0 +1,147 @@
+\section{GDF: auxiliary metrics and nuclear response}
+\label{sec:gdf}
+
+\subsection{Fitting AO-pair densities}
+
+Gaussian density fitting represents AO-pair densities in an atom-centered
+auxiliary basis $\{P\}$.  For a k-point pair $(\vk_i,\vk_j)$ with momentum
+transfer $\vq=\vk_j-\vk_i$, the three-center source and two-center Coulomb
+metric are
+\begin{align}
+  B_{P,\mu\nu}^{ij}
+  &=\left(P\vq\middle|\mu\vk_i,\nu\vk_j\right),
+  \label{eq:gdf-three-center}\\
+  M_{PQ}^{\vq}
+  &=\left(P\vq\middle|Q\vq\right).
+  \label{eq:gdf-two-center}
+\end{align}
+With the metric factorization
+\begin{equation}
+  M^{\vq}=L^{\vq}L^{\vq\dagger},
+  \label{eq:gdf-cholesky}
+\end{equation}
+the orthonormalized CDERI is
+\begin{equation}
+  C^{ij}=L^{-1}B^{ij}.
+  \label{eq:gdf-cderi}
+\end{equation}
+A four-center integral is approximated by contracting two such CDERI factors.
+
+\subsection{The three-center source derivative}
+
+$B_{P,\mu\nu}$ contains an auxiliary center, a bra-AO center, and a ket-AO
+center.  Its derivative for atom $A$ is
+\begin{align}
+  B_{P,\mu\nu}^{ij,Ax}
+  ={}&\delta_{A,A_P}\partial_{P_x}B_{P,\mu\nu}^{ij}
+    +\delta_{A,A_\mu}\partial_{\mu_x}B_{P,\mu\nu}^{ij}
+  \notag\\
+   &+\delta_{A,A_\nu}\partial_{\nu_x}B_{P,\mu\nu}^{ij}.
+  \label{eq:gdf-source-centers}
+\end{align}
+If an integral library's \texttt{ip1}/\texttt{ip2} operator differentiates an
+electronic coordinate, a translational identity may reverse the sign for a
+nuclear-center displacement.  Each axis and atom slice must therefore be
+checked with a small component test.
+
+A periodic GDF builder may combine short-range real-space, long-range
+reciprocal-space, and $\vq=0$ correction terms,
+\begin{equation}
+  B^{ij}=B_{\mathrm{SR}}^{ij}+B_{\mathrm{LR}}^{ij}
+  +\delta_{\vq,0}B_{vbar}^{ij}.
+  \label{eq:gdf-source-parts}
+\end{equation}
+The derivative must use the same screening, lattice images, and reciprocal
+mesh as the central builder.
+
+\subsection{Metric and Cholesky derivatives}
+
+The two-center metric derivative contains the responses of both auxiliary
+centers,
+\begin{equation}
+  M_{PQ}^{\vq,Ax}
+  =\delta_{A,A_P}\partial_{P_x}M_{PQ}^{\vq}
+   +\delta_{A,A_Q}\partial_{Q_x}M_{PQ}^{\vq}.
+  \label{eq:gdf-metric-centers}
+\end{equation}
+Differentiating Eq.~\eqref{eq:gdf-cholesky} gives
+\begin{equation}
+  M^{Ax}=L^{Ax}L^\dagger+LL^{Ax\dagger}.
+  \label{eq:gdf-cholesky-derivative}
+\end{equation}
+Define $W=L^{-1}M^{Ax}L^{-\dagger}$.  In the lower-Cholesky gauge,
+\begin{equation}
+  L^{Ax}=L\,\Phi(W),
+  \label{eq:gdf-cholesky-gauge}
+\end{equation}
+where $\Phi$ retains the strict lower triangle and half of the diagonal.  The
+CDERI derivative is therefore
+\begin{equation}
+  C^{Ax}
+  =L^{-1}B^{Ax}-L^{-1}L^{Ax}C.
+  \label{eq:gdf-cderi-derivative}
+\end{equation}
+The second term is the metric/auxiliary response.  Omitting it differentiates a
+functional form different from the one used for the fitted central energy.
+
+\subsection{J and K derivatives}
+
+Using the diagonal k-pair CDERI, define the Coulomb auxiliary density as
+\begin{equation}
+  j_P=\frac{1}{N_k}\sum_{\vk\mu\nu}
+      C_{P,\mu\nu}^{\vk\vk}D_{\nu\mu}^{\vk}.
+  \label{eq:gdf-coulomb-aux-density}
+\end{equation}
+At fixed density,
+\begin{equation}
+  j_P^{Ax}=\frac{1}{N_k}\sum_{\vk\mu\nu}
+      C_{P,\mu\nu}^{\vk\vk,Ax}D_{\nu\mu}^{\vk}.
+  \label{eq:gdf-coulomb-aux-derivative}
+\end{equation}
+Consequently,
+\begin{equation}
+  J_{\mu\nu}^{\vk,Ax}
+  =\sum_P\left(j_P^{Ax}C_{P,\mu\nu}^{\vk\vk}
+              +j_PC_{P,\mu\nu}^{\vk\vk,Ax}\right).
+  \label{eq:gdf-j-derivative}
+\end{equation}
+Exchange similarly applies the product rule to each of its two CDERI factors.
+Reverse blocks of canonical k-pairs are reconstructed with the required
+complex conjugation and AO transpose.
+
+\subsection{Two appearances of auxiliary response in the gradient}
+
+First, $C^{Ax}$ appears in the explicit target-Hartree derivative of
+Eq.~\eqref{eq:hartree-gradient}.  Second, GDF J/K derivatives enter the source
+HF CPHF source and Hessian action.  Adding metric response only to the explicit
+target term while omitting it from the source response, or vice versa, breaks
+agreement with the full-energy finite difference.
+
+\subsection{The value-parity guard}
+
+Define the difference between the central CDERI reconstructed by the response
+builder and the CDERI stored by the actual SCF provider as
+\begin{equation}
+  \Delta_C=\max|C_{\mathrm{response\ builder}}-C_{\mathrm{SCF\ storage}}|.
+  \label{eq:gdf-cderi-parity}
+\end{equation}
+If $\Delta_C$ exceeds tolerance, even plausible $B^{Ax}$ and $M^{Ax}$ are not
+derivatives of the energy representation that was actually used, and the
+gradient must be rejected.  Common causes are different values of $\omega$,
+reciprocal meshes, auxiliary-basis ordering, k-pair orientation, or metric
+factorization gauges.
+
+\subsection{CPU/GPU boundaries}
+
+The CPU package generates central and derivative primitives with the PySCF
+periodic integral engine and performs linear algebra with NumPy/SciPy.  The GPU
+package declares periodic two- and three-center primitive generation as a host
+boundary, while CDERI storage, Cholesky/metric response, $dJ/dR$, $dK/dR$,
+AX/Z-vector operations, and final contractions run on the CuPy device.
+\texttt{device="gpu"} does not claim that integral metadata are also generated
+on the GPU; it guarantees that supported numerical contractions do not
+silently call the CPU implementation.
+
+GDF completion requires full-energy finite differences, the translation sum,
+and CDERI parity for distorted H$_2$O as well as H$_2$, for Gamma and
+non-Gamma k-meshes, and at both SZV and DZVP levels.

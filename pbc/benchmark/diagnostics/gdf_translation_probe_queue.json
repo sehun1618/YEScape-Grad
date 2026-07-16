@@ -1,0 +1,53 @@
+{
+  "output_root": "results/diagnostics/gdf_translation_probe",
+  "defaults": {
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [
+      [10.0, 0.0, 0.0],
+      [0.0, 10.0, 0.0],
+      [0.0, 0.0, 10.0]
+    ],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {
+      "H": "GTH-SCAN-q1",
+      "O": "GTH-SCAN-q6"
+    },
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "ke_cutoff_ha": 400.0,
+    "precision": 1e-9,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-9,
+    "conv_tol_grad": 1e-9,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "run_fd": true,
+    "fd_step_bohr": 1e-4,
+    "fd_atoms": [0],
+    "fd_axes": ["x"]
+  },
+  "jobs": [
+    {
+      "name": "centered_h2o",
+      "devices": ["gpu"],
+      "df_backends": ["gdf"],
+      "atom": [
+        ["O", [0.000000, 0.000000, 0.000000]],
+        ["H", [0.957200, 0.000000, 0.000000]],
+        ["H", [-0.239987, 0.927297, 0.000000]]
+      ]
+    },
+    {
+      "name": "translated_h2o",
+      "devices": ["gpu"],
+      "df_backends": ["gdf"],
+      "atom": [
+        ["O", [4.400000, 0.000000, 0.000000]],
+        ["H", [5.357200, 0.000000, 0.000000]],
+        ["H", [4.160013, 0.927297, 0.000000]]
+      ]
+    }
+  ]
+}

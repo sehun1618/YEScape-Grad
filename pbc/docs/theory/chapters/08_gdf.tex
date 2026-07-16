@@ -1,0 +1,138 @@
+\section{GDF: auxiliary metric과 nuclear response}
+\label{sec:gdf}
+
+\subsection{AO pair fitting}
+
+Gaussian density fitting은 AO pair density를 atom-centered auxiliary function
+$\{P\}$로 표현한다. k-point pair $(\vk_i,\vk_j)$의 momentum transfer를
+$\vq=\vk_j-\vk_i$라 하면 three-center source와 two-center Coulomb metric은
+\begin{align}
+  B_{P,\mu\nu}^{ij}
+  &=\left(P\vq\middle|\mu\vk_i,\nu\vk_j\right),
+  \label{eq:gdf-three-center}\\
+  M_{PQ}^{\vq}
+  &=\left(P\vq\middle|Q\vq\right).
+  \label{eq:gdf-two-center}
+\end{align}
+Metric factorization
+\begin{equation}
+  M^{\vq}=L^{\vq}L^{\vq\dagger}
+  \label{eq:gdf-cholesky}
+\end{equation}
+을 사용하면 orthonormalized CDERI는
+\begin{equation}
+  C^{ij}=L^{-1}B^{ij}
+  \label{eq:gdf-cderi}
+\end{equation}
+이다. Four-center integral은 CDERI 두 개의 contraction으로 근사된다.
+
+\subsection{Three-center source derivative}
+
+$B_{P,\mu\nu}$에는 auxiliary center, bra AO center, ket AO center가 있다. Atom $A$의
+derivative는
+\begin{align}
+  B_{P,\mu\nu}^{ij,Ax}
+  ={}&\delta_{A,A_P}\partial_{P_x}B_{P,\mu\nu}^{ij}
+    +\delta_{A,A_\mu}\partial_{\mu_x}B_{P,\mu\nu}^{ij}
+  \notag\\
+   &+\delta_{A,A_\nu}\partial_{\nu_x}B_{P,\mu\nu}^{ij}
+  \label{eq:gdf-source-centers}
+\end{align}
+이다. Integral library의 \texttt{ip1}/\texttt{ip2}가 electronic-coordinate derivative를 반환하면
+nuclear-center derivative 부호는 translational identity에 따라 반대가 될 수 있다.
+각 axis와 atom slice를 작은 component test로 확인해야 한다.
+
+Periodic GDF builder는 short-range real-space part, long-range reciprocal-space part와
+$\vq=0$ correction을 합칠 수 있다.
+\begin{equation}
+  B^{ij}=B_{\mathrm{SR}}^{ij}+B_{\mathrm{LR}}^{ij}
+  +\delta_{\vq,0}B_{vbar}^{ij}.
+  \label{eq:gdf-source-parts}
+\end{equation}
+Derivative도 central builder와 동일한 screening, lattice image와 reciprocal mesh를
+사용해야 한다.
+
+\subsection{Metric과 Cholesky derivative}
+
+Two-center metric derivative에는 두 auxiliary center response가 있다.
+\begin{equation}
+  M_{PQ}^{\vq,Ax}
+  =\delta_{A,A_P}\partial_{P_x}M_{PQ}^{\vq}
+   +\delta_{A,A_Q}\partial_{Q_x}M_{PQ}^{\vq}.
+  \label{eq:gdf-metric-centers}
+\end{equation}
+식~\eqref{eq:gdf-cholesky}을 미분하면
+\begin{equation}
+  M^{Ax}=L^{Ax}L^\dagger+LL^{Ax\dagger}.
+  \label{eq:gdf-cholesky-derivative}
+\end{equation}
+$W=L^{-1}M^{Ax}L^{-\dagger}$를 정의하고 lower-Cholesky gauge에서
+\begin{equation}
+  L^{Ax}=L\,\Phi(W),
+  \label{eq:gdf-cholesky-gauge}
+\end{equation}
+로 쓴다. $\Phi$는 strict lower triangle과 diagonal의 절반을 취한다. 따라서 CDERI
+derivative는
+\begin{equation}
+  C^{Ax}
+  =L^{-1}B^{Ax}-L^{-1}L^{Ax}C
+  \label{eq:gdf-cderi-derivative}
+\end{equation}
+이다. 두 번째 항이 metric/auxiliary response다. 이를 생략하면 central fitted energy와
+다른 functional form을 미분하게 된다.
+
+\subsection{J와 K derivative}
+
+Diagonal k-pair CDERI로 Coulomb auxiliary density를
+\begin{equation}
+  j_P=\frac{1}{N_k}\sum_{\vk\mu\nu}
+      C_{P,\mu\nu}^{\vk\vk}D_{\nu\mu}^{\vk}
+  \label{eq:gdf-coulomb-aux-density}
+\end{equation}
+라 하면 fixed-density derivative는
+\begin{equation}
+  j_P^{Ax}=\frac{1}{N_k}\sum_{\vk\mu\nu}
+      C_{P,\mu\nu}^{\vk\vk,Ax}D_{\nu\mu}^{\vk}.
+  \label{eq:gdf-coulomb-aux-derivative}
+\end{equation}
+이에 따라
+\begin{equation}
+  J_{\mu\nu}^{\vk,Ax}
+  =\sum_P\left(j_P^{Ax}C_{P,\mu\nu}^{\vk\vk}
+              +j_PC_{P,\mu\nu}^{\vk\vk,Ax}\right).
+  \label{eq:gdf-j-derivative}
+\end{equation}
+Exchange도 두 CDERI factor 각각에 product rule을 적용하며 canonical k-pair의 reverse
+block은 conjugate/transposed relation으로 복원한다.
+
+\subsection{Auxiliary response가 gradient에서 나타나는 두 위치}
+
+첫째, target Hartree explicit derivative 식~\eqref{eq:hartree-gradient}에
+$C^{Ax}$가 들어간다. 둘째, source HF CPHF source와 Hessian action에 GDF $J/K$
+derivative가 들어간다. Target explicit에서만 metric response를 더하고 source HF
+response에서 빠뜨리거나 그 반대로 하면 Z-vector correction이 full-energy FD와 맞지
+않는다.
+
+\subsection{Value parity guard}
+
+Derivative builder가 재구성한 central CDERI와 실제 SCF provider가 저장한 CDERI의 차이를
+\begin{equation}
+  \Delta_C=\max|C_{\mathrm{response\ builder}}-C_{\mathrm{SCF\ storage}}|
+  \label{eq:gdf-cderi-parity}
+\end{equation}
+로 정의한다. $\Delta_C$가 tolerance를 넘으면 $B^{Ax}$와 $M^{Ax}$가 수학적으로
+그럴듯해도 실제 energy representation의 derivative가 아니므로 gradient를 거부한다.
+원인은 흔히 다른 $\omega$, reciprocal mesh, auxiliary basis ordering, k-pair orientation,
+metric factorization gauge다.
+
+\subsection{CPU/GPU 경계}
+
+CPU package는 PySCF periodic integral engine으로 central/derivative primitive를 만들고
+NumPy/SciPy linear algebra를 사용한다. GPU package는 periodic 2-center/3-center integral
+primitive 생성은 host boundary로 명시하지만, CDERI storage, Cholesky/metric response,
+$dJ/dR$, $dK/dR$, AX/Z-vector와 final contraction은 CuPy device에서 수행한다.
+\texttt{device="gpu"}는 integral metadata까지 모두 GPU라는 뜻이 아니라, 지원한다고 선언한
+numerical contraction이 CPU implementation으로 조용히 우회하지 않는다는 뜻이다.
+
+GDF completion은 H$_2$뿐 아니라 distorted H$_2$O, Gamma와 non-Gamma k-mesh, SZV와
+DZVP 수준에서 full-energy FD, translation sum, CDERI parity를 함께 통과해야 한다.

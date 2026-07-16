@@ -1,0 +1,160 @@
+\section{The DC-DFT Lagrangian and the total nuclear gradient}
+\label{sec:dc-lagrangian}
+
+\subsection{A Lagrangian with the HF constraint}
+
+Let $C$ denote the HF orbital coefficients and define the VO block of the HF
+stationarity residual as
+\begin{equation}
+  f_{ai}^{\vk}(C,\vR)
+  =\left[C_v^{\vk\dagger}F_{\mathrm{HF}}^{\vk}C_o^{\vk}\right]_{ai}.
+  \label{eq:hf-stationarity-residual}
+\end{equation}
+For a converged HF solution, $f=0$.  The target energy is not stationary under
+this constraint, so introduce an adjoint multiplier $z$ and define the reduced
+Lagrangian
+\begin{equation}
+  \mathcal L(C,z;\vR)
+  =E_{\mathrm{DC-DFA}}(C;\vR)
+   +2\operatorname{Re}\sum_{\vk ai}w_\vk
+    z_{ai}^{\vk *}f_{ai}^{\vk}(C;\vR).
+  \label{eq:dc-lagrangian}
+\end{equation}
+The multiplier enforcing MO orthonormality is represented below through the
+energy-weighted density and the overlap/Pulay term.
+
+Stationarity with respect to orbital rotations,
+\begin{equation}
+  \frac{\partial\mathcal L}{\partial\kappa}=0,
+  \label{eq:lagrangian-orbital-stationarity}
+\end{equation}
+gives the Z-vector equation of Eq.~\eqref{eq:zvector-equation}.  Explicit
+$\dd C/\dd R_{Ax}$ terms then disappear from the total derivative, leaving
+\begin{equation}
+  \frac{\dd E_{\mathrm{DC-DFA}}}{\dd R_{Ax}}
+  =\left.\frac{\partial\mathcal L}{\partial R_{Ax}}\right|_{C,z}
+  =g_{Ax}^{\mathrm{explicit}}+g_{Ax}^{\mathrm{response}}.
+  \label{eq:dc-gradient-master}
+\end{equation}
+
+\subsection{Explicit target contribution}
+
+The explicit derivative of the target energy at fixed density is decomposed as
+\begin{equation}
+  g_{Ax}^{\mathrm{explicit}}
+  =g_{Ax}^{1e}+g_{Ax}^{\mathrm H}+g_{Ax}^{\mathrm{xc}}
+   +g_{Ax}^{\mathrm{Pulay,t}}+g_{Ax}^{\mathrm{NN}}.
+  \label{eq:explicit-gradient-decomposition}
+\end{equation}
+The one-electron term is
+\begin{equation}
+  g_{Ax}^{1e}
+  =\frac{1}{N_k}\sum_\vk
+    \Tr[D^{\vk}h^{\vk,Ax}],
+  \label{eq:one-electron-gradient}
+\end{equation}
+where $h^{Ax}$ contains the AO-matrix derivatives of the kinetic, local GTH,
+and nonlocal GTH operators.
+
+At fixed density, the Hartree term is
+\begin{equation}
+  g_{Ax}^{\mathrm H}
+  =\frac{1}{2N_k}\sum_\vk
+    \Tr[D^{\vk}J^{\vk,Ax}[D]].
+  \label{eq:hartree-gradient}
+\end{equation}
+For FFTDF, $J^{Ax}[D]$ contains the AO/grid derivative and the appropriate
+Coulomb-kernel convention.  For GDF and RSDF it contains the three-center
+source and two-center metric derivatives.
+
+The explicit semilocal XC derivative differentiates the AOs and the
+quadrature representation while holding the density matrix fixed,
+\begin{equation}
+  g_{Ax}^{\mathrm{xc}}
+  =\left.
+    \frac{\partial E_{\mathrm{xc}}[D;\vR]}{\partial R_{Ax}}
+   \right|_D.
+  \label{eq:xc-explicit-gradient}
+\end{equation}
+Atom-centered Gaussian AOs are evaluated on a uniform periodic grid, so the AO
+center derivative and periodic-image/Bloch-phase conventions must match those
+of the central value.  SCAN and r2SCAN add the $\tau$ channel.
+
+\subsection{The target overlap/Pulay term}
+
+Define the target energy-weighted density from the occupied--occupied block of
+the target Fock matrix,
+\begin{equation}
+  W_{\mathrm t}^{\vk}
+  =2C_o^{\vk}
+    \left(C_o^{\vk\dagger}F_{\mathrm t}^{\vk}C_o^{\vk}\right)
+    C_o^{\vk\dagger}.
+  \label{eq:target-energy-weighted-density}
+\end{equation}
+The target overlap contribution is then
+\begin{equation}
+  g_{Ax}^{\mathrm{Pulay,t}}
+  =-\frac{1}{N_k}\sum_\vk
+    \Tr[W_{\mathrm t}^{\vk}S^{\vk,Ax}].
+  \label{eq:target-overlap-pulay}
+\end{equation}
+An AO-row derivative formulation may redistribute parts of
+Eqs.~\eqref{eq:one-electron-gradient}--\eqref{eq:target-overlap-pulay} among
+atom-row contractions, but their sum must be identical.
+
+Using GTH ionic charges and the periodic Ewald convention, the ion--ion term is
+\begin{equation}
+  g_{Ax}^{\mathrm{NN}}
+  =\frac{\partial E_{\mathrm{NN}}}{\partial R_{Ax}}.
+  \label{eq:nuclear-repulsion-gradient}
+\end{equation}
+
+\subsection{The HF orbital-response contribution}
+
+Writing Eq.~\eqref{eq:zvector-contraction} explicitly in indices gives
+\begin{equation}
+  g_{Ax}^{\mathrm{response}}
+  =2\operatorname{Re}\sum_{\vk ai}w_\vk
+   z_{ai}^{\vk *}B_{ai}^{\vk,Ax}.
+  \label{eq:response-gradient}
+\end{equation}
+Here $B^{Ax}$ is the nuclear derivative of the source HF equation.  Changing
+the target between PBE and an MGGA does not change the physical definitions of
+$B^{Ax}$ or the HF Hessian.  Only the target VO gradient $g$ and the explicit
+XC derivative change, so the same response infrastructure can be reused.
+
+\subsection{Backend-independent assembly}
+
+The final package decomposition is recorded as
+\begin{align}
+  g_{Ax}^{\mathrm{elec,explicit}}
+  &=g_{Ax}^{1e}+g_{Ax}^{\mathrm H}+g_{Ax}^{\mathrm{xc}}
+    +g_{Ax}^{\mathrm{Pulay,t}},\\
+  g_{Ax}
+  &=g_{Ax}^{\mathrm{elec,explicit}}
+    +g_{Ax}^{\mathrm{NN}}+g_{Ax}^{\mathrm{response}}.
+  \label{eq:final-gradient-assembly}
+\end{align}
+FFTDF, GDF, and RSDF differ in their providers for J/K values and derivatives;
+the Z-vector equation and final assembly contract are shared.
+
+\begin{remark}
+A full-energy finite difference reconverges the source HF solution and
+re-evaluates the target energy at both $\vR+h\mathbf e_{Ax}$ and
+$\vR-h\mathbf e_{Ax}$.  A component finite difference with the central density
+held fixed is useful for diagnosing an individual kernel such as
+Eq.~\eqref{eq:xc-explicit-gradient}, but it is not a reference for the total
+analytic gradient.
+\end{remark}
+
+\subsection{Translational invariance}
+
+Translating all atoms by the same vector within a fixed lattice must not change
+the energy.  In a converged representation,
+\begin{equation}
+  \sum_A\mathbf g_A=\mathbf0.
+  \label{eq:translation-sum-rule}
+\end{equation}
+A large net gradient is a sensitive diagnostic for missing AO-image
+derivatives, auxiliary-center response, XC-grid aliasing, $G=0$ treatment, or
+k-point normalization.

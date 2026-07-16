@@ -1,0 +1,241 @@
+\section{Periodic density fitting and RSDF response}
+\label{sec:periodic-df}
+
+\subsection{Why density-fitting derivatives are required}
+
+Direct treatment of four-center electron-repulsion integrals causes the cost
+and memory of periodic HF and target-DFA Coulomb and exact-exchange energies to
+grow rapidly.  Density fitting expands AO-pair densities in an auxiliary
+Gaussian basis and replaces the four-center problem by three-center quantities
+and a two-center metric.  When the nuclei move, however, both the primary AOs
+and the auxiliary basis move with them.  Thus, if density fitting is used for
+the energy value, the gradient must include the auxiliary-basis and metric
+responses.
+
+Denote a Bloch AO by $\chi_{\mu\vk}(\mathbf r)$ and define the momentum transfer
+as
+\begin{equation}
+  \mathbf q=\mathbf k_j-\mathbf k_i.
+\end{equation}
+For an auxiliary Bloch function $P\mathbf q$, the three-center source and the
+Coulomb metric are
+\begin{align}
+  B_{\mu\nu,P}^{ij}
+  &=\left(\chi_{\mu\mathbf k_i}\chi_{\nu\mathbf k_j}\middle|P\mathbf q\right),\\
+  M_{PQ}(\mathbf q)
+  &=\left(P\mathbf q\middle|Q\mathbf q\right).
+\end{align}
+Whether the ket AO is represented with an explicit complex conjugate depends
+on the integral-orientation convention of the program.  The essential
+requirement is that the central value and its derivative use the same
+convention.
+
+For a positive-definite metric, let
+\begin{equation}
+  \mathbf M(\mathbf q)=\mathbf L(\mathbf q)\mathbf L(\mathbf q)^\dagger
+\end{equation}
+be its Cholesky decomposition.  The orthonormalized three-center factor is
+\begin{equation}
+  \mathbf C^{ij}=\mathbf L(\mathbf q)^{-1}\mathbf B^{ij}.
+  \label{eq:cderi-definition}
+\end{equation}
+A four-center integral is then approximated by a factorization of the form
+\begin{equation}
+  (\mu i,\nu j|\lambda l,\sigma m)
+  \simeq \sum_P C_{P,\mu\nu}^{ij}
+  C_{P,\lambda\sigma}^{lm*}.
+\end{equation}
+The factor $\mathbf C$ corresponds to PySCF's CDERI.
+
+\subsection{Nuclear derivatives and auxiliary response}
+
+Differentiating Eq.~\eqref{eq:cderi-definition} with respect to a Cartesian
+coordinate $R_{Ax}$ gives
+\begin{equation}
+  \mathbf C^{Ax}
+  =\mathbf L^{-1}\mathbf B^{Ax}
+  -\mathbf L^{-1}\mathbf L^{Ax}\mathbf C.
+  \label{eq:cderi-response}
+\end{equation}
+The first term is the three-center source response and the second is the
+metric response.  Freezing the metric omits the motion of the auxiliary
+Gaussian centers and the change of the fitting coefficients.  This omission
+may be accidentally small for a small numerator, but it generally grows as
+the number of auxiliary centers increases.
+
+The Cholesky derivative satisfies
+\begin{equation}
+  \mathbf M^{Ax}=\mathbf L^{Ax}\mathbf L^\dagger
+  +\mathbf L\mathbf L^{Ax\dagger}.
+  \label{eq:cholesky-response}
+\end{equation}
+Multiplying by $\mathbf L^{-1}$ and $\mathbf L^{-\dagger}$ defines
+\begin{equation}
+  \mathbf W=\mathbf L^{-1}\mathbf M^{Ax}\mathbf L^{-\dagger}.
+\end{equation}
+In the lower-Cholesky gauge,
+\begin{equation}
+  \mathbf L^{Ax}=\mathbf L\,\Phi(\mathbf W),
+\end{equation}
+where $\Phi$ preserves the strict lower triangle and takes half of the
+Hermitian diagonal.  The same gauge must be used consistently for the central
+value and the derivative.
+
+\subsection{Range separation of the Coulomb kernel}
+
+RSDF partitions the Coulomb kernel according to
+\begin{equation}
+  \frac{1}{r}
+  =\frac{\operatorname{erfc}(\omega r)}{r}
+  +\frac{\operatorname{erf}(\omega r)}{r}.
+  \label{eq:range-separation}
+\end{equation}
+The first term decays rapidly in real space and is evaluated as a lattice sum;
+the second is evaluated as a smooth reciprocal-space Fourier sum.  This is an
+exact identity, but with finite image lists and reciprocal meshes the value of
+$\omega$, the screening precision, and the mesh become part of the numerical
+representation.
+
+In the public PySCF RSDF implementation, optimal parameters for the
+three-center source and the two-center metric may be determined independently.
+Explicitly,
+\begin{align}
+  \mathbf B^{ij}
+  &=\mathbf B_{\mathrm{SR}}^{ij}(\omega_B,\epsilon_R)
+  +\mathbf B_{\mathrm{LR}}^{ij}(\omega_B,\mathcal G_B)
+  +\delta_{\mathbf q,0}\mathbf B_{vbar}^{ij},
+  \label{eq:rsdf-source}\\
+  \mathbf M(\mathbf q)
+  &=\mathbf M_{\mathrm{SR}}(\mathbf q;\omega_M,\epsilon_M)
+  +\mathbf M_{\mathrm{LR}}(\mathbf q;\omega_M,\mathcal G_M)
+  +\delta_{\mathbf q,0}\mathbf M_{G=0}.
+  \label{eq:rsdf-metric}
+\end{align}
+In general, $\omega_B\neq\omega_M$ and
+$\mathcal G_B\neq\mathcal G_M$.  The exponent distribution of the auxiliary
+basis differs from that of the primary AO pairs, and the metric may therefore
+require a higher cutoff.
+
+At fixed cell, lattice and reciprocal vectors do not change under nuclear
+motion.  Holding $\omega$ and the mesh fixed as numerical inputs gives
+\begin{align}
+  \mathbf B^{ij,Ax}
+  &=\mathbf B_{\mathrm{SR}}^{ij,Ax}
+  +\mathbf B_{\mathrm{LR}}^{ij,Ax}
+  +\delta_{\mathbf q,0}\mathbf B_{vbar}^{ij,Ax},\\
+  \mathbf M^{Ax}
+  &=\mathbf M_{\mathrm{SR}}^{Ax}
+  +\mathbf M_{\mathrm{LR}}^{Ax}
+  +\delta_{\mathbf q,0}\mathbf M_{G=0}^{Ax}.
+\end{align}
+For stress, the lattice and reciprocal mesh themselves vary; the fixed-cell
+formulas in this section are therefore not sufficient for a cell derivative.
+
+\subsection{Ownership of primary-AO and auxiliary centers}
+
+A three-center integral contains three atom-centered objects.  Symbolically,
+\begin{equation}
+  B_{\mu\nu,P}^{Ax}
+  =\delta_{A,A_\mu}\partial_{A_\mu x}B_{\mu\nu,P}
+  +\delta_{A,A_\nu}\partial_{A_\nu x}B_{\mu\nu,P}
+  +\delta_{A,A_P}\partial_{A_Px}B_{\mu\nu,P}.
+\end{equation}
+Integral-library operators such as \texttt{ip1} and \texttt{ip2} often return
+derivatives with respect to an electronic coordinate.  Translational
+identities then introduce the opposite sign for a derivative that moves a
+nuclear center.  The three contributions must be accumulated after applying
+the atom slices for the AO row, AO column, and auxiliary index.
+
+The two-center metric has two auxiliary centers,
+\begin{equation}
+  M_{PQ}^{Ax}
+  =\delta_{A,A_P}\partial_{A_Px}M_{PQ}
+  +\delta_{A,A_Q}\partial_{A_Qx}M_{PQ}.
+\end{equation}
+The short-range metric derivative must use the same screened lattice-image list
+as the central value.  Different image cutoffs may both approximate the
+continuous Coulomb metric, but they do not define an exact derivative of the
+same finite calculation.
+
+\subsection{The \texorpdfstring{$G=0$}{G=0} mode and charge corrections}
+
+The $G=0$ mode of the periodic Coulomb kernel is treated specially according
+to charge neutrality and the Ewald convention.  The source \texttt{vbar} and
+the metric $G=0$ correction occur only in blocks with exactly zero momentum
+transfer,
+\begin{equation}
+  \delta_{\mathbf q,0}=\begin{cases}
+    1,& \mathbf k_j-\mathbf k_i=\mathbf 0,\\
+    0,& \text{otherwise}.
+  \end{cases}
+\end{equation}
+This includes not only Gamma-only calculations but also diagonal pairs in a
+sampled-k calculation.  Therefore, ``is this Gamma?'' and ``is the momentum
+transfer zero?'' are not equivalent tests.
+
+\subsection{k-point pairs and Hermitian reconstruction}
+
+For $N_k$ k-points, the J/K build requires multiple $(i,j)$ pairs.  Momentum
+conservation groups the metric by $\mathbf q=\mathbf k_j-\mathbf k_i$.  If only
+canonical pairs are stored, a reverse pair is reconstructed through a
+Hermitian relation such as
+\begin{equation}
+  C^{ji}_{P,\nu\mu}=C^{ij*}_{P,\mu\nu}.
+\end{equation}
+Its nuclear derivative must obey the same conjugation and AO-index transpose.
+At complex k-points, all pair contractions and the equal-weight $1/N_k$
+normalization must be consistent for the final gradient to be real.
+
+Define the closed-shell Coulomb auxiliary density by
+\begin{equation}
+  j_P=\sum_{\vk\mu\nu}C^\vk_{P,\mu\nu}D^\vk_{\nu\mu}.
+\end{equation}
+Its fixed-density J derivative is
+\begin{equation}
+  (J^\vk)^{Ax}_{\mu\nu}
+  =\frac{1}{N_k}\sum_P
+  \left[j_P^{Ax}C^\vk_{P,\mu\nu}
+  +j_PC^{\vk,Ax}_{P,\mu\nu}\right].
+\end{equation}
+Exchange contains two CDERI factors, so the product rule must be applied to
+each factor.
+
+\subsection{Role within the DC-DFT gradient}
+
+RSDF determines the numerical representation of the two-electron value and
+response; the nonvariational structure of DC-DFT itself is independent of the
+backend.  The total gradient may be written as
+\begin{equation}
+  E_{\mathrm{DC}}^{Ax}
+  =E_{\mathrm{target,explicit}}^{Ax}
+  +\mathbf z^T\mathbf B_{\mathrm{HF}}^{Ax}.
+  \label{eq:dc-rsdf-total}
+\end{equation}
+The first term contains the target one-electron, Hartree, XC, overlap/Pulay,
+and nuclear contributions.  The second includes the orbital response of the HF
+density to nuclear motion through the adjoint Z-vector.  RSDF $C^{Ax}$ enters
+both the explicit target J derivative and the source HF response operator.
+
+\subsection{Validation principles}
+
+Correctness of the analytic derivative and physical convergence are separate
+questions.  First compare with a central finite difference of the same finite
+RSDF representation,
+\begin{equation}
+  g_{Ax}^{\mathrm{FD}}(h)
+  =\frac{E(\mathbf R+h\mathbf e_{Ax})
+       -E(\mathbf R-h\mathbf e_{Ax})}{2h}.
+\end{equation}
+Then converge $h$, the source and metric meshes, the primary and auxiliary
+bases, and the k-mesh independently.
+
+In addition, a separately reconstructed CDERI must agree with the SCF storage,
+\begin{equation}
+  \Delta_C=\max_{ijP\mu\nu}
+  \left|C_{P,\mu\nu}^{ij,\mathrm{reconstructed}}
+  -C_{P,\mu\nu}^{ij,\mathrm{storage}}\right|.
+\end{equation}
+If $\Delta_C$ is not small, even a mathematically correct derivative formula
+is differentiating a representation with a different $\omega$, mesh, pair
+orientation, or factor gauge.  Such a derivative must be rejected for
+production use.

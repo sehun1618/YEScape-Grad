@@ -1,0 +1,119 @@
+\section{FFTDF: reciprocal-space Coulomb와 exchange derivative}
+\label{sec:fftdf}
+
+\subsection{Uniform grid와 plane-wave representation}
+
+FFTDF는 AO pair density를 uniform real-space grid에 평가하고 FFT를 통해 reciprocal
+space로 옮긴다. k-point $\vk$의 density matrix가 만드는 total density Fourier
+coefficient는 개략적으로
+\begin{equation}
+  \rho_D(\vG)
+  =\frac{1}{N_k}\sum_{\vk\mu\nu}
+   D_{\mu\nu}^{\vk}
+   \int_\Omega e^{-i\vG\cdot\mathbf r}
+   \phi_{\nu\vk}^{*}(\mathbf r)
+   \phi_{\mu\vk}(\mathbf r)\dd\mathbf r.
+  \label{eq:fftdf-density-fourier}
+\end{equation}
+Neutral periodic system의 Hartree energy는 $\vG=0$을 제외하고
+\begin{equation}
+  E_{\mathrm H}
+  =\frac{1}{2\Omega}\sum_{\vG\ne0}
+   \frac{4\pi}{G^2}|\rho_D(\vG)|^2
+  \label{eq:fftdf-hartree-energy}
+\end{equation}
+로 표현된다. 역 FFT한 Hartree potential을 AO pair와 다시 적분하면 $J^{\vk}$를 얻는다.
+
+\subsection{Nuclear derivative at fixed mesh}
+
+Cell과 integer mesh를 고정한 nuclear derivative에서는 grid point와 $\vG$ set이 변하지
+않는다. 따라서 Coulomb kernel $4\pi/G^2$의 nuclear derivative는 0이고 AO pair density만
+미분된다.
+\begin{equation}
+  E_{\mathrm H}^{Ax}
+  =\frac{1}{\Omega}\operatorname{Re}
+   \sum_{\vG\ne0}\frac{4\pi}{G^2}
+   \rho_D(\vG)^*\rho_D^{Ax}(\vG).
+  \label{eq:fftdf-hartree-derivative}
+\end{equation}
+$\rho_D^{Ax}$에는 atom $A$에 속한 AO row와 column derivative, periodic image와 Bloch
+phase convention이 들어간다. AO-row matrix를 먼저 만든 뒤 Hermitian reconstruction을
+하면 식~\eqref{eq:hartree-gradient}의 full $J^{Ax}$를 얻는다.
+
+\subsection{Exact exchange와 momentum transfer}
+
+Source HF exchange는 pair density의 momentum transfer
+\begin{equation}
+  \vq=\vk'-\vk
+  \label{eq:fftdf-momentum-transfer}
+\end{equation}
+마다 Coulomb kernel $4\pi/|\vG+\vq|^2$를 사용한다. Symbolically
+\begin{equation}
+  K_{\mu\nu}^{\vk}
+  =\frac{1}{N_k}\sum_{\vk'}\sum_{\lambda\sigma}
+   (\mu\vk,\lambda\vk'|\sigma\vk',\nu\vk)
+   D_{\lambda\sigma}^{\vk'}.
+  \label{eq:fftdf-exchange}
+\end{equation}
+Nuclear derivative는 네 AO center 중 이동하는 center에 product rule을 적용한다. Source
+HF Hessian action에도 같은 FFT exchange provider를 transition density에 적용해야 한다.
+
+\subsection{\texorpdfstring{$G=0$, $q=0$}{G=0, q=0}와 Ewald exchange divergence}
+
+Hartree $\vG=0$ mode는 neutralizing convention과 GTH ionic charge에 맞추어 제외 또는
+보정한다. Exchange에서는 $\vq=0$, $\vG=0$에서 Coulomb singularity가 나타나며 PySCF의
+\texttt{exxdiv='ewald'} convention은 overlap-dependent correction을 더한다. 이 correction도
+핵 이동에 따라 overlap이 변하므로
+\begin{equation}
+  K_{\mathrm{Ewald}}^{Ax}
+  \propto S^{Ax}DS+SDS^{Ax}
+  \label{eq:fftdf-ewald-exchange-derivative}
+\end{equation}
+형태의 derivative가 필요하다. Gamma라는 조건과 $\vq=0$이라는 조건을 혼동하면 sampled
+k-point diagonal pair의 singular correction을 잃는다.
+
+\subsection{Cutoff와 mesh}
+
+Plane-wave kinetic cutoff는 대략
+\begin{equation}
+  E_{\mathrm{cut}}=\frac{G_{\max}^2}{2}
+  \label{eq:cutoff-definition}
+\end{equation}
+이다. Orthorhombic cell에서 각 방향의 Nyquist wavevector를 고려하면 mesh size는 cell
+길이에 비례하고 $\sqrt{E_{\mathrm{cut}}}$에 비례한다. PySCF는
+\texttt{cell.ke\_cutoff}와 \texttt{cell.mesh}를 연동하지만 integer rounding 때문에
+cutoff의 작은 변화가 mesh를
+불연속적으로 바꿀 수 있다.
+
+Full-energy FD에서 $\vR\pm h$는 반드시 같은 lattice와 같은 integer mesh를 사용해야
+한다. Nuclear displacement마다 cutoff로 mesh를 다시 추정해 서로 다른 mesh를 사용하면
+analytic derivative가 아닌 numerical representation 변화까지 FD에 섞인다. Metadata에는
+cutoff와 resolved mesh를 둘 다 저장한다.
+
+\subsection{Gradient 안에서 FFTDF가 소유하는 항}
+
+FFTDF provider는 다음 quantity를 일관되게 제공해야 한다.
+
+\begin{enumerate}
+  \item source HF central $J[D]$와 $K[D]$,
+  \item transition density에 대한 $\delta J$와 $\delta K$ for AX,
+  \item fixed-density full $J^{Ax}[D]$와 $K^{Ax}[D]$,
+  \item $\vq=0$ Ewald exchange-divergence derivative,
+  \item target Hartree explicit derivative.
+\end{enumerate}
+
+Target XC는 NumInt/MGGA grid provider가 소유하고 GTH one-electron derivative는 별도
+one-electron provider가 소유한다. 이 책임을 섞지 않아야 같은 mesh를 쓰면서도 component
+double counting을 피할 수 있다.
+
+\subsection{CPU와 GPU}
+
+CPU는 PySCF periodic FFTDF central value와 project-local derivative matrix를 사용한다.
+GPU는 GPU4PySCF FFT, AO grid와 CuPy contraction을 사용한다. GPU route에서 cell, lattice,
+small pseudopotential table과 최종 reporting은 host에 남을 수 있지만 AO/grid FFT,
+J/K, AX, Z-vector와 final electronic assembly가 device에 있어야 한다. Capability report는
+이 host boundary를 명시하고 silent CPU fallback을 허용하지 않는다.
+
+FFTDF validation은 $E_{\mathrm{cut}}$ 한 점에서 FD가 맞는 것만으로 끝나지 않는다.
+Resolved mesh sequence에 대해 energy와 gradient가 수렴하고, Gamma와 equivalent one-k-point
+representation이 일치하며, 식~\eqref{eq:translation-sum-rule}을 만족해야 한다.

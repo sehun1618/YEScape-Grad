@@ -1,0 +1,115 @@
+\appendix
+\section{Tensor shape, complex convention과 equation map}
+\label{sec:appendices}
+
+\subsection{Canonical tensor shape}
+
+아래 표는 implementation guide와 source docstring이 따라야 하는 canonical shape다.
+
+\begin{center}
+\begin{longtable}{p{0.27\textwidth}p{0.28\textwidth}p{0.34\textwidth}}
+\toprule
+Quantity & Shape & Convention \\
+\midrule
+$D^{\vk}$ & $(N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & occupation factor $2$ 포함 \\
+$F_{\mathrm t}^{\vk}$ & $(N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & Hermitian \\
+$F_{vo}^{\vk}$ & k별 $(N_v,N_o)$ & target Z RHS \\
+$z^{\vk}$ & k별 $(N_v,N_o)$ & complex, realified solver \\
+$h^{Ax,\vk}$ & $(N_A,3,N_k,N_{\mathrm{AO}},N_{\mathrm{AO}})$ & full AO matrix derivative \\
+$S^{Ax,\vk}$ & same & full overlap derivative \\
+$C^{ij}_{P\mu\nu}$ & pair별 $(N_{\mathrm{aux}},N_{\mathrm{AO}},N_{\mathrm{AO}})$ & canonical k-pair \\
+$C^{ij,Ax}_{P\mu\nu}$ & atom/axis + CDERI shape & source+metric response \\
+$g_{Ax}$ & $(N_A,3)$ & Ha/Bohr, force 아님 \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Gamma에서는 singleton k-axis를 내부적으로 유지한 뒤 public PySCF shape로 복원한다. 이
+원칙은 Gamma와 k-point implementation이 다른 수식을 갖는 것을 막는다.
+
+\subsection{Complex-to-real Hessian block}
+
+Complex response $U=X+iY$에 대해 real-linear map이
+\begin{equation}
+  \delta F(U)=\mathcal A U+\mathcal B U^*
+  \label{eq:appendix-complex-map}
+\end{equation}
+형태라면 realified operator는
+\begin{equation}
+  \begin{pmatrix}
+    \operatorname{Re}\delta F\\
+    \operatorname{Im}\delta F
+  \end{pmatrix}
+  =
+  \begin{pmatrix}
+    \operatorname{Re}(\mathcal A+\mathcal B) &
+    -\operatorname{Im}(\mathcal A-\mathcal B)\\
+    \operatorname{Im}(\mathcal A+\mathcal B) &
+    \operatorname{Re}(\mathcal A-\mathcal B)
+  \end{pmatrix}
+  \begin{pmatrix}X\\Y\end{pmatrix}.
+  \label{eq:appendix-real-hessian}
+\end{equation}
+Production code는 explicit four-block matrix를 항상 만들 필요는 없고 matrix-vector
+product로 같은 map을 제공할 수 있다.
+
+\subsection{Cholesky response gauge 요약}
+
+$M=LL^\dagger$와 $W=L^{-1}M^{Ax}L^{-\dagger}$에 대해
+\begin{equation}
+  \Phi(W)_{ij}
+  =\begin{cases}
+    W_{ij},&i>j,\\
+    \tfrac12W_{ii},&i=j,\\
+    0,&i<j
+  \end{cases}
+  \label{eq:appendix-cholesky-phi}
+\end{equation}
+이고 $L^{Ax}=L\Phi(W)$다. Metric이 complex Hermitian이면 diagonal imaginary noise는
+tolerance 안에서 제거하되 큰 anti-Hermitian residual은 오류로 처리한다.
+
+\subsection{\texorpdfstring{$G=0$와 $q=0$}{G=0 and q=0} 체크리스트}
+
+\begin{enumerate}
+  \item Hartree $G=0$ neutral convention은 central energy와 derivative가 같아야 한다.
+  \item GTH local potential constant와 ionic Ewald charge를 함께 확인한다.
+  \item GDF/RSDF source $vbar$와 metric correction을 분리한다.
+  \item Sampled k-point diagonal pair도 $q=0$이다.
+  \item Exchange \texttt{exxdiv='ewald'} overlap derivative를 포함한다.
+  \item Gamma-only 성공을 일반 $q=0$ 처리의 증거로 사용하지 않는다.
+\end{enumerate}
+
+\subsection{Equation-to-code 연결 원칙}
+
+실제 함수 이름과 validation test는
+\texttt{docs/implementation/Equation\_Code\_Map.md}에서 관리한다. 각 mapping은 equation label,
+public/private 함수, input/output shape, dtype, device, unit과 검증 test를 함께 기록한다.
+수식과 source가 달라지면 둘 중 하나만 수정하지 않고 같은 변경에서 map과 test를 함께
+갱신한다.
+
+핵심 연결은 다음과 같다.
+
+\begin{center}
+\begin{longtable}{ll}
+\toprule
+Equation & Physical implementation owner \\
+\midrule
+\eqref{eq:dc-energy-components} & fixed-density target energy \\
+\eqref{eq:zvector-equation} & common CPU/GPU adjoint response \\
+\eqref{eq:final-gradient-assembly} & backend-independent gradient assembly \\
+\eqref{eq:gth-nonlocal-derivative} & GTH nonlocal projector response \\
+\eqref{eq:fftdf-hartree-derivative} & FFTDF J derivative \\
+\eqref{eq:gdf-cderi-derivative} & GDF source/metric response \\
+\eqref{eq:mgga-tau-derivative} & SCAN/r2SCAN explicit XC derivative \\
+\eqref{eq:rsdf-cderi-derivative} & RSDF independent source/metric response \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\section{Reference와 재현성 주의}
+
+PySCF와 GPU4PySCF source/example은 API와 tensor convention의 primary reference다. CP2K
+source/data는 GTH pseudopotential, periodic $G=0$, cutoff/grid와 force formulation을
+비교하는 reference로 사용하되, GPW/auxiliary-density algorithm을 PySCF GDF/RSDF 수식과
+동일시하지 않는다. 외부 source를 참고할 때 license와 attribution을 확인하고 private API
+version을 result metadata에 남긴다.

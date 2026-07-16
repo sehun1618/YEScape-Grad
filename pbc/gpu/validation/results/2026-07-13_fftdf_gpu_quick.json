@@ -1,0 +1,110 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_fftdf_validation_v1",
+  "overall_status": "pass",
+  "cases": [
+    {
+      "case": "h2_gamma_szv",
+      "status": "pass",
+      "gpu_energy_ha": -1.2029918789382716,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          1.3290966685000835e-16,
+          -1.2666008315703116e-16,
+          0.13545047186922546
+        ],
+        [
+          -3.5919503570139073e-16,
+          6.676029402201984e-17,
+          -0.1334382153511272
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          1.7763568394002505e-12,
+          0.0,
+          0.13545052541363845
+        ],
+        [
+          -8.881784197001252e-13,
+          0.0,
+          -0.13343829974199473
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -1.7762239297334004e-12,
+          -1.2666008315703116e-16,
+          -5.354441298677237e-08
+        ],
+        [
+          8.878192246644239e-13,
+          6.676029402201984e-17,
+          8.43908675163263e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 8.43908675163263e-08,
+      "cpu_gpu_energy_abs_error_ha": 3.598255027270625e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 7.469008744820371e-11,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha_target": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr_target": 1e-07
+      },
+      "input": {
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 20.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.652331612072885,
+        "gpu_analytic_gradient": 0.2561390483751893,
+        "gpu_full_fd_gradient": 1.5878791017457843
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": 20.0,
+        "z_vector_dimension": 2,
+        "z_vector_residual_max_abs": 1.6187037012142003e-38,
+        "z_vector_condition_number": 1.3437111980752614,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "Cell/grid/projector metadata setup",
+          "Ewald nuclear-repulsion gradient",
+          "final result reporting"
+        ]
+      }
+    }
+  ]
+}

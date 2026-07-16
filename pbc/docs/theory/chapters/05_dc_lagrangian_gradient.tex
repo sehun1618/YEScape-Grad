@@ -1,0 +1,156 @@
+\section{DC-DFT Lagrangian과 전체 nuclear gradient}
+\label{sec:dc-lagrangian}
+
+\subsection{Constraint를 포함한 Lagrangian}
+
+HF orbital coefficient를 $C$라 하고 HF stationarity residual의 VO block을
+\begin{equation}
+  f_{ai}^{\vk}(C,\vR)
+  =\left[C_v^{\vk\dagger}F_{\mathrm{HF}}^{\vk}C_o^{\vk}\right]_{ai}
+  \label{eq:hf-stationarity-residual}
+\end{equation}
+로 정의한다. 수렴한 HF solution에서는 $f=0$이다. Target energy 자체는 이 constraint에
+대해 stationary하지 않으므로 adjoint multiplier $z$를 도입한 reduced Lagrangian을
+\begin{equation}
+  \mathcal L(C,z;\vR)
+  =E_{\mathrm{DC-DFA}}(C;\vR)
+   +2\operatorname{Re}\sum_{\vk ai}w_\vk
+    z_{ai}^{\vk *}f_{ai}^{\vk}(C;\vR)
+  \label{eq:dc-lagrangian}
+\end{equation}
+로 둔다. MO orthonormality multiplier는 아래의 energy-weighted density와 overlap/Pulay
+항에 흡수하여 표기한다.
+
+Orbital rotation에 대한 stationarity
+\begin{equation}
+  \frac{\partial\mathcal L}{\partial\kappa}=0
+  \label{eq:lagrangian-orbital-stationarity}
+\end{equation}
+를 적용하면 식~\eqref{eq:zvector-equation}의 Z-vector equation을 얻는다. 따라서 total
+derivative에서 명시적인 $\dd C/\dd R_{Ax}$ 항은 사라지고
+\begin{equation}
+  \frac{\dd E_{\mathrm{DC-DFA}}}{\dd R_{Ax}}
+  =\left.\frac{\partial\mathcal L}{\partial R_{Ax}}\right|_{C,z}
+  =g_{Ax}^{\mathrm{explicit}}+g_{Ax}^{\mathrm{response}}
+  \label{eq:dc-gradient-master}
+\end{equation}
+만 남는다.
+
+\subsection{Explicit target contribution}
+
+Density matrix를 고정한 target energy의 explicit derivative를 다음처럼 분해한다.
+\begin{equation}
+  g_{Ax}^{\mathrm{explicit}}
+  =g_{Ax}^{1e}+g_{Ax}^{\mathrm H}+g_{Ax}^{\mathrm{xc}}
+   +g_{Ax}^{\mathrm{Pulay,t}}+g_{Ax}^{\mathrm{NN}}.
+  \label{eq:explicit-gradient-decomposition}
+\end{equation}
+
+One-electron term은
+\begin{equation}
+  g_{Ax}^{1e}
+  =\frac{1}{N_k}\sum_\vk
+    \Tr[D^{\vk}h^{\vk,Ax}]
+  \label{eq:one-electron-gradient}
+\end{equation}
+이다. $h^{Ax}$에는 kinetic, local GTH, nonlocal GTH의 AO matrix derivative가 모두
+포함된다.
+
+Hartree term은 density를 고정한 Coulomb matrix derivative로
+\begin{equation}
+  g_{Ax}^{\mathrm H}
+  =\frac{1}{2N_k}\sum_\vk
+    \Tr[D^{\vk}J^{\vk,Ax}[D]]
+  \label{eq:hartree-gradient}
+\end{equation}
+이다. $J^{Ax}[D]$는 FFTDF에서는 AO/grid와 Coulomb-kernel derivative, GDF/RSDF에서는
+three-center source와 two-center metric derivative를 포함한다.
+
+Semilocal XC explicit derivative는 density matrix를 고정하고 AO와 quadrature representation을
+미분한 값이다.
+\begin{equation}
+  g_{Ax}^{\mathrm{xc}}
+  =\left.
+    \frac{\partial E_{\mathrm{xc}}[D;\vR]}{\partial R_{Ax}}
+   \right|_D.
+  \label{eq:xc-explicit-gradient}
+\end{equation}
+Atom-centered Gaussian AO를 uniform periodic grid에서 평가하므로 AO center derivative와
+periodic image/Bloch phase convention이 central value와 같아야 한다. SCAN/r2SCAN에서는
+$\tau$ channel이 추가된다.
+
+\subsection{Target overlap/Pulay term}
+
+Target Fock의 occupied--occupied block으로 target energy-weighted density를
+\begin{equation}
+  W_{\mathrm t}^{\vk}
+  =2C_o^{\vk}
+    \left(C_o^{\vk\dagger}F_{\mathrm t}^{\vk}C_o^{\vk}\right)
+    C_o^{\vk\dagger}
+  \label{eq:target-energy-weighted-density}
+\end{equation}
+로 정의한다. 그러면 target overlap contribution은
+\begin{equation}
+  g_{Ax}^{\mathrm{Pulay,t}}
+  =-\frac{1}{N_k}\sum_\vk
+    \Tr[W_{\mathrm t}^{\vk}S^{\vk,Ax}]
+  \label{eq:target-overlap-pulay}
+\end{equation}
+이다. AO-row derivative formulation에서는 식~\eqref{eq:one-electron-gradient}--
+\eqref{eq:target-overlap-pulay}의 일부가 atom-row contraction으로 재배치될 수 있지만,
+합계는 동일해야 한다.
+
+Ion--ion 항은 GTH ionic charge와 periodic Ewald convention으로
+\begin{equation}
+  g_{Ax}^{\mathrm{NN}}
+  =\frac{\partial E_{\mathrm{NN}}}{\partial R_{Ax}}
+  \label{eq:nuclear-repulsion-gradient}
+\end{equation}
+이다.
+
+\subsection{HF orbital-response contribution}
+
+식~\eqref{eq:zvector-contraction}을 index로 쓰면
+\begin{equation}
+  g_{Ax}^{\mathrm{response}}
+  =2\operatorname{Re}\sum_{\vk ai}w_\vk
+   z_{ai}^{\vk *}B_{ai}^{\vk,Ax}.
+  \label{eq:response-gradient}
+\end{equation}
+여기서 $B^{Ax}$는 source HF equation의 nuclear derivative다. Target PBE와 MGGA가
+바뀌어도 $B^{Ax}$와 HF Hessian의 물리적 정의는 바뀌지 않는다. 바뀌는 것은 target
+VO gradient $g$와 explicit XC derivative이므로 같은 response infrastructure를 재사용할
+수 있다.
+
+\subsection{Backend-independent assembly}
+
+최종 package decomposition은
+\begin{align}
+  g_{Ax}^{\mathrm{elec,explicit}}
+  &=g_{Ax}^{1e}+g_{Ax}^{\mathrm H}+g_{Ax}^{\mathrm{xc}}
+    +g_{Ax}^{\mathrm{Pulay,t}},\\
+  g_{Ax}
+  &=g_{Ax}^{\mathrm{elec,explicit}}
+    +g_{Ax}^{\mathrm{NN}}+g_{Ax}^{\mathrm{response}}
+  \label{eq:final-gradient-assembly}
+\end{align}
+로 기록한다. FFTDF, GDF, RSDF의 차이는 $J/K$ value와 derivative provider에 있고,
+Z-vector equation 및 final assembly contract는 공통이다.
+
+\begin{remark}
+Full-energy finite difference는 $\vR\pm h\mathbf e_{Ax}$ 각각에서 source HF를 다시
+수렴시키고 target energy를 새로 평가해야 한다. Central density를 고정한 component FD는
+식~\eqref{eq:xc-explicit-gradient} 같은 개별 kernel 진단에는 유용하지만 전체 analytic
+gradient의 reference가 아니다.
+\end{remark}
+
+\subsection{Translational invariance}
+
+고정된 lattice 안에서 모든 원자를 같은 벡터만큼 이동하면 energy는 변하지 않아야 한다.
+따라서 converged representation에서
+\begin{equation}
+  \sum_A\mathbf g_A=\mathbf0
+  \label{eq:translation-sum-rule}
+\end{equation}
+이다. 큰 net gradient는 AO image derivative, auxiliary-center response, XC grid aliasing,
+$G=0$ 처리 또는 k-point normalization 누락을 찾는 강력한 diagnostic이다.

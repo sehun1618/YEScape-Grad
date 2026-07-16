@@ -1,0 +1,136 @@
+\section{SCAN/r2SCAN meta-GGA energies and gradients}
+\label{sec:mgga}
+
+\subsection{Semilocal ingredients}
+
+At each grid point, a spin-unpolarized MGGA evaluates
+\begin{equation}
+  e_{\mathrm{xc}}
+  =f(\rho,\sigma,\tau),
+  \qquad \sigma=\nabla\rho\cdot\nabla\rho.
+  \label{eq:mgga-ingredients}
+\end{equation}
+The weights entering the variational derivative are
+\begin{equation}
+  v_\rho=\frac{\partial f}{\partial\rho},
+  \qquad
+  v_\sigma=\frac{\partial f}{\partial\sigma},
+  \qquad
+  v_\tau=\frac{\partial f}{\partial\tau}.
+  \label{eq:mgga-weights}
+\end{equation}
+
+SCAN is a constraint-based functional designed to connect the uniform-electron
+gas, single-orbital, and slowly varying density limits.  r2SCAN regularizes the
+numerically sensitive switching functions of SCAN and improves grid
+convergence, but it has the same derivative structure in terms of $\rho$,
+$\sigma$, and $\tau$.
+
+\subsection{AO representation of \texorpdfstring{$\tau$}{tau}}
+
+Writing Eq.~\eqref{eq:tau-definition} as an AO product gives
+\begin{equation}
+  \tau(\mathbf r)
+  =\frac{1}{2N_k}\sum_{\vk\mu\nu}D_{\mu\nu}^{\vk}
+   \sum_{y=x,y,z}
+   \partial_y\phi_{\nu\vk}^{*}(\mathbf r)
+   \partial_y\phi_{\mu\vk}(\mathbf r).
+  \label{eq:mgga-tau-ao}
+\end{equation}
+The tau contribution to the target MGGA Fock matrix is
+\begin{equation}
+  V_{\mu\nu}^{\tau,\vk}
+  =\frac12\int_\Omega v_\tau(\mathbf r)
+   \nabla\phi_{\nu\vk}^{*}(\mathbf r)\cdot
+   \nabla\phi_{\mu\vk}(\mathbf r)\dd\mathbf r.
+  \label{eq:mgga-vtau-matrix}
+\end{equation}
+The factor $1/2$ comes from Eq.~\eqref{eq:tau-definition}.  One must first
+determine whether the numerical integration library already incorporates the
+$\tau$ convention into its effective weight and then apply the factor exactly
+once.
+
+\subsection{Explicit nuclear derivative}
+
+At fixed density matrix,
+\begin{equation}
+  E_{\mathrm{xc}}^{Ax}
+  =\int_\Omega\left(
+    v_\rho\rho^{Ax}
+    +v_\sigma\sigma^{Ax}
+    +v_\tau\tau^{Ax}\right)\dd\mathbf r.
+  \label{eq:mgga-xc-derivative}
+\end{equation}
+On a fixed-cell uniform grid, quadrature points and volume weights do not
+change with a nuclear coordinate, so only AO derivatives remain.  The GGA
+part contains
+\begin{equation}
+  \sigma^{Ax}=2\nabla\rho\cdot\nabla\rho^{Ax},
+  \label{eq:mgga-sigma-derivative}
+\end{equation}
+while the tau derivative is
+\begin{align}
+  \tau^{Ax}(\mathbf r)
+  =\frac{1}{2N_k}\sum_{\vk\mu\nu}D_{\mu\nu}^{\vk}
+   \sum_y\big[&
+   \partial_y\phi_{\nu\vk}^{Ax *}
+   \partial_y\phi_{\mu\vk}
+  \notag\\
+   &+\partial_y\phi_{\nu\vk}^{*}
+   \partial_y\phi_{\mu\vk}^{Ax}\big].
+  \label{eq:mgga-tau-derivative}
+\end{align}
+Because an AO-center derivative and a spatial gradient appear together,
+second spatial derivatives of the AOs are required.  This is the principal
+reason why an MGGA gradient kernel is more complicated than a GGA kernel.
+
+\subsection{Coupling to the nonvariational response}
+
+HF still defines the source orbitals in an MGGA target calculation.  The
+Hessian $A$ is therefore the same as in Eq.~\eqref{eq:hf-hessian-action}.  The
+addition of Eq.~\eqref{eq:mgga-vtau-matrix} to the target Fock matrix changes
+the target VO gradient to
+\begin{equation}
+  g_{ai}^{\vk,\mathrm{MGGA}}
+  =\left[C_v^{\vk\dagger}
+   \left(h+J+V_\rho+V_\sigma+V_\tau\right)^{\vk}
+   C_o^{\vk}\right]_{ai}.
+  \label{eq:mgga-target-vo}
+\end{equation}
+After solving for the Z-vector, it is contracted with the source-HF nuclear
+perturbation through Eq.~\eqref{eq:response-gradient}.  Connecting the MGGA
+kernel only to the explicit XC term while retaining a PBE target-Fock VO
+right-hand side would give an incorrect nonvariational response.
+
+\subsection{Grid aliasing}
+
+High-frequency components of Gaussian AOs alias on a coarse grid.  Since
+$\tau$ is a product of AO gradients, it is more sensitive to high reciprocal
+components than the density itself.  MGGA calculations therefore require a
+separate convergence study of \texttt{cell.mesh}, or of the effective
+integration mesh.  The resolved integer triplet and cutoff should be recorded
+together rather than changing one direction at a time.
+
+The translational sum rule is a sensitive measure of grid aliasing.  Even when
+the analytic--FD component error is small, a large
+\begin{equation}
+  \left\|\sum_A\mathbf g_A^{\mathrm{xc}}\right\|
+  \label{eq:mgga-xc-translation}
+\end{equation}
+means that the explicit XC-grid derivative has not converged.
+
+\subsection{CPU/GPU parity and backend composition}
+
+CPU and GPU routes must use the same libxc functional label, density
+convention, mesh, and AO derivative order.  Comparisons include not only total
+energy and final gradient, but also $E_{\mathrm{xc}}$, the target-Fock VO
+block, the $v_\tau$ row derivative, the Z-vector right-hand side, and its
+residual.  Completion cases for SCAN/r2SCAN include Gamma-point H$_2$,
+distorted H$_2$O, and sampled k-points.
+
+The target MGGA and the source-HF density-fitting provider have separate
+responsibilities.  The same $\rho$, $\nabla\rho$, and $\tau$ target path must
+therefore be tested with RSDF as well as FFTDF and GDF.  An RSDF+MGGA case is a
+composition test in which the XC derivative of
+Eq.~\eqref{eq:mgga-xc-derivative} and the source/metric auxiliary response of
+Eq.~\eqref{eq:rsdf-total-gradient} operate simultaneously.

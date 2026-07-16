@@ -1,0 +1,222 @@
+\section{Periodic density fitting과 RSDF response}
+\label{sec:periodic-df}
+
+\subsection{왜 density fitting의 미분이 필요한가}
+
+Periodic HF와 target DFA의 Coulomb 및 exact-exchange energy는 four-center electron
+repulsion integral을 직접 다루면 계산량과 memory가 빠르게 증가한다. Density
+fitting은 AO pair density를 auxiliary Gaussian basis로 전개하여 이 문제를
+three-center quantity와 two-center metric으로 바꾼다. 그러나 핵이 움직이면 primary
+AO와 auxiliary basis가 모두 함께 움직인다. 따라서 energy value에 density fitting을
+사용했다면 gradient에도 auxiliary basis와 metric response가 포함되어야 한다.
+
+Bloch AO를 $\chi_{\mu\vk}(\mathbf r)$, momentum transfer를
+\begin{equation}
+ \mathbf q=\mathbf k_j-\mathbf k_i
+\end{equation}
+로 정의한다. Auxiliary Bloch function $P\mathbf q$에 대한 three-center source와
+Coulomb metric은
+\begin{align}
+ B_{\mu\nu,P}^{ij}
+ &=\left(\chi_{\mu\mathbf k_i}\chi_{\nu\mathbf k_j}\middle|P\mathbf q\right),\\
+ M_{PQ}(\mathbf q)
+ &=\left(P\mathbf q\middle|Q\mathbf q\right)
+\end{align}
+이다. 여기서 ket AO에 complex conjugate가 포함되는지 여부는 program의 integral
+orientation convention에 따라 달라질 수 있다. 중요한 점은 central value와
+derivative가 같은 convention을 사용해야 한다는 것이다.
+
+Positive-definite metric의 Cholesky decomposition을
+\begin{equation}
+ \mathbf M(\mathbf q)=\mathbf L(\mathbf q)\mathbf L(\mathbf q)^\dagger
+\end{equation}
+로 두면 orthonormalized three-center factor는
+\begin{equation}
+ \mathbf C^{ij}=\mathbf L(\mathbf q)^{-1}\mathbf B^{ij}
+ \label{eq:cderi-definition}
+\end{equation}
+이다. Four-center integral은 대략
+\begin{equation}
+ (\mu i,\nu j|\lambda l,\sigma m)
+ \simeq \sum_P C_{P,\mu\nu}^{ij}
+ C_{P,\lambda\sigma}^{lm*}
+\end{equation}
+처럼 factorized된다. $\mathbf C$가 PySCF의 CDERI에 해당한다.
+
+\subsection{Nuclear derivative와 auxiliary response}
+
+Atom $A$의 Cartesian coordinate $R_{Ax}$를 미분하면 식
+\eqref{eq:cderi-definition}에서
+\begin{equation}
+ \mathbf C^{Ax}
+ =\mathbf L^{-1}\mathbf B^{Ax}
+ -\mathbf L^{-1}\mathbf L^{Ax}\mathbf C
+ \label{eq:cderi-response}
+\end{equation}
+를 얻는다. 첫 항은 three-center source response이고 둘째 항은 metric response이다.
+Metric을 고정하면 auxiliary Gaussian center가 움직이는 효과와 fitting coefficient의
+변화를 잃는다. 이 누락은 분자가 작을 때 우연히 작을 수 있지만 auxiliary center가
+많아질수록 일반적으로 커진다.
+
+Cholesky derivative는
+\begin{equation}
+ \mathbf M^{Ax}=\mathbf L^{Ax}\mathbf L^\dagger
+ +\mathbf L\mathbf L^{Ax\dagger}
+ \label{eq:cholesky-response}
+\end{equation}
+를 만족한다. 양쪽에 $\mathbf L^{-1}$와 $\mathbf L^{-\dagger}$를 곱하여
+\begin{equation}
+ \mathbf W=\mathbf L^{-1}\mathbf M^{Ax}\mathbf L^{-\dagger}
+\end{equation}
+를 정의한다. Lower-Cholesky gauge에서는
+\begin{equation}
+ \mathbf L^{Ax}=\mathbf L\,\Phi(\mathbf W)
+\end{equation}
+로 쓸 수 있다. $\Phi$는 strict lower triangle을 보존하고 Hermitian diagonal의
+절반을 취한다. 이 gauge를 central value와 derivative에서 일관되게 사용해야 한다.
+
+\subsection{Coulomb kernel의 range separation}
+
+RSDF는 Coulomb kernel을
+\begin{equation}
+ \frac{1}{r}
+ =\frac{\operatorname{erfc}(\omega r)}{r}
+ +\frac{\operatorname{erf}(\omega r)}{r}
+ \label{eq:range-separation}
+\end{equation}
+로 나눈다. 첫 항은 real space에서 빠르게 감쇠하므로 lattice sum으로 계산하고, 둘째
+항은 reciprocal space의 smooth Fourier sum으로 계산한다. 이 분해는 exact identity이지만
+finite image list와 finite reciprocal mesh를 사용하면 $\omega$, screening precision,
+mesh가 실제 numerical representation의 일부가 된다.
+
+PySCF public RSDF에서는 three-center source와 two-center metric의 최적 parameter가
+독립적으로 결정될 수 있다. 이를 명시하면
+\begin{align}
+ \mathbf B^{ij}
+ &=\mathbf B_{\mathrm{SR}}^{ij}(\omega_B,\epsilon_R)
+ +\mathbf B_{\mathrm{LR}}^{ij}(\omega_B,\mathcal G_B)
+ +\delta_{\mathbf q,0}\mathbf B_{vbar}^{ij},
+ \label{eq:rsdf-source}\\
+ \mathbf M(\mathbf q)
+ &=\mathbf M_{\mathrm{SR}}(\mathbf q;\omega_M,\epsilon_M)
+ +\mathbf M_{\mathrm{LR}}(\mathbf q;\omega_M,\mathcal G_M)
+ +\delta_{\mathbf q,0}\mathbf M_{G=0}.
+ \label{eq:rsdf-metric}
+\end{align}
+일반적으로 $\omega_B\neq\omega_M$이고 $\mathcal G_B\neq\mathcal G_M$이다. Auxiliary
+basis의 exponent 분포는 primary AO pair의 분포와 다르므로 metric에 더 높은 cutoff가
+필요할 수 있다.
+
+핵 변위에서 fixed cell을 가정하면 lattice vector와 reciprocal vector는 변하지 않는다.
+따라서 $\omega$와 mesh를 numerical input으로 고정한 derivative는
+\begin{align}
+ \mathbf B^{ij,Ax}
+ &=\mathbf B_{\mathrm{SR}}^{ij,Ax}
+ +\mathbf B_{\mathrm{LR}}^{ij,Ax}
+ +\delta_{\mathbf q,0}\mathbf B_{vbar}^{ij,Ax},\\
+ \mathbf M^{Ax}
+ &=\mathbf M_{\mathrm{SR}}^{Ax}
+ +\mathbf M_{\mathrm{LR}}^{Ax}
+ +\delta_{\mathbf q,0}\mathbf M_{G=0}^{Ax}
+\end{align}
+이다. Stress에서는 lattice와 reciprocal mesh 자체가 변하므로 이 장의 fixed-cell 식만으로
+충분하지 않다.
+
+\subsection{Primary AO와 auxiliary-center ownership}
+
+Three-center integral에는 세 개의 atom-centered object가 있다. Symbolically
+\begin{equation}
+ B_{\mu\nu,P}^{Ax}
+ =\delta_{A,A_\mu}\partial_{A_\mu x}B_{\mu\nu,P}
+ +\delta_{A,A_\nu}\partial_{A_\nu x}B_{\mu\nu,P}
+ +\delta_{A,A_P}\partial_{A_Px}B_{\mu\nu,P}.
+\end{equation}
+Integral library의 \texttt{ip1}, \texttt{ip2}는 흔히 electronic coordinate에 대한 derivative를
+반환한다. Nuclear center를 이동시키는 derivative에는 translational identity 때문에
+반대 부호가 붙는다. AO row, AO column, auxiliary index 각각의 atom slice를 적용한 뒤
+세 contribution을 합해야 한다.
+
+Two-center metric에는 두 auxiliary center가 있으므로
+\begin{equation}
+ M_{PQ}^{Ax}
+ =\delta_{A,A_P}\partial_{A_Px}M_{PQ}
+ +\delta_{A,A_Q}\partial_{A_Qx}M_{PQ}.
+\end{equation}
+Short-range metric derivative는 central value와 동일한 screened lattice image list를
+사용해야 한다. Image cutoff가 다르면 둘 다 연속적인 Coulomb metric을 근사하더라도
+finite calculation의 exact derivative가 아니다.
+
+\subsection{\texorpdfstring{$G=0$}{G=0} mode와 charge correction}
+
+Periodic Coulomb kernel의 $G=0$ mode는 charge neutrality와 Ewald convention에 의해
+특별히 처리된다. Source의 \texttt{vbar}와 metric의 $G=0$ correction은 momentum transfer가
+정확히 zero인 block에서만 나타난다.
+\begin{equation}
+ \delta_{\mathbf q,0}=\begin{cases}
+ 1,& \mathbf k_j-\mathbf k_i=\mathbf 0,\\
+ 0,& \text{otherwise}.
+ \end{cases}
+\end{equation}
+Gamma-only calculation뿐 아니라 sampled k-point calculation의 diagonal pair도
+$\mathbf q=0$ block이다. 따라서 ``Gamma인가?''와 ``momentum transfer가 zero인가?''를
+동일한 조건으로 취급하면 안 된다.
+
+\subsection{k-point pair와 Hermitian reconstruction}
+
+$N_k$개의 k-point가 있으면 J/K build에는 여러 $(i,j)$ pair가 필요하다. Momentum
+conservation 때문에 metric은 $\mathbf q=\mathbf k_j-\mathbf k_i$에 의해 분류된다.
+Canonical pair만 저장할 때 reverse pair는
+\begin{equation}
+ C^{ji}_{P,\nu\mu}=C^{ij*}_{P,\mu\nu}
+\end{equation}
+와 같은 Hermitian relation으로 복원한다. Nuclear derivative도 같은 conjugation과 AO
+index transpose를 따라야 한다. Complex k-point에서 실수 gradient를 얻으려면 모든
+pair contraction과 equal-weight $1/N_k$ normalization이 일관되어야 한다.
+
+Closed-shell Coulomb auxiliary density를
+\begin{equation}
+ j_P=\sum_{\vk\mu\nu}C^\vk_{P,\mu\nu}D^\vk_{\nu\mu}
+\end{equation}
+라 하면 fixed-density J derivative는
+\begin{equation}
+ (J^\vk)^{Ax}_{\mu\nu}
+ =\frac{1}{N_k}\sum_P
+ \left[j_P^{Ax}C^\vk_{P,\mu\nu}
+ +j_PC^{\vk,Ax}_{P,\mu\nu}\right].
+\end{equation}
+Exchange에는 두 CDERI factor가 있으므로 두 factor 각각에 product rule을 적용한다.
+
+\subsection{DC-DFT gradient 안에서의 역할}
+
+RSDF는 two-electron value와 response의 numerical representation을 정한다. DC-DFT의
+nonvariational 구조 자체는 backend에 의존하지 않는다. 전체 gradient는
+\begin{equation}
+ E_{\mathrm{DC}}^{Ax}
+ =E_{\mathrm{target,explicit}}^{Ax}
+ +\mathbf z^T\mathbf B_{\mathrm{HF}}^{Ax}
+ \label{eq:dc-rsdf-total}
+\end{equation}
+로 쓸 수 있다. 첫 항에는 target one-electron, Hartree, XC, overlap/Pulay 및 nuclear
+contribution이 들어간다. 둘째 항은 HF density가 핵 변위에 따라 변하는 orbital
+response를 adjoint Z-vector로 포함한다. RSDF의 $C^{Ax}$는 target explicit J와 source
+HF response operator 양쪽에 사용된다.
+
+\subsection{검증 원리}
+
+Analytic derivative의 correctness와 physical convergence는 다른 문제이다. 먼저 같은
+finite RSDF representation에서 central energy finite difference와 비교한다.
+\begin{equation}
+ g_{Ax}^{\mathrm{FD}}(h)
+ =\frac{E(\mathbf R+h\mathbf e_{Ax})
+       -E(\mathbf R-h\mathbf e_{Ax})}{2h}.
+\end{equation}
+그 다음 $h$, source/metric mesh, primary/auxiliary basis, k-mesh를 각각 수렴시킨다.
+
+또한 독립적으로 재구성한 CDERI가 SCF storage와 일치해야 한다.
+\begin{equation}
+ \Delta_C=\max_{ijP\mu\nu}
+ \left|C_{P,\mu\nu}^{ij,\mathrm{reconstructed}}
+ -C_{P,\mu\nu}^{ij,\mathrm{storage}}\right|.
+\end{equation}
+$\Delta_C$가 작지 않으면 derivative 식이 옳더라도 다른 omega, mesh, pair orientation,
+또는 factor gauge를 미분한 것이므로 production gradient를 거부해야 한다.

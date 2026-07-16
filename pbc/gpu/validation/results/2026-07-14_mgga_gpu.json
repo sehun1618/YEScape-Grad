@@ -1,0 +1,1306 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_mgga_validation_v2",
+  "overall_status": "pass",
+  "cases": [
+    {
+      "case": "h2_scan_gamma_fftdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -1.213420840160868,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          2.7010691069216414e-16,
+          3.000202869625987e-17,
+          0.13395667444215964
+        ],
+        [
+          -1.7801985679822424e-16,
+          8.341805424516622e-17,
+          -0.13226933691474532
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          1.7763568394002505e-12,
+          2.220446049250313e-13,
+          0.13395673008176345
+        ],
+        [
+          -4.440892098500626e-13,
+          0.0,
+          -0.13226941990840402
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -1.7760867324895583e-12,
+          -2.2201460289633506e-13,
+          -5.563960381316235e-08
+        ],
+        [
+          4.439111899932644e-13,
+          8.341805424516622e-17,
+          8.299365869546271e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 8.299365869546271e-08,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -1.904718613349703e-12,
+          -2.0575577493975456e-13,
+          -5.5713909458132704e-08
+        ],
+        [
+          3.405114420437097e-13,
+          1.2939468244614908e-13,
+          8.306796447921094e-08
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 8.306796447921094e-08,
+      "cpu_gpu_energy_abs_error_ha": 3.591771324806814e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 7.430578374822971e-11,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "SCAN",
+        "df_backend": "fftdf",
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 20.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.8380653457716107,
+        "gpu_analytic_gradient": 0.27393703907728195,
+        "gpu_full_fd_gradient": 1.6253291619941592
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": 20.0,
+        "target_numint_backend": "numint",
+        "z_vector_dimension": 2,
+        "z_vector_residual_max_abs": 1.1493932343165509e-38,
+        "z_vector_condition_number": 1.3437111980752614,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "Cell/grid/projector metadata setup",
+          "Ewald nuclear-repulsion gradient",
+          "final result reporting"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.06548928283154964,
+          "hf_ax_and_zvector": 0.051025113090872765,
+          "one_electron_and_pseudopotential": 0.05354935582727194,
+          "full_jk_nuclear_derivative": 0.04229036718606949,
+          "target_coulomb_xc": 0.006858496926724911,
+          "pulay_and_nuclear": 0.0016268985345959663,
+          "nuclear_response_contraction": 0.052927917800843716,
+          "final_host_reporting": 0.0001276182010769844,
+          "gradient_total": 0.2738994285464287
+        }
+      }
+    },
+    {
+      "case": "h2_r2scan_k211_gdf_dzvp",
+      "status": "pass",
+      "gpu_energy_ha": -1.2579839419568957,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          -8.615999513648437e-19,
+          -1.6039666852813665e-18,
+          -0.018931740817492673
+        ],
+        [
+          8.257915444799736e-18,
+          -3.230968502597985e-17,
+          0.019815812540003336
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          -4.440892098500626e-12,
+          2.220446049250313e-12,
+          -0.018931691672996465
+        ],
+        [
+          -2.3092638912203256e-11,
+          2.0872192862952943e-11,
+          0.01981575641685218
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          4.4408912369006745e-12,
+          -2.2204476532169985e-12,
+          -4.9144496208630706e-08
+        ],
+        [
+          2.3092647170118702e-11,
+          -2.087222517263797e-11,
+          5.6123151154219286e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 5.6123151154219286e-08,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          4.448798051452552e-12,
+          -2.247000040284519e-12,
+          -4.868965895049593e-08
+        ],
+        [
+          2.310083611499725e-11,
+          -2.0899940685263372e-11,
+          5.566838143927777e-08
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 5.566838143927777e-08,
+      "cpu_gpu_energy_abs_error_ha": 6.8687278087509185e-12,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 4.5483725813477704e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "R2SCAN",
+        "df_backend": "gdf",
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-dzvp",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          13,
+          13,
+          13
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.5763424886390567,
+        "gpu_analytic_gradient": 5.1819514110684395,
+        "gpu_full_fd_gradient": 7.739465471357107
+      },
+      "gradient_metadata": {
+        "backend": "gdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "omega": 0.889163242827916,
+        "source_omega": 0.889163242827916,
+        "metric_omega": 0.889163242827916,
+        "source_mesh": [
+          19,
+          19,
+          19
+        ],
+        "metric_mesh": [
+          21,
+          21,
+          21
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 1.959366890957881e-09,
+        "z_vector_dimension": 36,
+        "z_vector_residual_max_abs": 1.3877787807814457e-17,
+        "z_vector_condition_number": 6.1637157004889875,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "GDF central 2-center/3-center integral and CDERI setup",
+          "GDF central local/nonlocal GTH hcore matrix setup",
+          "GDF 2-center/3-center derivative primitive generation",
+          "GDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF GDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "GDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.04534584656357765,
+          "hf_ax_and_zvector": 0.2805875763297081,
+          "one_electron_host_integrals": 0.4501134967431426,
+          "one_electron_total": 0.4560788869857788,
+          "gdf_host_primitive_integrals": 4.289682751521468,
+          "gdf_metric_cderi_device_response": 0.016446842812001705,
+          "gdf_response_tensor_total": 4.3062011217698455,
+          "gdf_jk_device_contraction": 0.0310637466609478,
+          "target_explicit_device_assembly": 0.012800280936062336,
+          "z_nuclear_device_contraction": 0.049706440418958664,
+          "final_host_reporting": 0.000119747593998909,
+          "gradient_total": 5.18190888222307
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_scan_gamma_gdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -17.377254733679234,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          0.3473232652946841,
+          0.42271517369372763,
+          -0.09791760497211008
+        ],
+        [
+          -0.5210702177209929,
+          -0.08246468353980146,
+          0.06584383569563214
+        ],
+        [
+          0.18394494835241412,
+          -0.320411047283214,
+          0.10577181735006722
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          0.3473232385342584,
+          0.4227151124247541,
+          -0.09791835485550848
+        ],
+        [
+          -0.5210702511337928,
+          -0.0824646790409389,
+          0.06584382927776744
+        ],
+        [
+          0.18394495328699634,
+          -0.32041106342362013,
+          0.10577182311344302
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          2.676042570870507e-08,
+          6.12689735057792e-08,
+          7.498833984043163e-07
+        ],
+        [
+          3.3412799860244036e-08,
+          -4.498862560264882e-09,
+          6.417864698016196e-09
+        ],
+        [
+          -4.93458221506593e-09,
+          1.6140406122744366e-08,
+          -5.763375804379578e-09
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 7.498833984043163e-07,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          2.665299331239268e-08,
+          6.111371764205842e-08,
+          7.498650567150378e-07
+        ],
+        [
+          3.3442401736749616e-08,
+          -4.480344595325647e-09,
+          6.366412688696421e-09
+        ],
+        [
+          -4.9540374025269784e-09,
+          1.622527551203845e-08,
+          -5.749378348407497e-09
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 7.498650567150378e-07,
+      "cpu_gpu_energy_abs_error_ha": 1.2004619520666893e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 1.5525586372078237e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "SCAN",
+        "df_backend": "gdf",
+        "coordinates_bohr": [
+          [
+            0.1,
+            -0.2,
+            0.3
+          ],
+          [
+            1.55,
+            0.15,
+            0.05
+          ],
+          [
+            -0.35,
+            1.25,
+            -0.25
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 25.0,
+        "mesh": [
+          17,
+          17,
+          17
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 1.3512415830045938,
+        "gpu_analytic_gradient": 4.1208216873928905,
+        "gpu_full_fd_gradient": 21.613719788379967
+      },
+      "gradient_metadata": {
+        "backend": "gdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "omega": 0.7352849155346263,
+        "source_omega": 0.7352849155346263,
+        "metric_omega": 0.7352849155346263,
+        "source_mesh": [
+          19,
+          19,
+          19
+        ],
+        "metric_mesh": [
+          21,
+          21,
+          21
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 6.387406437102792e-10,
+        "z_vector_dimension": 16,
+        "z_vector_residual_max_abs": 1.3877787807814457e-17,
+        "z_vector_condition_number": 4.146903181109228,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "GDF central 2-center/3-center integral and CDERI setup",
+          "GDF central local/nonlocal GTH hcore matrix setup",
+          "GDF 2-center/3-center derivative primitive generation",
+          "GDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF GDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "GDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.07916615530848503,
+          "hf_ax_and_zvector": 0.618640435859561,
+          "one_electron_host_integrals": 1.1400890182703733,
+          "one_electron_total": 1.1598360324278474,
+          "gdf_host_primitive_integrals": 2.0283805672079325,
+          "gdf_metric_cderi_device_response": 0.003949428908526897,
+          "gdf_response_tensor_total": 2.0324029475450516,
+          "gdf_jk_device_contraction": 0.024062967859208584,
+          "target_explicit_device_assembly": 0.011562841013073921,
+          "z_nuclear_device_contraction": 0.19498045183718204,
+          "final_host_reporting": 0.00012090429663658142,
+          "gradient_total": 4.120778375305235
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_r2scan_k211_fftdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -17.911010680276647,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          1.458363340926783,
+          3.8883727064803715,
+          5.146849654740575
+        ],
+        [
+          -0.41945457154787363,
+          0.00017717225409775864,
+          0.06296088366642284
+        ],
+        [
+          0.27204932672640314,
+          -0.15816463387809168,
+          0.06307660256481594
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          1.4583576860527359,
+          3.8883639190245844,
+          5.146844584995591
+        ],
+        [
+          -0.419454650684159,
+          0.00017713176703182398,
+          0.06296084555046377
+        ],
+        [
+          0.2720492893448778,
+          -0.15816461910844737,
+          0.06307659324633619
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          5.654874047245073e-06,
+          8.78745578702933e-06,
+          5.069744983821067e-06
+        ],
+        [
+          7.913628535805017e-08,
+          4.0487065934655814e-08,
+          3.811595906955123e-08
+        ],
+        [
+          3.738152531962413e-08,
+          -1.4769644313128438e-08,
+          9.318479751718733e-09
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 8.78745578702933e-06,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          5.6550220766116155e-06,
+          8.787617802319403e-06,
+          5.069917815347935e-06
+        ],
+        [
+          7.899878912143166e-08,
+          4.0412140074217937e-08,
+          3.8000000757154595e-08
+        ],
+        [
+          3.74794932866962e-08,
+          -1.4825136146479068e-08,
+          9.305020642891293e-09
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 8.787617802319403e-06,
+      "cpu_gpu_energy_abs_error_ha": 1.0366818514739862e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 1.7283152686786707e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "R2SCAN",
+        "df_backend": "fftdf",
+        "coordinates_bohr": [
+          [
+            0.1,
+            -0.2,
+            0.3
+          ],
+          [
+            1.55,
+            0.15,
+            0.05
+          ],
+          [
+            -0.35,
+            1.25,
+            -0.25
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.8207377111539245,
+        "gpu_analytic_gradient": 1.417414627969265,
+        "gpu_full_fd_gradient": 14.636162854731083
+      },
+      "gradient_metadata": {
+        "backend": "fftdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": 15.0,
+        "target_numint_backend": "numint",
+        "z_vector_dimension": 32,
+        "z_vector_residual_max_abs": 6.938893903907228e-18,
+        "z_vector_condition_number": 3.6240202876176153,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "Cell/grid/projector metadata setup",
+          "Ewald nuclear-repulsion gradient",
+          "final result reporting"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.055940691381692886,
+          "hf_ax_and_zvector": 0.5960691077634692,
+          "one_electron_and_pseudopotential": 0.03929461445659399,
+          "full_jk_nuclear_derivative": 0.5423882640898228,
+          "target_coulomb_xc": 0.010119524784386158,
+          "pulay_and_nuclear": 0.0021561598405241966,
+          "nuclear_response_contraction": 0.17125091888010502,
+          "final_host_reporting": 0.00013637356460094452,
+          "gradient_total": 1.4173629665747285
+        }
+      }
+    },
+    {
+      "case": "h2_scan_gamma_rsdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -1.2284156021170947,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          4.417791047169013e-17,
+          -2.805786813526616e-17,
+          0.12332581836307432
+        ],
+        [
+          -3.959606727787948e-18,
+          -3.44404666957055e-17,
+          -0.12318909790867649
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          4.440892098500626e-12,
+          3.3306690738754696e-12,
+          0.12332588472907524
+        ],
+        [
+          -2.4424906541753444e-12,
+          -4.218847493575595e-12,
+          -0.12318916580733585
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -4.440847920590154e-12,
+          -3.3306971317436048e-12,
+          -6.63660009170286e-08
+        ],
+        [
+          2.4424866945686167e-12,
+          4.218813053108899e-12,
+          6.789865936163153e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 6.789865936163153e-08,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -4.5322842131056216e-12,
+          -3.402140032792184e-12,
+          -6.636357426093031e-08
+        ],
+        [
+          2.3823343661405177e-12,
+          4.215562267866714e-12,
+          6.789618831049005e-08
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 6.789618831049005e-08,
+      "cpu_gpu_energy_abs_error_ha": 3.7836844768435185e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 2.4710511414838265e-12,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "SCAN",
+        "df_backend": "rsdf",
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 20.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.3644484095275402,
+        "gpu_analytic_gradient": 0.854960598051548,
+        "gpu_full_fd_gradient": 4.079304528422654
+      },
+      "gradient_metadata": {
+        "backend": "rsdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "omega": 0.3,
+        "source_omega": 0.3,
+        "metric_omega": 0.4,
+        "source_mesh": [
+          9,
+          9,
+          9
+        ],
+        "metric_mesh": [
+          11,
+          11,
+          11
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 1.1500300711730915e-11,
+        "z_vector_dimension": 2,
+        "z_vector_residual_max_abs": 0.0,
+        "z_vector_condition_number": 1.2991257302218524,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "RSDF central 2-center/3-center integral and CDERI setup",
+          "RSDF central local/nonlocal GTH hcore matrix setup",
+          "RSDF 2-center/3-center derivative primitive generation",
+          "RSDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF RSDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "RSDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.045928025618195534,
+          "hf_ax_and_zvector": 0.03071643505245447,
+          "one_electron_host_integrals": 0.30325042456388474,
+          "one_electron_total": 0.31604330986738205,
+          "rsdf_host_primitive_integrals": 0.3435889696702361,
+          "rsdf_metric_cderi_device_response": 0.004863283596932888,
+          "rsdf_response_tensor_total": 0.3487327042967081,
+          "rsdf_jk_device_contraction": 0.007646837271749973,
+          "target_explicit_device_assembly": 0.0069315480068326,
+          "z_nuclear_device_contraction": 0.09879856370389462,
+          "final_host_reporting": 0.00012051872909069061,
+          "gradient_total": 0.8549220226705074
+        }
+      }
+    },
+    {
+      "case": "h2_r2scan_k211_rsdf_dzvp",
+      "status": "pass",
+      "gpu_energy_ha": -1.2579734308468258,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          3.0010001635611246e-17,
+          4.5662022855990245e-17,
+          -0.01892351152165106
+        ],
+        [
+          3.876089693808308e-17,
+          -6.881965954044434e-18,
+          0.019807564850120814
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          2.6867397195928788e-11,
+          -6.217248937900877e-12,
+          -0.01892346248433263
+        ],
+        [
+          -1.532107773982716e-11,
+          4.884981308350689e-12,
+          0.019807508899960524
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -2.6867367185927152e-11,
+          6.2172945999237325e-12,
+          -4.9037318428091226e-08
+        ],
+        [
+          1.53211165007241e-11,
+          -4.884988190316643e-12,
+          5.5950160289530704e-08
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 5.5950160289530704e-08,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -2.6859471323548517e-11,
+          6.190704340630306e-12,
+          -4.861709604342401e-08
+        ],
+        [
+          1.532926526681009e-11,
+          -4.912726796573856e-12,
+          5.553000531621777e-08
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 5.553000531621777e-08,
+      "cpu_gpu_energy_abs_error_ha": 6.915357175785175e-12,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 4.202223846672126e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "R2SCAN",
+        "df_backend": "rsdf",
+        "coordinates_bohr": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.4
+          ]
+        ],
+        "cell_length_bohr": 6.0,
+        "basis": "gth-dzvp",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          13,
+          13,
+          13
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0005
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.564681232906878,
+        "gpu_analytic_gradient": 4.960810469463468,
+        "gpu_full_fd_gradient": 8.129501132294536
+      },
+      "gradient_metadata": {
+        "backend": "rsdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "omega": 0.3,
+        "source_omega": 0.3,
+        "metric_omega": 0.4,
+        "source_mesh": [
+          9,
+          9,
+          9
+        ],
+        "metric_mesh": [
+          11,
+          11,
+          11
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 1.253862985661769e-10,
+        "z_vector_dimension": 36,
+        "z_vector_residual_max_abs": 1.3877787807814457e-17,
+        "z_vector_condition_number": 6.163733924001796,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "RSDF central 2-center/3-center integral and CDERI setup",
+          "RSDF central local/nonlocal GTH hcore matrix setup",
+          "RSDF 2-center/3-center derivative primitive generation",
+          "RSDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF RSDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "RSDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.04439366143196821,
+          "hf_ax_and_zvector": 0.28544565476477146,
+          "one_electron_host_integrals": 0.4465862289071083,
+          "one_electron_total": 0.45144851971417665,
+          "rsdf_host_primitive_integrals": 4.0515915816649795,
+          "rsdf_metric_cderi_device_response": 0.00904588121920824,
+          "rsdf_response_tensor_total": 4.060914077796042,
+          "rsdf_jk_device_contraction": 0.03288475517183542,
+          "target_explicit_device_assembly": 0.013772225007414818,
+          "z_nuclear_device_contraction": 0.07178262807428837,
+          "final_host_reporting": 0.00011662021279335022,
+          "gradient_total": 4.960762392729521
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_scan_gamma_rsdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -17.377259208415552,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          0.3473245693009154,
+          0.42271057176548354,
+          -0.09791621006349104
+        ],
+        [
+          -0.5210714897819689,
+          -0.08246101900906941,
+          0.06584324626745641
+        ],
+        [
+          0.18394469882367562,
+          -0.3204102267363047,
+          0.10577065225200889
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          0.34732455040931143,
+          0.4227105107013074,
+          -0.09791694965954889
+        ],
+        [
+          -0.5210715208026073,
+          -0.0824610146565874,
+          0.06584323965164174
+        ],
+        [
+          0.1839446935303357,
+          -0.3204102429954503,
+          0.105770647920167
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          1.889160394785705e-08,
+          6.106417616003057e-08,
+          7.395960578554517e-07
+        ],
+        [
+          3.102063839133251e-08,
+          -4.352482013691983e-09,
+          6.615814673871512e-09
+        ],
+        [
+          5.293339905287908e-09,
+          1.625914558545105e-08,
+          4.33184189907454e-09
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 7.395960578554517e-07,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          1.883931499691016e-08,
+          6.100979932366357e-08,
+          7.395469568682866e-07
+        ],
+        [
+          3.097888690017925e-08,
+          -4.3919502756839535e-09,
+          6.585820583326907e-09
+        ],
+        [
+          5.290066523722103e-09,
+          1.630107498984401e-08,
+          4.355146257517539e-09
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 7.395469568682866e-07,
+      "cpu_gpu_energy_abs_error_ha": 1.2001066806988092e-11,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 5.4376836366998305e-11,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "SCAN",
+        "df_backend": "rsdf",
+        "coordinates_bohr": [
+          [
+            0.1,
+            -0.2,
+            0.3
+          ],
+          [
+            1.55,
+            0.15,
+            0.05
+          ],
+          [
+            -0.35,
+            1.25,
+            -0.25
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 25.0,
+        "mesh": [
+          17,
+          17,
+          17
+        ],
+        "kmesh": [
+          1,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 1.1889377934858203,
+        "gpu_analytic_gradient": 3.3030749829486012,
+        "gpu_full_fd_gradient": 22.472897242754698
+      },
+      "gradient_metadata": {
+        "backend": "rsdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 1,
+        "omega": 0.3,
+        "source_omega": 0.3,
+        "metric_omega": 0.4,
+        "source_mesh": [
+          9,
+          9,
+          9
+        ],
+        "metric_mesh": [
+          13,
+          13,
+          13
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 2.2176566139009424e-10,
+        "z_vector_dimension": 16,
+        "z_vector_residual_max_abs": 4.336808689942018e-19,
+        "z_vector_condition_number": 4.146920238336011,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "RSDF central 2-center/3-center integral and CDERI setup",
+          "RSDF central local/nonlocal GTH hcore matrix setup",
+          "RSDF 2-center/3-center derivative primitive generation",
+          "RSDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF RSDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "RSDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.07864960748702288,
+          "hf_ax_and_zvector": 0.3113303482532501,
+          "one_electron_host_integrals": 1.1274667521938682,
+          "one_electron_total": 1.1465013045817614,
+          "rsdf_host_primitive_integrals": 1.5481866747140884,
+          "rsdf_metric_cderi_device_response": 0.0038957465440034866,
+          "rsdf_response_tensor_total": 1.5523444283753633,
+          "rsdf_jk_device_contraction": 0.010848961770534515,
+          "target_explicit_device_assembly": 0.007866897620260715,
+          "z_nuclear_device_contraction": 0.19535790756344795,
+          "final_host_reporting": 0.00012726150453090668,
+          "gradient_total": 3.3030312368646264
+        }
+      }
+    },
+    {
+      "case": "distorted_h2o_r2scan_k211_rsdf_szv",
+      "status": "pass",
+      "gpu_energy_ha": -17.39526187485112,
+      "gpu_analytic_gradient_ha_per_bohr": [
+        [
+          0.30819410190359475,
+          0.4113665578500257,
+          -0.009816460732054999
+        ],
+        [
+          -0.5361517884605436,
+          -0.0896961389927044,
+          0.06652802238489003
+        ],
+        [
+          0.1913891937316957,
+          -0.3216379862441984,
+          0.10645329575261361
+        ]
+      ],
+      "gpu_fd_gradient_ha_per_bohr": [
+        [
+          0.3081941997162829,
+          0.41136657830342926,
+          -0.009816780455196294
+        ],
+        [
+          -0.5361518231961071,
+          -0.08969613590537051,
+          0.06652801704198907
+        ],
+        [
+          0.19138918694316942,
+          -0.32163800123719,
+          0.1064532916839056
+        ]
+      ],
+      "gpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -9.781268817121713e-08,
+          -2.0453403581921492e-08,
+          3.197231412954693e-07
+        ],
+        [
+          3.473556353661422e-08,
+          -3.0873338885406554e-09,
+          5.342900954996566e-09
+        ],
+        [
+          6.788526268897144e-09,
+          1.4992991570483838e-08,
+          4.068708009397071e-09
+        ]
+      ],
+      "max_abs_analytic_fd_error_ha_per_bohr": 3.197231412954693e-07,
+      "cpu_analytic_minus_fd_ha_per_bohr": [
+        [
+          -9.76855653034292e-08,
+          -2.032718238176301e-08,
+          3.1975132529921124e-07
+        ],
+        [
+          3.4360784439968484e-08,
+          -3.1699027291942627e-09,
+          5.406775818728171e-09
+        ],
+        [
+          7.003874813449329e-09,
+          1.4995013619678588e-08,
+          4.038067130673895e-09
+        ]
+      ],
+      "cpu_max_abs_analytic_fd_error_ha_per_bohr": 3.1975132529921124e-07,
+      "cpu_gpu_energy_abs_error_ha": 1.6271428648906294e-12,
+      "cpu_gpu_gradient_max_abs_error_ha_per_bohr": 3.747790966457387e-10,
+      "thresholds": {
+        "analytic_fd_ha_per_bohr": 1e-05,
+        "cpu_gpu_energy_ha": 1e-08,
+        "cpu_gpu_gradient_ha_per_bohr": 1e-07
+      },
+      "input": {
+        "xc": "R2SCAN",
+        "df_backend": "rsdf",
+        "coordinates_bohr": [
+          [
+            0.1,
+            -0.2,
+            0.3
+          ],
+          [
+            1.55,
+            0.15,
+            0.05
+          ],
+          [
+            -0.35,
+            1.25,
+            -0.25
+          ]
+        ],
+        "cell_length_bohr": 7.0,
+        "basis": "gth-szv",
+        "auxbasis": "gth-szv",
+        "pseudo": "gth-hf",
+        "cutoff_ha": 15.0,
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "kmesh": [
+          2,
+          1,
+          1
+        ],
+        "fd_step_bohr": 0.0002
+      },
+      "timing_seconds": {
+        "gpu_dc_energy": 0.7898433413356543,
+        "gpu_analytic_gradient": 6.770778134465218,
+        "gpu_full_fd_gradient": 15.27305221464485
+      },
+      "gradient_metadata": {
+        "backend": "rsdf",
+        "device": "gpu",
+        "units": "Ha/Bohr",
+        "nkpts": 2,
+        "omega": 0.3,
+        "source_omega": 0.3,
+        "metric_omega": 0.4,
+        "source_mesh": [
+          9,
+          9,
+          9
+        ],
+        "metric_mesh": [
+          13,
+          13,
+          13
+        ],
+        "target_numint_backend": "numint",
+        "cderi_value_parity_max_abs": 4.269897102560094e-09,
+        "z_vector_dimension": 32,
+        "z_vector_residual_max_abs": 2.0816681711721685e-17,
+        "z_vector_condition_number": 4.440444524869687,
+        "silent_cpu_fallback": false,
+        "host_boundaries": [
+          "PySCF Cell/AuxCell and integral-optimizer metadata",
+          "RSDF central 2-center/3-center integral and CDERI setup",
+          "RSDF central local/nonlocal GTH hcore matrix setup",
+          "RSDF 2-center/3-center derivative primitive generation",
+          "RSDF local/nonlocal pseudopotential H1 generation",
+          "Ewald ion-ion nuclear gradient",
+          "final NumPy result reporting"
+        ],
+        "device_owned_operations": [
+          "source HF RSDF SCF J/K iterations after host integral setup",
+          "target-DFA energy/Fock/Veff contractions after host integral setup",
+          "RSDF metric Cholesky and metric-square-root response",
+          "dCDERI source/metric assembly",
+          "full dJ/dR and dK/dR contraction",
+          "HF AX and adjoint Z-vector",
+          "target XC, Pulay, response, and final electronic assembly"
+        ],
+        "timings_s": {
+          "target_fock_and_rhs": 0.07970875967293978,
+          "hf_ax_and_zvector": 0.22008287906646729,
+          "one_electron_host_integrals": 1.1790542025119066,
+          "one_electron_total": 1.1830848380923271,
+          "rsdf_host_primitive_integrals": 5.1715347254648805,
+          "rsdf_metric_cderi_device_response": 0.010344510897994041,
+          "rsdf_response_tensor_total": 5.182165381498635,
+          "rsdf_jk_device_contraction": 0.02611639816313982,
+          "target_explicit_device_assembly": 0.011983242817223072,
+          "z_nuclear_device_contraction": 0.06746081076562405,
+          "final_host_reporting": 0.00012785382568836212,
+          "gradient_total": 6.770735373720527
+        }
+      }
+    }
+  ]
+}
