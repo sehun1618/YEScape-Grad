@@ -76,33 +76,50 @@ class CDERIFactorization:
     def differentiate(self, source_derivative, metric_derivative):
         """Return source and metric contributions to one Cartesian ``dC``."""
 
+        source = self.differentiate_source(source_derivative)
+        metric = self.differentiate_metric(metric_derivative)
+        dtype = cp.result_type(source.dtype, metric.dtype)
+        working = self.astype(dtype)
+        return CDERIDerivativeParts(
+            value=working.value,
+            source=source.astype(dtype, copy=False),
+            metric=metric.astype(dtype, copy=False),
+        )
+
+    def differentiate_source(self, source_derivative):
+        """Return ``L^-1 dB`` without evaluating a metric response."""
+
         d_source = _source_matrix(source_derivative, nao=self.nao)
-        d_metric = _square_metric(metric_derivative)
         dtype = cp.result_type(
             self.factor.dtype,
             self.value.dtype,
             d_source.dtype,
-            d_metric.dtype,
         )
         working = self.astype(dtype)
         d_source = d_source.astype(dtype, copy=False)
-        d_metric = d_metric.astype(dtype, copy=False)
-        source_solved = solve_triangular(
+        return solve_triangular(
             working.factor, d_source.T, lower=True, check_finite=False
         ).reshape(working.value.shape)
+
+    def differentiate_metric(self, metric_derivative):
+        """Return the Cholesky metric contribution without a source solve."""
+
+        d_metric = _square_metric(metric_derivative)
+        dtype = cp.result_type(
+            self.factor.dtype,
+            self.value.dtype,
+            d_metric.dtype,
+        )
+        working = self.astype(dtype)
+        d_metric = d_metric.astype(dtype, copy=False)
         d_factor = _differentiate_cholesky(
             working.factor, d_metric
         )
         value_flat = working.value.reshape(working.value.shape[0], -1)
         metric_rhs = -(d_factor @ value_flat)
-        metric_solved = solve_triangular(
+        return solve_triangular(
             working.factor, metric_rhs, lower=True, check_finite=False
         ).reshape(working.value.shape)
-        return CDERIDerivativeParts(
-            value=working.value,
-            source=source_solved,
-            metric=metric_solved,
-        )
 
 
 def _differentiate_cholesky(factor, metric_derivative):

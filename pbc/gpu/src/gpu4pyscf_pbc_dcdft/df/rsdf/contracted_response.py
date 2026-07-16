@@ -27,6 +27,12 @@ from .response import (
     RSDFResponseProfile,
     _host_pair_primitives,
 )
+from .source_adjoint import build_pair_source_adjoints
+from .source_native import (
+    build_source_optimizer,
+    contract_gamma_sources,
+    contract_kpoint_sources,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,8 @@ class _ContractedPairExecution:
     initial_component_batch_size: int
     final_component_batch_size: int
     component_rebatch_count: int
+    target_source_adjoint: cp.ndarray | None = None
+    bilinear_source_adjoint: cp.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,7 @@ def build_rsdf_contracted_response(
     max_component_batch_size: int | None = (
         DEFAULT_MAX_COMPONENT_BATCH_SIZE
     ),
+    native_source_derivatives: bool | str = "auto",
 ) -> RSDFContractedResponse:
     """Stream primitive derivatives into the two required force scalars.
 
@@ -103,6 +112,15 @@ def build_rsdf_contracted_response(
     component_rebatch_count = 0
     parity = 0.0
     pairs = canonical_pairs(len(kpts))
+    target_source_adjoints = {}
+    bilinear_source_adjoints = {}
+    source_optimizer = _native_source_optimizer(
+        provider,
+        witness,
+        kpts,
+        parameters,
+        enabled=native_source_derivatives,
+    )
     for pair in pairs:
         primitives = _host_pair_primitives(
             witness.cell,
@@ -110,6 +128,7 @@ def build_rsdf_contracted_response(
             kpts,
             pair,
             parameters,
+            include_source_derivatives=(source_optimizer is None),
         )
         _accumulate_host_profile(host_totals, primitives)
         pair_response = _contract_device_pair(
@@ -146,6 +165,32 @@ def build_rsdf_contracted_response(
             pair_response.final_component_batch_size,
         )
         component_rebatch_count += pair_response.component_rebatch_count
+        if pair_response.target_source_adjoint is not None:
+            target_source_adjoints[pair] = (
+                pair_response.target_source_adjoint
+            )
+            bilinear_source_adjoints[pair] = (
+                pair_response.bilinear_source_adjoint
+            )
+
+    if source_optimizer is not None:
+        source_start = cp.cuda.Event()
+        source_end = cp.cuda.Event()
+        source_start.record()
+        source_target, source_bilinear = _contract_native_sources(
+            source_optimizer,
+            kpts,
+            target_source_adjoints,
+            bilinear_source_adjoints,
+        )
+        target_coulomb += source_target
+        bilinear += source_bilinear
+        source_end.record()
+        source_end.synchronize()
+        device_derivative_seconds += cp.cuda.get_elapsed_time(
+            source_start,
+            source_end,
+        ) / 1000.0
 
     host_seconds = sum(
         host_totals[name]
@@ -174,6 +219,7 @@ def build_rsdf_contracted_response(
         final_component_batch_size=final_component_batch_size,
         initial_component_batch_size=initial_component_batch_size,
         component_rebatch_count=component_rebatch_count,
+        native_source=(source_optimizer is not None),
     )
     return RSDFContractedResponse(
         target_coulomb=target_coulomb,
@@ -183,6 +229,30 @@ def build_rsdf_contracted_response(
         host_primitive_seconds=host_seconds,
         device_response_seconds=device_seconds,
         profile=profile,
+    )
+
+
+def _native_source_optimizer(
+    provider,
+    witness,
+    kpts,
+    parameters,
+    *,
+    enabled,
+):
+    if enabled == "auto":
+        enabled = True
+    elif not isinstance(enabled, (bool, np.bool_)):
+        raise ValueError(
+            "native_source_derivatives must be True, False, or 'auto'"
+        )
+    if not enabled:
+        return None
+    return build_source_optimizer(
+        provider.cell,
+        witness.auxcell,
+        parameters,
+        bvk_kmesh=parameters.bvk_kmesh,
     )
 
 
@@ -254,6 +324,7 @@ def _contracted_profile(
     final_component_batch_size,
     initial_component_batch_size,
     component_rebatch_count,
+    native_source,
 ):
     return RSDFResponseProfile(
         canonical_pair_count=len(pairs),
@@ -268,7 +339,11 @@ def _contracted_profile(
         device_derivative_output_bytes=0,
         device_central_upload_factorization_seconds=device_central_seconds,
         device_derivative_upload_response_seconds=device_derivative_seconds,
-        response_mode="source_contracted_component_stream",
+        response_mode=(
+            "native_source_contracted_component_stream"
+            if native_source
+            else "source_contracted_component_stream"
+        ),
         host_peak_primitive_bytes=host_totals["peak_bytes"],
         device_peak_explicit_working_bytes=peak_explicit_bytes,
         full_derivative_equivalent_bytes=full_derivative_bytes,
@@ -329,14 +404,31 @@ def _contract_device_pair(
         cp.max(cp.abs(factorization.value - central[pair])).get()
     )
 
-    source_components = primitives.source_derivatives.reshape(
-        -1, *primitives.source_derivatives.shape[2:]
-    )
+    derivative_start = cp.cuda.Event()
+    derivative_end = cp.cuda.Event()
+    derivative_start.record()
+    if primitives.source_derivatives is None:
+        source_components = None
+        source_adjoints = build_pair_source_adjoints(
+            central,
+            pair,
+            factorization.factor,
+            reference,
+            response,
+            auxiliary_reference=auxiliary_reference,
+            auxiliary_response=auxiliary_response,
+        )
+    else:
+        source_components = primitives.source_derivatives.reshape(
+            -1, *primitives.source_derivatives.shape[2:]
+        )
     metric_components = primitives.metric_derivatives.reshape(
         -1, *primitives.metric_derivatives.shape[2:]
     )
-    derivative_dtype = cp.result_type(
-        source_components.dtype, metric_components.dtype
+    derivative_dtype = (
+        metric_components.dtype
+        if source_components is None
+        else cp.result_type(source_components.dtype, metric_components.dtype)
     )
     factorization = factorization.astype(
         cp.result_type(
@@ -347,11 +439,11 @@ def _contract_device_pair(
     )
     factor_bytes = int(factorization.factor.nbytes)
     cderi_bytes = int(factorization.value.nbytes)
-    component_upload_bytes = int(source_components[0].nbytes) + int(
-        metric_components[0].nbytes
-    )
+    component_upload_bytes = int(metric_components[0].nbytes)
+    if source_components is not None:
+        component_upload_bytes += int(source_components[0].nbytes)
     initial_batch_size, additional_budget = plan_component_batch(
-        len(source_components),
+        len(metric_components),
         component_upload_bytes=component_upload_bytes,
         factor_bytes=factor_bytes,
         cderi_bytes=cderi_bytes,
@@ -366,9 +458,6 @@ def _contract_device_pair(
         + initial_batch_size * component_upload_bytes,
     )
 
-    derivative_start = cp.cuda.Event()
-    derivative_end = cp.cuda.Event()
-    derivative_start.record()
     execution = execute_component_batches(
         factorization,
         pair=pair,
@@ -387,7 +476,7 @@ def _contract_device_pair(
     )
     derivative_end.record()
     derivative_end.synchronize()
-    natm = primitives.source_derivatives.shape[0]
+    natm = primitives.metric_derivatives.shape[0]
     return _ContractedPairExecution(
         parity=parity,
         central_seconds=central_seconds,
@@ -399,4 +488,38 @@ def _contract_device_pair(
         initial_component_batch_size=initial_batch_size,
         final_component_batch_size=execution["final_batch_size"],
         component_rebatch_count=execution["rebatch_count"],
+        target_source_adjoint=(
+            None
+            if source_components is not None
+            else source_adjoints.target_coulomb
+        ),
+        bilinear_source_adjoint=(
+            None
+            if source_components is not None
+            else source_adjoints.restricted_hf_bilinear
+        ),
     )
+
+
+def _contract_native_sources(
+    optimizer,
+    kpts,
+    target_adjoints,
+    bilinear_adjoints,
+):
+    if len(kpts) == 1 and np.linalg.norm(kpts[0]) <= 1.0e-10:
+        pair = next(iter(target_adjoints))
+        contracted = contract_gamma_sources(
+            optimizer,
+            (
+                target_adjoints[pair],
+                bilinear_adjoints[pair],
+            ),
+        )
+        return contracted[0], contracted[1]
+    contracted = contract_kpoint_sources(
+        optimizer,
+        kpts,
+        (target_adjoints, bilinear_adjoints),
+    )
+    return contracted[0], contracted[1]

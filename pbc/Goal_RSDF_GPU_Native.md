@@ -199,8 +199,8 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 | --- | --- | --- | --- |
 | N0 sampled-k dtype safety | `complete` | common complex dtype solve; warning-as-error r2SCAN `2 x 1 x 1` RSDF, RSDF/MGGA 11-test 및 공유 GDF 36-test 통과 | regression 유지 |
 | N1 benchmark integrity | `complete` | attempt identity, process-liveness reconciliation, interrupted state 및 prior-artifact archive; benchmark unit test 12개와 Water8 3회/Water20 1회 통과 | lifecycle regression 유지 |
-| N2 GPU source derivative | `pending` | 새 Water8 median에서 host source derivative가 주요 부분이며 Water20에서는 28.999 s; Water64 사용자 실행에서도 높은 CPU 사용 관측 | primitive ownership map과 small parity fixture 작성 |
-| N3 GPU metric derivative | `pending` | metric derivative는 명시적 host boundary | N2 완료 후 시작 |
+| N2 GPU source derivative | `complete` | SR/LR+vbar native contraction, Gamma/sampled-k canonical orientation, source adjoint algebra, bounded reciprocal rebatch 및 shared two-observable traversal; RSDF 12개와 MGGA 4개 test 통과 | regression 유지 |
+| N3 GPU metric derivative | `in progress` | metric derivative는 남은 가장 큰 명시적 host boundary; Water20 14.719 s | CPU metric decomposition과 image/screening ownership 고정 |
 | N4 conditional remainder | `pending` | profile 전에는 대상 미정 | N2/N3 후 exclusive profile |
 | N5 release gate | `pending` | 이전 R2 release evidence 존재 | N0--N4 완료 범위만 재검증 |
 
@@ -250,3 +250,32 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
   source/metric mesh `21^3/31^3`, host-to-device bytes, host peak RSS 및 sampled VRAM peak가
   보존됐다. Water20의 host source/metric derivative time은 각각 28.999 s와 15.596 s로
   N2/N3의 측정 기준선이다.
+
+## 10. 2026-07-17 N2 implementation record
+
+- central relation $C=L^{-1}B^T$를 reverse-mode로 미분해 target-J와 restricted-HF
+  Z-bilinear의 canonical $dB$ adjoint를 직접 만든다. 무작위 복소수 Gamma/sampled-k
+  algebra가 기존 $dC$ contraction과 $10^{-10}$ 이내로 일치한다.
+- short-range source derivative는 GPU4PySCF의
+  `PBCsr_ejk_int3c2e_ip1`을 exact RSDF source omega, precision, image list와 BvK mesh로
+  호출한다. reciprocal derivative는 `PBC_ft_aopair_ek_ip1`과 source mesh를 사용하며,
+  GPU4PySCF가 $G=0$ Coulomb weight에 포함하는 vbar convention을 보존한다.
+- source derivative primitive를 host에 만들거나 전송하지 않는다. target-J와
+  Z-bilinear source adjoint는 한 번만 basis 변환하고, momentum context와 reciprocal
+  AO/aux Fourier integral traversal을 공유한다. 여러 source를 받지 못하는 기존 CUDA
+  integral kernel 호출만 observable별로 남는다.
+- Gamma와 $2\times1\times1$ sampled-k의 SR 및 LR+vbar primitive, target-J와
+  Z-bilinear contraction, materialized full-tensor reference 및 public full-gradient가
+  모두 $10^{-9}$ 또는 해당 release tolerance 이내로 일치한다. forced block-1과
+  transactional OOM retry도 통과한다.
+- 전체 RSDF test 12개가 220.172 s, SCAN/r2SCAN을 포함한 MGGA test 4개가
+  73.673 s에 통과했다. 관측된 `ResourceWarning`은 PySCF temporary-file 경로이며
+  complex-casting 또는 RSDF numerical warning이 아니다.
+- 동일 Water20 입력에서 analytic-gradient wall time은 58.377 s에서 50.136 s로
+  14.1% 감소했다. host source derivative는 28.999 s에서 0 s, primitive transfer는
+  2.350 GiB에서 0.032 GiB로 98.6% 감소했다.
+- Water8 3회 median은 7.952 s에서 8.327 s로 약 4.7% 증가했다. 작은 계에서는 두
+  observable에 대한 기존 single-source CUDA integral kernel launch 고정비가 CPU
+  primitive materialization보다 크다. 이 사실을 숨기는 자동 CPU fallback은 넣지
+  않았으며, true multi-source CUDA recurrence는 N3 이후 profile에서 N4 후보로만
+  재평가한다.

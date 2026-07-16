@@ -54,9 +54,10 @@ class RSDFResponseProfile:
     def metadata(self) -> dict[str, object]:
         """Return JSON-safe profile fields with explicit ownership labels."""
 
-        contracted = self.response_mode == (
+        contracted = self.response_mode.endswith(
             "source_contracted_component_stream"
         )
+        native_source = self.response_mode.startswith("native_source_")
         device_operations = [
             "host-to-device primitive transfer",
             "metric Cholesky and central CDERI solve",
@@ -67,6 +68,10 @@ class RSDFResponseProfile:
                     "bounded component CDERI response",
                     "immediate target-J and Z-bilinear scalar contraction",
                 ]
+            )
+        if native_source:
+            device_operations.append(
+                "native short-range and reciprocal source derivative contraction"
             )
         else:
             device_operations.append(
@@ -111,10 +116,17 @@ class RSDFResponseProfile:
                 self.initial_component_batch_size
             ),
             "component_rebatch_count": self.component_rebatch_count,
-            "host_owned_operations": [
-                "RSDF three-center source value and nuclear derivatives",
-                "RSDF two-center metric value and nuclear derivatives",
-            ],
+            "host_owned_operations": (
+                [
+                    "RSDF three-center source value",
+                    "RSDF two-center metric value and nuclear derivatives",
+                ]
+                if native_source
+                else [
+                    "RSDF three-center source value and nuclear derivatives",
+                    "RSDF two-center metric value and nuclear derivatives",
+                ]
+            ),
             "device_owned_operations": device_operations,
         }
 
@@ -125,7 +137,7 @@ class _HostPairPrimitives:
 
     source: np.ndarray
     metric: np.ndarray
-    source_derivatives: np.ndarray
+    source_derivatives: np.ndarray | None
     metric_derivatives: np.ndarray
     source_value_seconds: float
     metric_value_seconds: float
@@ -136,14 +148,14 @@ class _HostPairPrimitives:
     def transferred_bytes(self) -> int:
         """Bytes uploaded when this pair is evaluated on the device."""
 
+        arrays = (
+            self.source,
+            self.metric,
+            self.source_derivatives,
+            self.metric_derivatives,
+        )
         return sum(
-            int(array.nbytes)
-            for array in (
-                self.source,
-                self.metric,
-                self.source_derivatives,
-                self.metric_derivatives,
-            )
+            int(array.nbytes) for array in arrays if array is not None
         )
 
 
@@ -275,7 +287,15 @@ def build_rsdf_response_tensors(
     )
 
 
-def _host_pair_primitives(cell, auxcell, kpts, pair, parameters):
+def _host_pair_primitives(
+    cell,
+    auxcell,
+    kpts,
+    pair,
+    parameters,
+    *,
+    include_source_derivatives=True,
+):
     ki, kj = pair
     first = kpts[ki]
     second = kpts[kj]
@@ -297,17 +317,21 @@ def _host_pair_primitives(cell, auxcell, kpts, pair, parameters):
         q=second - first,
     )
     metric_value_seconds = perf_counter() - start
-    start = perf_counter()
-    source_derivatives = np.asarray(
-        rsdf_source_derivatives(
-            cell,
-            auxcell,
-            parameters,
-            kpti=first,
-            kptj=second,
-        ).total
-    )
-    source_derivative_seconds = perf_counter() - start
+    if include_source_derivatives:
+        start = perf_counter()
+        source_derivatives = np.asarray(
+            rsdf_source_derivatives(
+                cell,
+                auxcell,
+                parameters,
+                kpti=first,
+                kptj=second,
+            ).total
+        )
+        source_derivative_seconds = perf_counter() - start
+    else:
+        source_derivatives = None
+        source_derivative_seconds = 0.0
     start = perf_counter()
     metric_derivatives = np.asarray(
         rsdf_metric_derivatives(

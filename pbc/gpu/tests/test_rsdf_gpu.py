@@ -11,6 +11,11 @@ import numpy as np
 from pyscf.pbc import gto
 from pyscf_pbc_dcdft import df as cpu_df
 from pyscf_pbc_dcdft import dft as cpu_dft
+from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
+from pyscf_pbc_dcdft.df.rsdf.parameters import parameters_from_provider
+from pyscf_pbc_dcdft.df.rsdf.source import (
+    rsdf_source_derivatives,
+)
 
 from gpu4pyscf_pbc_dcdft import df as gpu_df
 from gpu4pyscf_pbc_dcdft import dft as gpu_dft
@@ -18,9 +23,27 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import (
     component_stream as rsdf_stream_module,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
+    source_reciprocal as source_reciprocal_module,
+)
+from gpu4pyscf_pbc_dcdft.df.rsdf import (
     build_rsdf_contracted_response,
     build_rsdf_response_tensors,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
+    build_pair_source_adjoints,
+    contract_source_derivative,
+)
+from gpu4pyscf_pbc_dcdft.df.rsdf.source_native import (
+    build_source_optimizer,
+    contract_gamma_reciprocal_source,
+    contract_gamma_short_range_source,
+    contract_gamma_sources,
+    contract_kpoint_reciprocal_source,
+    contract_kpoint_short_range_source,
+    contract_kpoint_sources,
+)
+from gpu4pyscf_pbc_dcdft.df.gdf.cholesky import CDERIFactorization
+from gpu4pyscf_pbc_dcdft.df.rsdf.response import _host_pair_primitives
 from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
     auxiliary_density_contraction,
     contract_canonical_pair_derivative,
@@ -61,6 +84,367 @@ def _method(cell, kmesh, *, device):
 
 
 class RSDFGPUParityTest(unittest.TestCase):
+    def test_source_reciprocal_rebatch_is_transactional(self):
+        calls = []
+        plan = SimpleNamespace(
+            initial_block_size=4,
+            block_alignment=1,
+        )
+        ao_derivative = cp.zeros((2, 3))
+        auxiliary_partial = cp.zeros((3, 4))
+
+        def worker(start, stop):
+            calls.append((start, stop))
+            if stop - start == 4:
+                raise cp.cuda.memory.OutOfMemoryError(1, 1)
+            return source_reciprocal_module._BlockResult(
+                cp.ones_like(ao_derivative),
+                cp.ones_like(auxiliary_partial),
+            )
+
+        execution = source_reciprocal_module._execute_blocks(
+            4,
+            plan,
+            worker,
+            ao_derivative,
+            auxiliary_partial,
+            phase="test_source_reciprocal",
+        )
+        self.assertEqual(calls, [(0, 4), (0, 2), (2, 4)])
+        self.assertEqual(execution.rebatch_count, 1)
+        self.assertEqual(execution.final_block_size, 2)
+        np.testing.assert_allclose(cp.asnumpy(ao_derivative), 2.0)
+        np.testing.assert_allclose(cp.asnumpy(auxiliary_partial), 2.0)
+
+    def test_source_reciprocal_forced_block_one_completes_all_ranges(self):
+        calls = []
+        plan = SimpleNamespace(
+            initial_block_size=1,
+            block_alignment=1,
+        )
+        ao_derivative = cp.zeros((1, 3))
+        auxiliary_partial = cp.zeros((3, 1))
+
+        def worker(start, stop):
+            calls.append((start, stop))
+            return source_reciprocal_module._BlockResult(
+                cp.ones_like(ao_derivative),
+                cp.ones_like(auxiliary_partial),
+            )
+
+        execution = source_reciprocal_module._execute_blocks(
+            3,
+            plan,
+            worker,
+            ao_derivative,
+            auxiliary_partial,
+            phase="test_source_reciprocal",
+        )
+        self.assertEqual(calls, [(0, 1), (1, 2), (2, 3)])
+        self.assertEqual(execution.final_block_size, 1)
+        np.testing.assert_allclose(cp.asnumpy(ao_derivative), 3.0)
+        np.testing.assert_allclose(cp.asnumpy(auxiliary_partial), 3.0)
+
+    def test_kpoint_source_contractions_match_cpu_primitives(self):
+        method = _method(_cell(), (2, 1, 1), device="gpu")
+        provider = method.with_df
+        witness = provider.cpu_witness
+        parameters = parameters_from_provider(witness)
+        kpts = np.asarray(provider.kpts)
+        reference = cp.asarray(method.make_rdm1())
+        response = 0.037 * reference
+        target_adjoints = {}
+        bilinear_adjoints = {}
+        cpu_values = {
+            "short_target": np.zeros((provider.cell.natm, 3)),
+            "short_bilinear": np.zeros((provider.cell.natm, 3)),
+            "reciprocal_target": np.zeros((provider.cell.natm, 3)),
+            "reciprocal_bilinear": np.zeros((provider.cell.natm, 3)),
+        }
+
+        for pair in canonical_pairs(len(kpts)):
+            primitives = _host_pair_primitives(
+                witness.cell,
+                witness.auxcell,
+                kpts,
+                pair,
+                parameters,
+            )
+            factorization = CDERIFactorization.build(
+                cp.asarray(primitives.source),
+                cp.asarray(primitives.metric),
+                nao=provider.cell.nao_nr(),
+            )
+            adjoints = build_pair_source_adjoints(
+                provider.central_cderi_blocks,
+                pair,
+                factorization.factor,
+                reference,
+                response,
+            )
+            target_adjoints[pair] = adjoints.target_coulomb
+            bilinear_adjoints[pair] = adjoints.restricted_hf_bilinear
+            parts = rsdf_source_derivatives(
+                witness.cell,
+                witness.auxcell,
+                parameters,
+                kpti=kpts[pair[0]],
+                kptj=kpts[pair[1]],
+            )
+            primitive_groups = (
+                ("short", parts.short_range),
+                ("reciprocal", parts.long_range + parts.vbar),
+            )
+            for group_name, primitive in primitive_groups:
+                for response_name, source_adjoint in (
+                    ("target", adjoints.target_coulomb),
+                    ("bilinear", adjoints.restricted_hf_bilinear),
+                ):
+                    output = cpu_values[f"{group_name}_{response_name}"]
+                    for atom_id in range(provider.cell.natm):
+                        for axis in range(3):
+                            output[atom_id, axis] += float(
+                                contract_source_derivative(
+                                    source_adjoint,
+                                    cp.asarray(
+                                        primitive[atom_id, axis]
+                                    ),
+                                ).get()
+                            )
+
+        optimizer = build_source_optimizer(
+            provider.cell,
+            witness.auxcell,
+            parameters,
+            bvk_kmesh=parameters.bvk_kmesh,
+        )
+        gpu_values = {
+            "short_target": contract_kpoint_short_range_source(
+                optimizer,
+                kpts,
+                target_adjoints,
+            ),
+            "short_bilinear": contract_kpoint_short_range_source(
+                optimizer,
+                kpts,
+                bilinear_adjoints,
+            ),
+            "reciprocal_target": contract_kpoint_reciprocal_source(
+                optimizer,
+                kpts,
+                target_adjoints,
+            ),
+            "reciprocal_bilinear": contract_kpoint_reciprocal_source(
+                optimizer,
+                kpts,
+                bilinear_adjoints,
+            ),
+        }
+        for name, cpu_value in cpu_values.items():
+            difference = cp.asnumpy(gpu_values[name]) - cpu_value
+            self.assertLess(float(np.max(np.abs(difference))), 1.0e-9)
+        fused = contract_kpoint_sources(
+            optimizer,
+            kpts,
+            (target_adjoints, bilinear_adjoints),
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(fused[0]),
+            cp.asnumpy(
+                gpu_values["short_target"]
+                + gpu_values["reciprocal_target"]
+            ),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(fused[1]),
+            cp.asnumpy(
+                gpu_values["short_bilinear"]
+                + gpu_values["reciprocal_bilinear"]
+            ),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+
+    def test_gamma_short_range_source_contraction_matches_cpu_primitive(self):
+        method = _method(_cell(), (1, 1, 1), device="gpu")
+        provider = method.with_df
+        witness = provider.cpu_witness
+        parameters = parameters_from_provider(witness)
+        pair = (0, 0)
+        primitives = _host_pair_primitives(
+            witness.cell,
+            witness.auxcell,
+            np.asarray(provider.kpts),
+            pair,
+            parameters,
+        )
+        factorization = CDERIFactorization.build(
+            cp.asarray(primitives.source),
+            cp.asarray(primitives.metric),
+            nao=provider.cell.nao_nr(),
+        )
+        reference = cp.asarray(method.make_rdm1())
+        response = 0.037 * reference
+        adjoints = build_pair_source_adjoints(
+            provider.central_cderi_blocks,
+            pair,
+            factorization.factor,
+            reference,
+            response,
+        )
+        cpu_parts = rsdf_source_derivatives(
+            witness.cell,
+            witness.auxcell,
+            parameters,
+            kpti=np.asarray(provider.kpts)[0],
+            kptj=np.asarray(provider.kpts)[0],
+        )
+        optimizer = build_source_optimizer(
+            provider.cell,
+            witness.auxcell,
+            parameters,
+        )
+        primitive_routes = (
+            (
+                cpu_parts.short_range,
+                contract_gamma_short_range_source,
+            ),
+            (
+                cpu_parts.long_range + cpu_parts.vbar,
+                contract_gamma_reciprocal_source,
+            ),
+        )
+        for cpu_primitive, gpu_contract in primitive_routes:
+            for source_adjoint in (
+                adjoints.target_coulomb,
+                adjoints.restricted_hf_bilinear,
+            ):
+                cpu_value = np.empty((provider.cell.natm, 3))
+                for atom_id in range(provider.cell.natm):
+                    for axis in range(3):
+                        cpu_value[atom_id, axis] = float(
+                            contract_source_derivative(
+                                source_adjoint,
+                                cp.asarray(
+                                    cpu_primitive[atom_id, axis]
+                                ),
+                            ).get()
+                        )
+                gpu_value = cp.asnumpy(
+                    gpu_contract(optimizer, source_adjoint)
+                )
+                self.assertLess(
+                    float(np.max(np.abs(gpu_value - cpu_value))),
+                    1.0e-9,
+                )
+        fused = contract_gamma_sources(
+            optimizer,
+            (
+                adjoints.target_coulomb,
+                adjoints.restricted_hf_bilinear,
+            ),
+        )
+        for source_id, source_adjoint in enumerate(
+            (
+                adjoints.target_coulomb,
+                adjoints.restricted_hf_bilinear,
+            )
+        ):
+            cpu_total = np.empty((provider.cell.natm, 3))
+            primitive = (
+                cpu_parts.short_range
+                + cpu_parts.long_range
+                + cpu_parts.vbar
+            )
+            for atom_id in range(provider.cell.natm):
+                for axis in range(3):
+                    cpu_total[atom_id, axis] = float(
+                        contract_source_derivative(
+                            source_adjoint,
+                            cp.asarray(primitive[atom_id, axis]),
+                        ).get()
+                    )
+            np.testing.assert_allclose(
+                cp.asnumpy(fused[source_id]),
+                cpu_total,
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+
+    def test_source_adjoints_match_complex_cderi_response(self):
+        rng = np.random.default_rng(41)
+        nkpts, naux, nao = 2, 3, 4
+
+        def complex_random(shape):
+            return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+        def hermitian_density():
+            value = complex_random((nkpts, nao, nao))
+            return cp.asarray(value + value.conj().transpose(0, 2, 1))
+
+        reference = hermitian_density()
+        response = hermitian_density()
+        pairs = ((0, 0), (0, 1), (1, 1))
+        central = {
+            pair: cp.asarray(complex_random((naux, nao, nao)))
+            for pair in pairs
+        }
+        auxiliary_reference = auxiliary_density_contraction(
+            central, reference
+        )
+        auxiliary_response = auxiliary_density_contraction(
+            central, response
+        )
+
+        for pair in pairs:
+            factor = np.tril(complex_random((naux, naux)))
+            factor[np.diag_indices(naux)] += 4.0
+            factor = cp.asarray(factor)
+            source_derivative = cp.asarray(
+                complex_random((nao**2, naux))
+            )
+            cderi_derivative = cp.linalg.solve(
+                factor, source_derivative.T
+            ).reshape(naux, nao, nao)
+            witness = contract_canonical_pair_derivative(
+                central,
+                pair,
+                cderi_derivative,
+                reference,
+                response,
+                auxiliary_reference=auxiliary_reference,
+                auxiliary_response=auxiliary_response,
+            )
+            adjoints = build_pair_source_adjoints(
+                central,
+                pair,
+                factor,
+                reference,
+                response,
+                auxiliary_reference=auxiliary_reference,
+                auxiliary_response=auxiliary_response,
+            )
+            target = contract_source_derivative(
+                adjoints.target_coulomb, source_derivative
+            )
+            bilinear = contract_source_derivative(
+                adjoints.restricted_hf_bilinear, source_derivative
+            )
+            self.assertLess(
+                float(cp.abs(target - witness.target_coulomb).get()),
+                1.0e-10,
+            )
+            self.assertLess(
+                float(
+                    cp.abs(
+                        bilinear - witness.restricted_hf_bilinear
+                    ).get()
+                ),
+                1.0e-10,
+            )
+
     def test_central_pair_preflight_rejects_insufficient_memory(self):
         primitives = SimpleNamespace(
             source=np.zeros((8, 4)),
@@ -100,13 +484,23 @@ class RSDFGPUParityTest(unittest.TestCase):
         )
 
         contracted = build_rsdf_contracted_response(
-            method.with_df, reference, response
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=False,
         )
         single_component = build_rsdf_contracted_response(
             method.with_df,
             reference,
             response,
             max_component_batch_size=1,
+            native_source_derivatives=False,
+        )
+        native_source = build_rsdf_contracted_response(
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=True,
         )
         self.assertLess(
             float(
@@ -154,6 +548,36 @@ class RSDFGPUParityTest(unittest.TestCase):
         )
         self.assertEqual(
             single_component.profile.initial_component_batch_size, 1
+        )
+        self.assertLess(
+            float(
+                cp.max(
+                    cp.abs(
+                        contracted.target_coulomb
+                        - native_source.target_coulomb
+                    )
+                ).get()
+            ),
+            1.0e-9,
+        )
+        self.assertLess(
+            float(
+                cp.max(
+                    cp.abs(
+                        contracted.restricted_hf_bilinear
+                        - native_source.restricted_hf_bilinear
+                    )
+                ).get()
+            ),
+            1.0e-9,
+        )
+        self.assertEqual(
+            native_source.profile.host_source_derivative_seconds,
+            0.0,
+        )
+        self.assertLess(
+            native_source.profile.host_to_device_bytes,
+            contracted.profile.host_to_device_bytes,
         )
 
     def test_component_oom_retries_without_double_commit(self):
@@ -308,7 +732,11 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertGreater(profile["host_to_device_bytes"], 0)
         self.assertEqual(
             profile["response_mode"],
-            "source_contracted_component_stream",
+            "native_source_contracted_component_stream",
+        )
+        self.assertEqual(
+            profile["host_source_derivative_seconds"],
+            0.0,
         )
         self.assertEqual(profile["device_derivative_output_bytes"], 0)
         self.assertEqual(profile["retained_device_derivative_bytes"], 0)

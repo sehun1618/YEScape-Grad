@@ -119,7 +119,11 @@ def execute_component_batches(
 ):
     """Execute batches transactionally, halving only after an OOM."""
 
-    component_count = len(source_components)
+    component_count = (
+        len(metric_components)
+        if source_components is None
+        else len(source_components)
+    )
     batch_size = min(int(initial_batch_size), component_count)
     rebatch_count = 0
     start = 0
@@ -134,7 +138,11 @@ def execute_component_batches(
                 response=response,
                 auxiliary_reference=auxiliary_reference,
                 auxiliary_response=auxiliary_response,
-                source_components=source_components[start:stop],
+                source_components=(
+                    None
+                    if source_components is None
+                    else source_components[start:stop]
+                ),
                 metric_components=metric_components[start:stop],
             )
         except Exception as error:
@@ -179,16 +187,22 @@ def _component_batch_worker(
     source_components,
     metric_components,
 ):
-    d_source = cp.asarray(source_components)
     d_metric = cp.asarray(metric_components)
-    target = cp.empty(len(d_source), dtype=cp.float64)
+    d_source = (
+        None
+        if source_components is None
+        else cp.asarray(source_components)
+    )
+    target = cp.empty(len(d_metric), dtype=cp.float64)
     bilinear = cp.empty_like(target)
-    for component in range(len(d_source)):
-        parts = factorization.differentiate(
-            d_source[component], d_metric[component]
+    for component in range(len(d_metric)):
+        derivative = factorization.differentiate_metric(
+            d_metric[component]
         )
-        derivative = parts.source
-        derivative += parts.metric
+        if d_source is not None:
+            derivative += factorization.differentiate_source(
+                d_source[component]
+            )
         contracted = contract_canonical_pair_derivative(
             central,
             pair,
