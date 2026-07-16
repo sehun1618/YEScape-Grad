@@ -71,7 +71,7 @@ def build_pair_source_adjoints(
     if auxiliary_response is None:
         auxiliary_response = auxiliary_density_contraction(cderi, response)
 
-    target_cderi, bilinear_cderi = _cderi_adjoints(
+    target_cderi, bilinear_cderi = build_pair_cderi_adjoints(
         cderi,
         canonical,
         reference,
@@ -80,10 +80,10 @@ def build_pair_source_adjoints(
         cp.asarray(auxiliary_response),
     )
     return PairSourceAdjoints(
-        target_coulomb=_push_through_triangular_solve(
+        target_coulomb=push_cderi_adjoint_through_source(
             factor, target_cderi
         ),
-        restricted_hf_bilinear=_push_through_triangular_solve(
+        restricted_hf_bilinear=push_cderi_adjoint_through_source(
             factor, bilinear_cderi
         ),
     )
@@ -102,7 +102,7 @@ def contract_source_derivative(source_adjoint, source_derivative):
     return cp.real(cp.einsum("qp,qp->", adjoint, derivative))
 
 
-def _cderi_adjoints(
+def build_pair_cderi_adjoints(
     cderi,
     pair,
     reference,
@@ -214,7 +214,7 @@ def _return_to_canonical_orientation(value, canonical, first, second):
     )
 
 
-def _push_through_triangular_solve(factor, cderi_adjoint):
+def push_cderi_adjoint_through_source(factor, cderi_adjoint):
     """Apply the transpose adjoint of ``C = solve(L, B.T)``."""
 
     factor_array = cp.asarray(factor)

@@ -50,6 +50,14 @@ class RSDFMetricDerivativeParts:
         return self.short_range + self.long_range + self.g0
 
 
+@dataclass(frozen=True)
+class ShortRangeMetricCoordinateDerivatives:
+    """Exact PySCF SR coordinate derivatives before atom assembly."""
+
+    ip1: np.ndarray
+    ip2: np.ndarray
+
+
 def rsdf_metric(cell, auxcell, parameters, *, q: np.ndarray) -> np.ndarray:
     """Return the exact public-RSDF two-center metric for one ``q``.
 
@@ -173,12 +181,13 @@ def _short_range_metric_derivative(auxcell, atom_id, omega, *, q):
 
 def _short_range_metric_derivatives(auxcell, omega, *, q):
     momentum = _qpoint(q)
-    ip1 = _short_range_integral(
-        auxcell, omega, q=momentum, intor="int2c2e_ip1"
+    coordinate = short_range_metric_coordinate_derivatives(
+        auxcell,
+        omega,
+        q=momentum,
     )
-    ip2 = _short_range_integral(
-        auxcell, omega, q=momentum, intor="int2c2e_ip2"
-    )
+    ip1 = coordinate.ip1
+    ip2 = coordinate.ip2
     naux = int(auxcell.nao_nr())
     derivatives = np.zeros(
         (int(auxcell.natm), 3, naux, naux), dtype=ip1.dtype
@@ -190,6 +199,30 @@ def _short_range_metric_derivatives(auxcell, omega, *, q):
         derivatives[atom_id, :, p0:p1, :] -= ip1[:, p0:p1, :]
         derivatives[atom_id, :, :, p0:p1] -= ip2[:, :, p0:p1]
     return _real_if_close(derivatives)
+
+
+def short_range_metric_coordinate_derivatives(auxcell, omega, *, q):
+    """Return exact production ``ip1`` and ``ip2`` SR metric arrays.
+
+    Keeping these two arrays separate avoids materializing the much larger
+    ``(natm, 3, naux, naux)`` tensor when a caller contracts them directly.
+    """
+
+    momentum = _qpoint(q)
+    return ShortRangeMetricCoordinateDerivatives(
+        ip1=_short_range_integral(
+            auxcell,
+            omega,
+            q=momentum,
+            intor="int2c2e_ip1",
+        ),
+        ip2=_short_range_integral(
+            auxcell,
+            omega,
+            q=momentum,
+            intor="int2c2e_ip2",
+        ),
+    )
 
 
 def _short_range_integral(auxcell, omega, *, q, intor):

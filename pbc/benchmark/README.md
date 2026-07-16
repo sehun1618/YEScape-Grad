@@ -175,13 +175,16 @@ Block 결과는 해당 interval 계산이 성공한 뒤에만 commit된다. 따�
 reciprocal vector를 빠뜨리거나 두 번 더하지 않으며, block size 1도 할당할 수 없으면
 CPU fallback 대신 명시적 memory error로 종료한다.
 
-GPU RSDF production gradient도 `gradient_metadata.df_response_profile`에 별도 bounded
-response 정보를 기록한다. `response_mode=source_contracted_component_stream`이면 full
-`dCDERI/dJ/dK`를 저장하지 않았다는 뜻이다. `full_derivative_equivalent_bytes`는 피한
-full tensor 크기, `retained_device_derivative_bytes`는 실제 보존량,
-`device_peak_explicit_working_bytes`는 component stream의 명시적 workspace estimate다.
-`initial_component_batch_size`, `component_batch_size`, `component_rebatch_count`로 OOM
-축소 이력도 확인할 수 있다.
+GPU RSDF production gradient도 `gradient_metadata.df_response_profile`에 ownership과
+memory 정보를 기록한다. Default
+`response_mode=native_source_native_metric_contracted_adjoint`는 source와 reciprocal
+metric derivative를 full `dCDERI/dJ/dK` 없이 adjoint에 직접 수축했다는 뜻이다. Exact
+screened short-range metric `ip1/ip2`는 host boundary로 metadata에 명시된다.
+`full_derivative_equivalent_bytes`는 피한 full tensor 크기,
+`retained_device_derivative_bytes`는 실제 보존량,
+`device_peak_explicit_working_bytes`는 명시적 workspace estimate다. Reference 또는 mixed
+`component_stream` mode에서만 `initial_component_batch_size`, `component_batch_size`,
+`component_rebatch_count`가 OOM 축소 이력을 나타내며 native-only mode에서는 `null`이다.
 
 ## 3. FD 선택
 

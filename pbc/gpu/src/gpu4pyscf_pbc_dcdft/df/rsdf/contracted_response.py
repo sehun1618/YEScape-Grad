@@ -27,7 +27,16 @@ from .response import (
     RSDFResponseProfile,
     _host_pair_primitives,
 )
-from .source_adjoint import build_pair_source_adjoints
+from .metric_adjoint import (
+    PairMetricAdjoints,
+    push_cderi_adjoint_through_metric,
+)
+from .metric_native import build_metric_contraction_context
+from .source_adjoint import (
+    PairSourceAdjoints,
+    build_pair_cderi_adjoints,
+    push_cderi_adjoint_through_source,
+)
 from .source_native import (
     build_source_optimizer,
     contract_gamma_sources,
@@ -44,8 +53,8 @@ class _ContractedPairExecution:
     derivative_seconds: float
     peak_explicit_bytes: int
     full_derivative_equivalent_bytes: int
-    initial_component_batch_size: int
-    final_component_batch_size: int
+    initial_component_batch_size: int | None
+    final_component_batch_size: int | None
     component_rebatch_count: int
     target_source_adjoint: cp.ndarray | None = None
     bilinear_source_adjoint: cp.ndarray | None = None
@@ -78,13 +87,15 @@ def build_rsdf_contracted_response(
         DEFAULT_MAX_COMPONENT_BATCH_SIZE
     ),
     native_source_derivatives: bool | str = "auto",
+    native_metric_derivatives: bool | str = "auto",
 ) -> RSDFContractedResponse:
     """Stream primitive derivatives into the two required force scalars.
 
-    Central CDERI factors remain provider-owned. One canonical k-pair and a
-    bounded set of Cartesian primitive derivatives are uploaded at a time;
-    each ``dC`` is contracted and released immediately. No full derivative
-    CDERI, J, or K tensor survives this function.
+    Central CDERI factors remain provider-owned. Native source and metric
+    adjoints contract derivatives before full ``dC`` assembly. Explicit host
+    derivative routes retain bounded component streaming for reference and
+    mixed execution. No full derivative CDERI, J, or K tensor survives this
+    function.
     """
 
     witness, kpts, parameters = _prepare_provider(provider)
@@ -107,7 +118,7 @@ def build_rsdf_contracted_response(
     device_derivative_seconds = 0.0
     peak_explicit_bytes = 0
     full_derivative_bytes = 0
-    initial_component_batch_size = 0
+    initial_component_batch_size = None
     final_component_batch_size = None
     component_rebatch_count = 0
     parity = 0.0
@@ -121,7 +132,22 @@ def build_rsdf_contracted_response(
         parameters,
         enabled=native_source_derivatives,
     )
+    use_native_metric = _native_derivatives_enabled(
+        native_metric_derivatives,
+        name="native_metric_derivatives",
+    )
     for pair in pairs:
+        first, second = pair
+        metric_context = (
+            build_metric_contraction_context(
+                witness.cell,
+                witness.auxcell,
+                parameters,
+                q=kpts[second] - kpts[first],
+            )
+            if use_native_metric
+            else None
+        )
         primitives = _host_pair_primitives(
             witness.cell,
             witness.auxcell,
@@ -129,8 +155,11 @@ def build_rsdf_contracted_response(
             pair,
             parameters,
             include_source_derivatives=(source_optimizer is None),
+            include_metric_derivatives=(metric_context is None),
         )
         _accumulate_host_profile(host_totals, primitives)
+        if metric_context is not None:
+            _accumulate_metric_context_profile(host_totals, metric_context)
         pair_response = _contract_device_pair(
             primitives,
             pair=pair,
@@ -142,6 +171,8 @@ def build_rsdf_contracted_response(
             target_coulomb=target_coulomb,
             bilinear=bilinear,
             nao=int(provider.cell.nao_nr()),
+            natm=natm,
+            metric_context=metric_context,
             memory_fraction=component_memory_fraction,
             minimum_reserve_bytes=component_minimum_reserve_bytes,
             max_component_batch_size=max_component_batch_size,
@@ -156,7 +187,7 @@ def build_rsdf_contracted_response(
         full_derivative_bytes += (
             pair_response.full_derivative_equivalent_bytes
         )
-        initial_component_batch_size = max(
+        initial_component_batch_size = _maximum_batch_size(
             initial_component_batch_size,
             pair_response.initial_component_batch_size,
         )
@@ -220,6 +251,7 @@ def build_rsdf_contracted_response(
         initial_component_batch_size=initial_component_batch_size,
         component_rebatch_count=component_rebatch_count,
         native_source=(source_optimizer is not None),
+        native_metric=use_native_metric,
     )
     return RSDFContractedResponse(
         target_coulomb=target_coulomb,
@@ -240,13 +272,10 @@ def _native_source_optimizer(
     *,
     enabled,
 ):
-    if enabled == "auto":
-        enabled = True
-    elif not isinstance(enabled, (bool, np.bool_)):
-        raise ValueError(
-            "native_source_derivatives must be True, False, or 'auto'"
-        )
-    if not enabled:
+    if not _native_derivatives_enabled(
+        enabled,
+        name="native_source_derivatives",
+    ):
         return None
     return build_source_optimizer(
         provider.cell,
@@ -254,6 +283,14 @@ def _native_source_optimizer(
         parameters,
         bvk_kmesh=parameters.bvk_kmesh,
     )
+
+
+def _native_derivatives_enabled(value, *, name):
+    if value == "auto":
+        return True
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be True, False, or 'auto'")
+    return bool(value)
 
 
 def _prepare_provider(provider):
@@ -306,10 +343,28 @@ def _accumulate_host_profile(totals, primitives):
     )
 
 
+def _accumulate_metric_context_profile(totals, context):
+    totals["metric_derivative"] += context.host_seconds
+    totals["bytes"] += context.host_transfer_bytes
+    totals["peak_bytes"] = max(
+        totals["peak_bytes"], context.host_transfer_bytes
+    )
+
+
 def _minimum_batch_size(current, candidate):
+    if candidate is None:
+        return current
     if current is None:
         return int(candidate)
     return min(int(current), int(candidate))
+
+
+def _maximum_batch_size(current, candidate):
+    if candidate is None:
+        return current
+    if current is None:
+        return int(candidate)
+    return max(int(current), int(candidate))
 
 
 def _contracted_profile(
@@ -325,6 +380,7 @@ def _contracted_profile(
     initial_component_batch_size,
     component_rebatch_count,
     native_source,
+    native_metric,
 ):
     return RSDFResponseProfile(
         canonical_pair_count=len(pairs),
@@ -339,11 +395,7 @@ def _contracted_profile(
         device_derivative_output_bytes=0,
         device_central_upload_factorization_seconds=device_central_seconds,
         device_derivative_upload_response_seconds=device_derivative_seconds,
-        response_mode=(
-            "native_source_contracted_component_stream"
-            if native_source
-            else "source_contracted_component_stream"
-        ),
+        response_mode=_response_mode(native_source, native_metric),
         host_peak_primitive_bytes=host_totals["peak_bytes"],
         device_peak_explicit_working_bytes=peak_explicit_bytes,
         full_derivative_equivalent_bytes=full_derivative_bytes,
@@ -352,6 +404,16 @@ def _contracted_profile(
         initial_component_batch_size=initial_component_batch_size,
         component_rebatch_count=component_rebatch_count,
     )
+
+
+def _response_mode(native_source, native_metric):
+    if native_source and native_metric:
+        return "native_source_native_metric_contracted_adjoint"
+    if native_source:
+        return "native_source_contracted_component_stream"
+    if native_metric:
+        return "native_metric_contracted_component_stream"
+    return "source_contracted_component_stream"
 
 
 def _contract_device_pair(
@@ -366,6 +428,8 @@ def _contract_device_pair(
     target_coulomb,
     bilinear,
     nao,
+    natm,
+    metric_context,
     memory_fraction,
     minimum_reserve_bytes,
     max_component_batch_size,
@@ -407,43 +471,195 @@ def _contract_device_pair(
     derivative_start = cp.cuda.Event()
     derivative_end = cp.cuda.Event()
     derivative_start.record()
-    if primitives.source_derivatives is None:
-        source_components = None
-        source_adjoints = build_pair_source_adjoints(
-            central,
-            pair,
-            factorization.factor,
-            reference,
-            response,
+    source_components = _flatten_components(
+        primitives.source_derivatives
+    )
+    metric_components = _flatten_components(
+        primitives.metric_derivatives
+    )
+    source_adjoints, metric_adjoints = _build_native_pair_adjoints(
+        central,
+        pair,
+        factorization,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        native_source=(source_components is None),
+        native_metric=(metric_context is not None),
+    )
+    context_bytes = (
+        0
+        if metric_context is None
+        else metric_context.device_resident_bytes
+    )
+    peak_explicit_bytes = central_working_bytes + context_bytes
+    initial_batch_size = None
+    final_batch_size = None
+    rebatch_count = 0
+    if source_components is not None or metric_components is not None:
+        stream = _execute_host_component_stream(
+            factorization,
+            pair=pair,
+            central=central,
+            reference=reference,
+            response=response,
             auxiliary_reference=auxiliary_reference,
             auxiliary_response=auxiliary_response,
+            source_components=source_components,
+            metric_components=metric_components,
+            target_coulomb=target_coulomb,
+            bilinear=bilinear,
+            memory_fraction=memory_fraction,
+            minimum_reserve_bytes=minimum_reserve_bytes,
+            max_component_batch_size=max_component_batch_size,
+            retained_context_bytes=context_bytes,
         )
-    else:
-        source_components = primitives.source_derivatives.reshape(
-            -1, *primitives.source_derivatives.shape[2:]
+        initial_batch_size = stream["initial_batch_size"]
+        final_batch_size = stream["final_batch_size"]
+        rebatch_count = stream["rebatch_count"]
+        peak_explicit_bytes = max(
+            peak_explicit_bytes,
+            stream["peak_explicit_bytes"],
         )
-    metric_components = primitives.metric_derivatives.reshape(
-        -1, *primitives.metric_derivatives.shape[2:]
+    if metric_context is not None:
+        metric_result = metric_context.contract(
+            cp.stack(
+                (
+                    metric_adjoints.target_coulomb,
+                    metric_adjoints.restricted_hf_bilinear,
+                )
+            )
+        )
+        target_coulomb += metric_result.values[0]
+        bilinear += metric_result.values[1]
+        peak_explicit_bytes = max(
+            peak_explicit_bytes,
+            metric_result.peak_explicit_bytes,
+        )
+    derivative_end.record()
+    derivative_end.synchronize()
+    cderi_bytes = int(factorization.value.nbytes)
+    return _ContractedPairExecution(
+        parity=parity,
+        central_seconds=central_seconds,
+        derivative_seconds=(
+            cp.cuda.get_elapsed_time(derivative_start, derivative_end)
+            / 1000.0
+            + (
+                0.0
+                if metric_context is None
+                else metric_context.device_setup_seconds
+            )
+        ),
+        peak_explicit_bytes=peak_explicit_bytes,
+        full_derivative_equivalent_bytes=natm * 3 * cderi_bytes,
+        initial_component_batch_size=initial_batch_size,
+        final_component_batch_size=final_batch_size,
+        component_rebatch_count=rebatch_count,
+        target_source_adjoint=(
+            None if source_adjoints is None else source_adjoints.target_coulomb
+        ),
+        bilinear_source_adjoint=(
+            None
+            if source_adjoints is None
+            else source_adjoints.restricted_hf_bilinear
+        ),
     )
-    derivative_dtype = (
-        metric_components.dtype
-        if source_components is None
-        else cp.result_type(source_components.dtype, metric_components.dtype)
+
+
+def _flatten_components(derivatives):
+    if derivatives is None:
+        return None
+    return derivatives.reshape(-1, *derivatives.shape[2:])
+
+
+def _build_native_pair_adjoints(
+    central,
+    pair,
+    factorization,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    native_source,
+    native_metric,
+):
+    if not native_source and not native_metric:
+        return None, None
+    target, bilinear = build_pair_cderi_adjoints(
+        central,
+        pair,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
     )
-    factorization = factorization.astype(
+    source_adjoints = None
+    if native_source:
+        source_adjoints = PairSourceAdjoints(
+            target_coulomb=push_cderi_adjoint_through_source(
+                factorization.factor,
+                target,
+            ),
+            restricted_hf_bilinear=push_cderi_adjoint_through_source(
+                factorization.factor,
+                bilinear,
+            ),
+        )
+    metric_adjoints = None
+    if native_metric:
+        metric_adjoints = PairMetricAdjoints(
+            target_coulomb=push_cderi_adjoint_through_metric(
+                factorization,
+                target,
+            ),
+            restricted_hf_bilinear=push_cderi_adjoint_through_metric(
+                factorization,
+                bilinear,
+            ),
+        )
+    return source_adjoints, metric_adjoints
+
+
+def _execute_host_component_stream(
+    factorization,
+    *,
+    pair,
+    central,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    source_components,
+    metric_components,
+    target_coulomb,
+    bilinear,
+    memory_fraction,
+    minimum_reserve_bytes,
+    max_component_batch_size,
+    retained_context_bytes,
+):
+    arrays = tuple(
+        array
+        for array in (source_components, metric_components)
+        if array is not None
+    )
+    component_count = _matching_component_count(arrays)
+    derivative_dtype = cp.result_type(*(array.dtype for array in arrays))
+    working = factorization.astype(
         cp.result_type(
             factorization.factor.dtype,
             factorization.value.dtype,
             derivative_dtype,
         )
     )
-    factor_bytes = int(factorization.factor.nbytes)
-    cderi_bytes = int(factorization.value.nbytes)
-    component_upload_bytes = int(metric_components[0].nbytes)
-    if source_components is not None:
-        component_upload_bytes += int(source_components[0].nbytes)
+    factor_bytes = int(working.factor.nbytes)
+    cderi_bytes = int(working.value.nbytes)
+    component_upload_bytes = sum(int(array[0].nbytes) for array in arrays)
     initial_batch_size, additional_budget = plan_component_batch(
-        len(metric_components),
+        component_count,
         component_upload_bytes=component_upload_bytes,
         factor_bytes=factor_bytes,
         cderi_bytes=cderi_bytes,
@@ -451,15 +667,14 @@ def _contract_device_pair(
         minimum_reserve_bytes=minimum_reserve_bytes,
         max_component_batch_size=max_component_batch_size,
     )
-    peak_explicit_bytes = max(
-        central_working_bytes,
-        3 * factor_bytes
+    peak_explicit_bytes = (
+        retained_context_bytes
+        + 3 * factor_bytes
         + 4 * cderi_bytes
-        + initial_batch_size * component_upload_bytes,
+        + initial_batch_size * component_upload_bytes
     )
-
     execution = execute_component_batches(
-        factorization,
+        working,
         pair=pair,
         central=central,
         reference=reference,
@@ -474,31 +689,22 @@ def _contract_device_pair(
         explicit_working_bytes=peak_explicit_bytes,
         additional_budget_bytes=additional_budget,
     )
-    derivative_end.record()
-    derivative_end.synchronize()
-    natm = primitives.metric_derivatives.shape[0]
-    return _ContractedPairExecution(
-        parity=parity,
-        central_seconds=central_seconds,
-        derivative_seconds=cp.cuda.get_elapsed_time(
-            derivative_start, derivative_end
-        ) / 1000.0,
-        peak_explicit_bytes=peak_explicit_bytes,
-        full_derivative_equivalent_bytes=natm * 3 * cderi_bytes,
-        initial_component_batch_size=initial_batch_size,
-        final_component_batch_size=execution["final_batch_size"],
-        component_rebatch_count=execution["rebatch_count"],
-        target_source_adjoint=(
-            None
-            if source_components is not None
-            else source_adjoints.target_coulomb
-        ),
-        bilinear_source_adjoint=(
-            None
-            if source_components is not None
-            else source_adjoints.restricted_hf_bilinear
-        ),
-    )
+    return {
+        "initial_batch_size": initial_batch_size,
+        "final_batch_size": execution["final_batch_size"],
+        "rebatch_count": execution["rebatch_count"],
+        "peak_explicit_bytes": peak_explicit_bytes,
+    }
+
+
+def _matching_component_count(arrays):
+    counts = {len(array) for array in arrays}
+    if len(counts) != 1:
+        raise ValueError(
+            "source and metric derivative component counts differ: "
+            f"{sorted(counts)}"
+        )
+    return int(next(iter(counts)))
 
 
 def _contract_native_sources(

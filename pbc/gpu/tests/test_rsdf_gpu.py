@@ -13,6 +13,7 @@ from pyscf_pbc_dcdft import df as cpu_df
 from pyscf_pbc_dcdft import dft as cpu_dft
 from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
 from pyscf_pbc_dcdft.df.rsdf.parameters import parameters_from_provider
+from pyscf_pbc_dcdft.df.rsdf.metric import rsdf_metric_derivatives
 from pyscf_pbc_dcdft.df.rsdf.source import (
     rsdf_source_derivatives,
 )
@@ -32,6 +33,13 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import (
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
     build_pair_source_adjoints,
     contract_source_derivative,
+)
+from gpu4pyscf_pbc_dcdft.df.rsdf.metric_adjoint import (
+    build_pair_metric_adjoints,
+    contract_metric_derivative,
+)
+from gpu4pyscf_pbc_dcdft.df.rsdf.metric_native import (
+    build_metric_contraction_context,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_native import (
     build_source_optimizer,
@@ -445,6 +453,132 @@ class RSDFGPUParityTest(unittest.TestCase):
                 1.0e-10,
             )
 
+    def test_metric_adjoints_match_complex_cderi_response(self):
+        rng = np.random.default_rng(43)
+        nkpts, naux, nao = 2, 3, 4
+
+        def complex_random(shape):
+            return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+        def hermitian_density():
+            value = complex_random((nkpts, nao, nao))
+            return cp.asarray(value + value.conj().transpose(0, 2, 1))
+
+        reference = hermitian_density()
+        response = hermitian_density()
+        pairs = ((0, 0), (0, 1), (1, 1))
+        central = {
+            pair: cp.asarray(complex_random((naux, nao, nao)))
+            for pair in pairs
+        }
+        auxiliary_reference = auxiliary_density_contraction(
+            central, reference
+        )
+        auxiliary_response = auxiliary_density_contraction(
+            central, response
+        )
+        for pair in pairs:
+            factor = np.tril(complex_random((naux, naux)))
+            factor[np.diag_indices(naux)] += 4.0
+            factorization = CDERIFactorization(
+                factor=cp.asarray(factor),
+                value=central[pair],
+                nao=nao,
+            )
+            random_metric = complex_random((naux, naux))
+            metric_derivative = cp.asarray(
+                random_metric + random_metric.conj().T
+            )
+            cderi_derivative = factorization.differentiate_metric(
+                metric_derivative
+            )
+            witness = contract_canonical_pair_derivative(
+                central,
+                pair,
+                cderi_derivative,
+                reference,
+                response,
+                auxiliary_reference=auxiliary_reference,
+                auxiliary_response=auxiliary_response,
+            )
+            adjoints = build_pair_metric_adjoints(
+                central,
+                pair,
+                factorization,
+                reference,
+                response,
+                auxiliary_reference=auxiliary_reference,
+                auxiliary_response=auxiliary_response,
+            )
+            target = contract_metric_derivative(
+                adjoints.target_coulomb,
+                metric_derivative,
+            )
+            bilinear = contract_metric_derivative(
+                adjoints.restricted_hf_bilinear,
+                metric_derivative,
+            )
+            self.assertLess(
+                float(cp.abs(target - witness.target_coulomb).get()),
+                1.0e-10,
+            )
+            self.assertLess(
+                float(
+                    cp.abs(
+                        bilinear - witness.restricted_hf_bilinear
+                    ).get()
+                ),
+                1.0e-10,
+            )
+
+    def test_native_metric_contraction_matches_cpu_primitives(self):
+        rng = np.random.default_rng(47)
+        for kmesh in ((1, 1, 1), (2, 1, 1)):
+            method = _method(_cell(), kmesh, device="gpu")
+            provider = method.with_df
+            witness = provider.cpu_witness
+            parameters = parameters_from_provider(witness)
+            kpts = np.asarray(provider.kpts)
+            pair = canonical_pairs(len(kpts))[-1]
+            q = kpts[pair[1]] - kpts[pair[0]]
+            naux = int(witness.auxcell.nao_nr())
+            adjoints = cp.asarray(
+                rng.normal(size=(2, naux, naux))
+                + 1j * rng.normal(size=(2, naux, naux))
+            )
+            cpu_derivatives = cp.asarray(
+                rsdf_metric_derivatives(
+                    witness.cell,
+                    witness.auxcell,
+                    parameters,
+                    q=q,
+                ).total
+            )
+            reference = cp.real(
+                cp.einsum(
+                    "spq,axpq->sax",
+                    adjoints,
+                    cpu_derivatives,
+                    optimize=True,
+                )
+            )
+            context = build_metric_contraction_context(
+                witness.cell,
+                witness.auxcell,
+                parameters,
+                q=q,
+            )
+            result = context.contract(adjoints)
+            np.testing.assert_allclose(
+                cp.asnumpy(result.values),
+                cp.asnumpy(reference),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+            self.assertEqual(context.ip1.shape, (3, naux, naux))
+            self.assertEqual(context.ip2.shape, (3, naux, naux))
+            self.assertFalse(hasattr(context, "metric_derivatives"))
+
     def test_central_pair_preflight_rejects_insufficient_memory(self):
         primitives = SimpleNamespace(
             source=np.zeros((8, 4)),
@@ -488,6 +622,7 @@ class RSDFGPUParityTest(unittest.TestCase):
             reference,
             response,
             native_source_derivatives=False,
+            native_metric_derivatives=False,
         )
         single_component = build_rsdf_contracted_response(
             method.with_df,
@@ -495,12 +630,28 @@ class RSDFGPUParityTest(unittest.TestCase):
             response,
             max_component_batch_size=1,
             native_source_derivatives=False,
+            native_metric_derivatives=False,
         )
         native_source = build_rsdf_contracted_response(
             method.with_df,
             reference,
             response,
             native_source_derivatives=True,
+            native_metric_derivatives=False,
+        )
+        native_metric = build_rsdf_contracted_response(
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=False,
+            native_metric_derivatives=True,
+        )
+        native_both = build_rsdf_contracted_response(
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=True,
+            native_metric_derivatives=True,
         )
         self.assertLess(
             float(
@@ -579,6 +730,29 @@ class RSDFGPUParityTest(unittest.TestCase):
             native_source.profile.host_to_device_bytes,
             contracted.profile.host_to_device_bytes,
         )
+        for candidate in (native_metric, native_both):
+            np.testing.assert_allclose(
+                cp.asnumpy(candidate.target_coulomb),
+                cp.asnumpy(contracted.target_coulomb),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+            np.testing.assert_allclose(
+                cp.asnumpy(candidate.restricted_hf_bilinear),
+                cp.asnumpy(contracted.restricted_hf_bilinear),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+        self.assertEqual(
+            native_metric.profile.response_mode,
+            "native_metric_contracted_component_stream",
+        )
+        self.assertEqual(
+            native_both.profile.response_mode,
+            "native_source_native_metric_contracted_adjoint",
+        )
+        self.assertIsNone(native_both.profile.component_batch_size)
+        self.assertIsNone(native_both.profile.initial_component_batch_size)
 
     def test_component_oom_retries_without_double_commit(self):
         source = np.zeros((4, 1))
@@ -732,7 +906,7 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertGreater(profile["host_to_device_bytes"], 0)
         self.assertEqual(
             profile["response_mode"],
-            "native_source_contracted_component_stream",
+            "native_source_native_metric_contracted_adjoint",
         )
         self.assertEqual(
             profile["host_source_derivative_seconds"],
@@ -744,11 +918,8 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertGreater(
             profile["device_peak_explicit_working_bytes"], 0
         )
-        self.assertGreaterEqual(profile["component_batch_size"], 1)
-        self.assertGreaterEqual(
-            profile["initial_component_batch_size"],
-            profile["component_batch_size"],
-        )
+        self.assertIsNone(profile["component_batch_size"])
+        self.assertIsNone(profile["initial_component_batch_size"])
 
 
 if __name__ == "__main__":

@@ -178,9 +178,10 @@ component-wise audit하거나 storage FD와 직접 비교할 수 있다.
 
 GPU production gradient는
 `df/rsdf/contracted_response.py::build_rsdf_contracted_response`가 반환하는
-`RSDFContractedResponse`를 사용한다. 한 canonical k-pair와
-한 nuclear component의 $dC$만 device에서 만들고, 필요한 두 scalar에 즉시 수축한 뒤
-버린다. 따라서 production에는 다음 배열이 남지 않는다.
+`RSDFContractedResponse`를 사용한다. 기본 native route는 필요한 두 scalar의 $dC$
+adjoint를 source와 metric primitive까지 역전파한다. 따라서 atom-resolved $dB$, $dM$,
+$dC$를 만들지 않고 각 primitive kernel에서 바로 gradient를 누적한다. Production에는
+다음 배열이 남지 않는다.
 
 ```text
 dCDERI: (natm, 3, naux, nao, nao)
@@ -214,12 +215,26 @@ Exchange는 각 canonical pair가 소유하는 $(k_i,k_j)$와 reverse conjugate 
 수축한다. 이 pair-local 식은 full $dJ/dK$ witness와 복소 sampled-k random test에서
 $10^{-10}$ 이내로 일치한다.
 
-`df/rsdf/component_stream.py`가 production의 GPU memory policy를 별도로 소유한다.
-Primitive upload는 기본 최대 세 component이며 free-memory budget으로 preflight한다.
-OOM이면 실패 batch의 결과를 commit하지 않고 같은 component부터 batch를 절반으로 줄여
-재시도한다. Batch size 1도 실패하면 CPU fallback 대신 설명 가능한 `MemoryError`를
-발생시킨다. Reference tensor 생성, 물리적 scalar 조립, memory/OOM 정책을 서로 다른
-module로 분리해 각 계약을 독립적으로 읽고 회귀 테스트할 수 있다.
+Source adjoint $W^B$는 triangular solve의 transpose action으로, metric adjoint $W^M$는
+Cholesky gauge의 reverse action으로 얻는다.
+
+$$
+\operatorname{Re}\langle W^C,dC\rangle
+=\operatorname{Re}\langle W^B,dB\rangle
+ +\operatorname{Re}\langle W^M,dM\rangle.
+$$
+
+`df/rsdf/source_adjoint.py`와 `metric_adjoint.py`가 이 역전파를 소유하고,
+`source_native.py`와 `metric_native.py`가 GPU primitive에 직접 수축한다. Reciprocal
+metric response는 auxiliary Fourier factor와 $i(\mathbf G+\mathbf q)$ phase를 device에서
+처리한다. Short-range metric은 현재 GPU4PySCF public kernel이 production PySCF screened
+metric과 $10^{-5}$ 수준으로 달라, exact host `ip1/ip2` 두 배열만 사용한다. 이 배열은
+atom-resolved full $dM$보다 작고 device에서 즉시 수축된다.
+
+명시적으로 source 또는 metric native route를 끈 reference/mixed 실행에서만
+`df/rsdf/component_stream.py`가 bounded GPU memory policy를 사용한다. OOM이면 실패
+batch를 commit하지 않고 같은 component부터 batch를 절반으로 줄여 재시도한다. Batch
+size 1도 실패하면 CPU fallback 대신 설명 가능한 `MemoryError`를 발생시킨다.
 
 PySCF HDF5에 저장된 central CDERI는 SCF energy의 authoritative value이다. Package는
 독립적으로 `B`, `M`, $L^{-1}B$를 재구성하고 모든 canonical k-pair에서
@@ -275,15 +290,17 @@ Explicit host boundaries:
 
 - `Cell`/`AuxCell`, lattice-image and integral optimizer metadata
 - central RSDF two-/three-center integral and CDERI setup
-- derivative source/metric and GTH H1 primitive generation
+- exact screened short-range metric `ip1/ip2`
+- 일부 GTH H1 primitive generation
 - Ewald nuclear gradient and final NumPy reporting
 
 Device-owned operations:
 
 - canonical CDERI storage after one-time upload
 - source HF and target DFA J/K contractions
-- metric Cholesky와 bounded component `dL`/$dC$ response algebra
-- source-contracted target-J와 Z-vector bilinear scalar 누적
+- native short-range/reciprocal source derivative contraction
+- native reciprocal metric derivative와 Cholesky-adjoint contraction
+- target-J와 Z-vector bilinear scalar의 direct adjoint 누적
 - target XC contraction, HF AX/Z-vector, final electronic assembly
 
 `silent_cpu_fallback`은 `False`이다. Host integral generation은 숨겨진 CPU DC-DFT
@@ -317,6 +334,7 @@ pbc/cpu/validation/results/2026-07-14_rsdf_cpu.json
 pbc/gpu/validation/results/2026-07-14_rsdf_gpu.json
 pbc/gpu/validation/results/2026-07-14_mgga_gpu.json
 pbc/gpu/validation/results/2026-07-16_rsdf_optimization.json
+pbc/gpu/validation/results/2026-07-17_rsdf_native_metric.json
 ```
 
 PBE 전용 RSDF gate에 더해 SCAN/r2SCAN과 결합한 4개 RSDF full Cartesian case도
@@ -342,6 +360,20 @@ parity, SCAN Gamma 및 r2SCAN sampled-k regression도 통과했다.
 
 Regression gates는 CPU `39/39`, GPU `17/17`를 통과했다. Production RSDF response는
 matrix finite difference를 호출하지 않는다.
+
+2026-07-17 native source+metric route의 동일 Water8 조건 세 번 중앙값과 제한된
+Water20 1회 결과는 다음과 같다. Water20에는 FD를 실행하지 않았다.
+
+| Metric | N2 native source | N3 native source+metric | Change |
+| --- | ---: | ---: | ---: |
+| Water8 analytic gradient median | 8.327 s | 5.884 s | 29.3% 감소 |
+| Water20 analytic gradient | 50.136 s | 32.468 s | 35.2% 감소 |
+| Water20 host metric derivative | 15.121 s | 0.109 s | 99.3% 감소 |
+| Water20 host-to-device primitive | 34,675,200 B | 16,275,392 B | 53.1% 감소 |
+
+N3의 RSDF regression 14개와 SCAN/r2SCAN MGGA regression 4개가 통과했다. Default
+`response_mode`는 `native_source_native_metric_contracted_adjoint`이며, native-only
+경로에서는 component batch가 필요하지 않아 해당 metadata가 `null`이다.
 
 ## 10. Current limitations and failure policy
 

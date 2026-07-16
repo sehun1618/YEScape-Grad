@@ -1,0 +1,70 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_rsdf_native_metric_v1",
+  "overall_status": "pass",
+  "water64_executed_by_codex": false,
+  "implementation": {
+    "default_response_mode": "native_source_native_metric_contracted_adjoint",
+    "full_atom_metric_derivative_materialized": false,
+    "reciprocal_metric_derivative_owner": "gpu",
+    "cholesky_metric_adjoint_owner": "gpu",
+    "short_range_metric_owner": "exact_host_ip1_ip2_then_gpu_contraction",
+    "silent_cpu_fallback": false
+  },
+  "short_range_boundary_decision": {
+    "gpu4pyscf_public_value_max_gap": 0.0001429855,
+    "gpu4pyscf_public_ip1_max_gap": 0.00005285867,
+    "larger_rcut_removed_gap": false,
+    "decision": "retain exact production PySCF screened ip1/ip2",
+    "water20_host_context_wall_s": 0.10943358857184649
+  },
+  "correctness": {
+    "metric_adjoint_complex_algebra": "pass",
+    "gamma_direct_metric_contraction": "pass",
+    "sampled_k_direct_metric_contraction": "pass",
+    "four_host_native_ownership_combinations": "pass",
+    "gamma_full_gradient_cpu_gpu": "pass",
+    "sampled_k_full_gradient_cpu_gpu": "pass",
+    "independent_source_metric_omega_mesh": "pass",
+    "rsdf_test_count": 14,
+    "rsdf_test_elapsed_s": 261.847,
+    "mgga_test_count": 4,
+    "mgga_test_elapsed_s": 74.624
+  },
+  "water8": {
+    "n2_analytic_gradient_wall_s": [
+      8.103118436411023,
+      8.600899917073548,
+      8.327226413413882
+    ],
+    "n2_median_wall_s": 8.327226413413882,
+    "n3_analytic_gradient_wall_s": [
+      5.860908176749945,
+      5.904339888133109,
+      5.884372713975608
+    ],
+    "n3_median_wall_s": 5.884372713975608,
+    "n3_speedup_percent_vs_n2": 29.336
+  },
+  "water20": {
+    "n2_analytic_gradient_wall_s": 50.135513585060835,
+    "n3_analytic_gradient_wall_s": 32.467983606271446,
+    "n3_speedup_percent_vs_n2": 35.240,
+    "n2_host_metric_derivative_wall_s": 15.120528060011566,
+    "n3_host_metric_derivative_wall_s": 0.10943358857184649,
+    "host_metric_reduction_percent": 99.276,
+    "n2_host_to_device_bytes": 34675200,
+    "n3_host_to_device_bytes": 16275392,
+    "host_to_device_reduction_percent": 53.063,
+    "full_derivative_equivalent_bytes": 2488320000,
+    "retained_device_derivative_bytes": 0,
+    "device_peak_explicit_working_bytes": 517588352
+  },
+  "source_queues": [
+    "pbc/benchmark/rsdf_r0_baseline.json"
+  ],
+  "source_result_directories": [
+    "pbc/benchmark/results/rsdf_n2_fused_source_water8_2026-07-17",
+    "pbc/benchmark/results/rsdf_n2_fused_source_water20_2026-07-17",
+    "pbc/benchmark/results/rsdf_n3_native_metric_2026-07-17"
+  ]
+}

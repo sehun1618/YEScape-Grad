@@ -200,8 +200,8 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 | N0 sampled-k dtype safety | `complete` | common complex dtype solve; warning-as-error r2SCAN `2 x 1 x 1` RSDF, RSDF/MGGA 11-test 및 공유 GDF 36-test 통과 | regression 유지 |
 | N1 benchmark integrity | `complete` | attempt identity, process-liveness reconciliation, interrupted state 및 prior-artifact archive; benchmark unit test 12개와 Water8 3회/Water20 1회 통과 | lifecycle regression 유지 |
 | N2 GPU source derivative | `complete` | SR/LR+vbar native contraction, Gamma/sampled-k canonical orientation, source adjoint algebra, bounded reciprocal rebatch 및 shared two-observable traversal; RSDF 12개와 MGGA 4개 test 통과 | regression 유지 |
-| N3 GPU metric derivative | `in progress` | metric derivative는 남은 가장 큰 명시적 host boundary; Water20 14.719 s | CPU metric decomposition과 image/screening ownership 고정 |
-| N4 conditional remainder | `pending` | profile 전에는 대상 미정 | N2/N3 후 exclusive profile |
+| N3 GPU metric derivative | `complete` | exact host SR `ip1/ip2` + GPU reciprocal metric/Cholesky adjoint; RSDF 14개와 MGGA 4개 test, Water20 35.2% N2 대비 개선 | regression 유지 |
+| N4 conditional remainder | `in progress` | Water20 analytic 32.468 s; device derivative response 23.316 s가 최대 exclusive 후보 | source/metric device substage를 분리 profile한 뒤 한 후보만 선택 |
 | N5 release gate | `pending` | 이전 R2 release evidence 존재 | N0--N4 완료 범위만 재검증 |
 
 ## 7. 완료 정의
@@ -279,3 +279,32 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
   primitive materialization보다 크다. 이 사실을 숨기는 자동 CPU fallback은 넣지
   않았으며, true multi-source CUDA recurrence는 N3 이후 profile에서 N4 후보로만
   재평가한다.
+
+## 11. 2026-07-17 N3 implementation record
+
+- Central relation $C=L^{-1}B^T$의 plain-product $dC$ adjoint를 Cholesky gauge 뒤로
+  전파해 $\operatorname{Re}\sum_{PQ}W^M_{PQ}dM_{PQ}$ 형태의 metric adjoint를 만든다.
+  무작위 복소 Gamma/sampled-k algebra와 materialized $dM$ contraction은
+  $10^{-10}$ 이내로 일치한다.
+- Reciprocal metric derivative는 auxiliary Fourier value, Coulomb kernel 및
+  $i(\mathbf G+\mathbf q)$ phase를 GPU에서 직접 수축한다. Atom-resolved
+  `(natm, 3, naux, naux)` metric derivative와 full $dC$는 만들지 않는다.
+- GPU4PySCF의 현재 public `int2c2e_ip1`은 production PySCF RSDF screened metric과
+  H2 probe에서 최대 약 $5.29\times10^{-5}$ 차이가 났고 rcut 증가로 사라지지 않았다.
+  이를 연결하면 $10^{-9}$ correctness contract를 깨므로, exact production host
+  `ip1/ip2` 두 배열만 전송해 device에서 직접 수축한다. Water20에서 이 exact host
+  short-range/context boundary는 0.109 s이며 full host metric derivative 15.121 s의
+  1% 미만이다.
+- Source와 metric native route는 같은 canonical $dC$ adjoint를 공유한다. 각각을 독립
+  opt-out할 수 있어 host/host, native-source/host-metric,
+  host-source/native-metric 및 native/native 네 조합을 full-tensor witness와 비교한다.
+- RSDF test 14개가 261.847 s, SCAN/r2SCAN MGGA test 4개가 74.624 s에 통과했다.
+  Gamma와 $2\times1\times1$ sampled-k 최종 gradient, complex dtype, batch-1 및 OOM
+  transaction 회귀를 포함한다.
+- Water8 독립 process 세 번의 analytic-gradient 중앙값은 N2 8.327 s에서 5.884 s로
+  29.3% 감소했다. Water20은 50.136 s에서 32.468 s로 35.2% 감소했다.
+  Water20 host metric derivative는 15.121 s에서 0.109 s로 99.3% 감소했고
+  host-to-device primitive bytes는 34,675,200 B에서 16,275,392 B로 53.1% 감소했다.
+- Default profile mode는 `native_source_native_metric_contracted_adjoint`이며 component
+  batch 값은 `null`이다. Reference/mixed host derivative route에서만 bounded component
+  stream과 transactional OOM rebatch를 사용한다. Silent CPU fallback은 없다.

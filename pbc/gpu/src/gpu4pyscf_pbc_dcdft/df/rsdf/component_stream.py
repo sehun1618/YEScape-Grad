@@ -119,11 +119,7 @@ def execute_component_batches(
 ):
     """Execute batches transactionally, halving only after an OOM."""
 
-    component_count = (
-        len(metric_components)
-        if source_components is None
-        else len(source_components)
-    )
+    component_count = _component_count(source_components, metric_components)
     batch_size = min(int(initial_batch_size), component_count)
     rebatch_count = 0
     start = 0
@@ -138,12 +134,12 @@ def execute_component_batches(
                 response=response,
                 auxiliary_reference=auxiliary_reference,
                 auxiliary_response=auxiliary_response,
-                source_components=(
-                    None
-                    if source_components is None
-                    else source_components[start:stop]
+                source_components=_component_slice(
+                    source_components, start, stop
                 ),
-                metric_components=metric_components[start:stop],
+                metric_components=_component_slice(
+                    metric_components, start, stop
+                ),
             )
         except Exception as error:
             if not _is_gpu_out_of_memory(error):
@@ -187,22 +183,17 @@ def _component_batch_worker(
     source_components,
     metric_components,
 ):
-    d_metric = cp.asarray(metric_components)
-    d_source = (
-        None
-        if source_components is None
-        else cp.asarray(source_components)
-    )
-    target = cp.empty(len(d_metric), dtype=cp.float64)
+    d_metric = _device_components(metric_components)
+    d_source = _device_components(source_components)
+    component_count = _component_count(d_source, d_metric)
+    target = cp.empty(component_count, dtype=cp.float64)
     bilinear = cp.empty_like(target)
-    for component in range(len(d_metric)):
-        derivative = factorization.differentiate_metric(
-            d_metric[component]
+    for component in range(component_count):
+        derivative = _component_derivative(
+            factorization,
+            source=None if d_source is None else d_source[component],
+            metric=None if d_metric is None else d_metric[component],
         )
-        if d_source is not None:
-            derivative += factorization.differentiate_source(
-                d_source[component]
-            )
         contracted = contract_canonical_pair_derivative(
             central,
             pair,
@@ -216,6 +207,43 @@ def _component_batch_worker(
         bilinear[component] = contracted.restricted_hf_bilinear
     cp.cuda.Stream.null.synchronize()
     return target, bilinear
+
+
+def _component_derivative(factorization, *, source, metric):
+    if source is None:
+        return factorization.differentiate_metric(metric)
+    derivative = factorization.differentiate_source(source)
+    if metric is not None:
+        derivative += factorization.differentiate_metric(metric)
+    return derivative
+
+
+def _component_count(source_components, metric_components):
+    counts = [
+        len(components)
+        for components in (source_components, metric_components)
+        if components is not None
+    ]
+    if not counts:
+        raise ValueError("at least one RSDF derivative component is required")
+    if len(set(counts)) != 1:
+        raise ValueError(
+            "source and metric derivative component counts differ: "
+            f"{counts}"
+        )
+    return int(counts[0])
+
+
+def _component_slice(components, start, stop):
+    if components is None:
+        return None
+    return components[start:stop]
+
+
+def _device_components(components):
+    if components is None:
+        return None
+    return cp.asarray(components)
 
 
 def _is_gpu_out_of_memory(error):

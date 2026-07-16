@@ -54,15 +54,14 @@ class RSDFResponseProfile:
     def metadata(self) -> dict[str, object]:
         """Return JSON-safe profile fields with explicit ownership labels."""
 
-        contracted = self.response_mode.endswith(
-            "source_contracted_component_stream"
-        )
-        native_source = self.response_mode.startswith("native_source_")
+        component_stream = "component_stream" in self.response_mode
+        native_source = "native_source" in self.response_mode
+        native_metric = "native_metric" in self.response_mode
         device_operations = [
             "host-to-device primitive transfer",
             "metric Cholesky and central CDERI solve",
         ]
-        if contracted:
+        if component_stream:
             device_operations.extend(
                 [
                     "bounded component CDERI response",
@@ -73,7 +72,11 @@ class RSDFResponseProfile:
             device_operations.append(
                 "native short-range and reciprocal source derivative contraction"
             )
-        else:
+        if native_metric:
+            device_operations.append(
+                "native reciprocal metric derivative and Cholesky-adjoint contraction"
+            )
+        if not native_source and not native_metric:
             device_operations.append(
                 "source and metric full-CDERI derivative response"
             )
@@ -116,16 +119,9 @@ class RSDFResponseProfile:
                 self.initial_component_batch_size
             ),
             "component_rebatch_count": self.component_rebatch_count,
-            "host_owned_operations": (
-                [
-                    "RSDF three-center source value",
-                    "RSDF two-center metric value and nuclear derivatives",
-                ]
-                if native_source
-                else [
-                    "RSDF three-center source value and nuclear derivatives",
-                    "RSDF two-center metric value and nuclear derivatives",
-                ]
+            "host_owned_operations": _host_owned_operations(
+                native_source=native_source,
+                native_metric=native_metric,
             ),
             "device_owned_operations": device_operations,
         }
@@ -138,7 +134,7 @@ class _HostPairPrimitives:
     source: np.ndarray
     metric: np.ndarray
     source_derivatives: np.ndarray | None
-    metric_derivatives: np.ndarray
+    metric_derivatives: np.ndarray | None
     source_value_seconds: float
     metric_value_seconds: float
     source_derivative_seconds: float
@@ -295,6 +291,7 @@ def _host_pair_primitives(
     parameters,
     *,
     include_source_derivatives=True,
+    include_metric_derivatives=True,
 ):
     ki, kj = pair
     first = kpts[ki]
@@ -332,16 +329,20 @@ def _host_pair_primitives(
     else:
         source_derivatives = None
         source_derivative_seconds = 0.0
-    start = perf_counter()
-    metric_derivatives = np.asarray(
-        rsdf_metric_derivatives(
-            cell,
-            auxcell,
-            parameters,
-            q=second - first,
-        ).total
-    )
-    metric_derivative_seconds = perf_counter() - start
+    if include_metric_derivatives:
+        start = perf_counter()
+        metric_derivatives = np.asarray(
+            rsdf_metric_derivatives(
+                cell,
+                auxcell,
+                parameters,
+                q=second - first,
+            ).total
+        )
+        metric_derivative_seconds = perf_counter() - start
+    else:
+        metric_derivatives = None
+        metric_derivative_seconds = 0.0
     return _HostPairPrimitives(
         source=np.asarray(source),
         metric=np.asarray(metric),
@@ -352,6 +353,22 @@ def _host_pair_primitives(
         source_derivative_seconds=source_derivative_seconds,
         metric_derivative_seconds=metric_derivative_seconds,
     )
+
+
+def _host_owned_operations(*, native_source, native_metric):
+    operations = [
+        "RSDF three-center source value",
+        "RSDF two-center metric value",
+    ]
+    if not native_source:
+        operations.append("RSDF three-center source nuclear derivatives")
+    if native_metric:
+        operations.append(
+            "exact screened short-range metric ip1/ip2 and reciprocal grid metadata"
+        )
+    else:
+        operations.append("RSDF two-center metric nuclear derivatives")
+    return operations
 
 
 def _device_pair_response(primitives, *, nao):
