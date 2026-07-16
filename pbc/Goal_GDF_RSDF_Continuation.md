@@ -6,6 +6,9 @@
 최적화하기 위한 후속 goal이다. 기존 구현의 물리 기능과 정확성 completion을
 취소하거나 다시 정의하지 않는다.
 
+이 문서에서 완료된 G6--G8 및 R0--R2 이후의 RSDF GPU-native 작업은
+[`Goal_RSDF_GPU_Native.md`](Goal_RSDF_GPU_Native.md)에서 별도로 추적한다.
+
 - 기준 source는 이 Git 저장소의 `pbc/cpu/src/`와 `pbc/gpu/src/`다.
 - 이전 개발 workspace는 회귀 evidence와 구현 이력을 읽는 용도로만 사용한다.
 - GDF와 RSDF의 correctness를 보존한 상태에서 memory 안정성, 재현 가능한 timing,

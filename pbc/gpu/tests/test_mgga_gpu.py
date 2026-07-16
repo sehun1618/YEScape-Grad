@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 
 import cupy as cp
 import numpy as np
@@ -82,9 +83,11 @@ class MGGAGPUGradientTest(unittest.TestCase):
         )
 
     def test_r2scan_kpoint_rsdf_cpu_gpu(self):
-        self.assert_cpu_gpu_parity(
-            xc="R2SCAN", kmesh=(2, 1, 1), backend="rsdf"
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", np.exceptions.ComplexWarning)
+            self.assert_cpu_gpu_parity(
+                xc="R2SCAN", kmesh=(2, 1, 1), backend="rsdf"
+            )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ on the GPU for Gamma and sampled k-points without a CPU DC-DFT fallback.
 from __future__ import annotations
 
 import unittest
+import warnings
 from unittest.mock import patch
 
 import cupy as cp
@@ -524,6 +525,37 @@ class GDFGPUAlgebraTest(unittest.TestCase):
         )
         self.assertLess(
             float(np.max(np.abs(cpu.total - cp.asnumpy(gpu.total)))),
+            1.0e-10,
+        )
+
+    def test_real_factor_preserves_complex_derivative_response(self):
+        rng = np.random.default_rng(181)
+        nao = 2
+        naux = 4
+        raw = rng.normal(size=(naux, naux))
+        metric = raw @ raw.T + np.eye(naux)
+        source = rng.normal(size=(nao**2, naux))
+        d_source = rng.normal(size=source.shape) + 1j * rng.normal(
+            size=source.shape
+        )
+        d_raw = rng.normal(size=(naux, naux)) + 1j * rng.normal(
+            size=(naux, naux)
+        )
+        d_metric = d_raw + d_raw.conj().T
+        cpu = differentiate_cderi(
+            source, metric, d_source, d_metric, nao
+        )
+        factorization = CDERIFactorization.build(
+            source, metric, nao=nao
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", np.exceptions.ComplexWarning)
+            gpu = factorization.differentiate(d_source, d_metric)
+        gpu_total = cp.asnumpy(gpu.total)
+        self.assertTrue(np.iscomplexobj(gpu_total))
+        self.assertGreater(float(np.max(np.abs(gpu_total.imag))), 1.0e-3)
+        self.assertLess(
+            float(np.max(np.abs(cpu.total - gpu_total))),
             1.0e-10,
         )
 

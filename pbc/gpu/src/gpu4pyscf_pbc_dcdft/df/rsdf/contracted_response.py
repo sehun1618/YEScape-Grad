@@ -335,6 +335,16 @@ def _contract_device_pair(
     metric_components = primitives.metric_derivatives.reshape(
         -1, *primitives.metric_derivatives.shape[2:]
     )
+    derivative_dtype = cp.result_type(
+        source_components.dtype, metric_components.dtype
+    )
+    factorization = factorization.astype(
+        cp.result_type(
+            factorization.factor.dtype,
+            factorization.value.dtype,
+            derivative_dtype,
+        )
+    )
     factor_bytes = int(factorization.factor.nbytes)
     cderi_bytes = int(factorization.value.nbytes)
     component_upload_bytes = int(source_components[0].nbytes) + int(
