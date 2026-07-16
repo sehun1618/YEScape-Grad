@@ -82,6 +82,11 @@ class BenchmarkInputTest(unittest.TestCase):
                 path,
                 context={"run_name": "test", "device": "gpu"},
                 minimum_write_interval_s=0.0,
+                memory_provider=lambda: {
+                    "status": "running",
+                    "current_device_used_bytes": 1024**3,
+                    "peak_observed_device_used_bytes": 2 * 1024**3,
+                },
             )
             reporter.update(
                 "zvector_matrix",
@@ -97,6 +102,12 @@ class BenchmarkInputTest(unittest.TestCase):
             self.assertEqual(payload["context"]["run_name"], "test")
             self.assertEqual(payload["timezone"], "Asia/Seoul")
             self.assertTrue(payload["updated_at_kst"].endswith("+09:00"))
+            self.assertEqual(
+                payload["vram_peak_tracking"][
+                    "peak_observed_device_used_bytes"
+                ],
+                2 * 1024**3,
+            )
             self.assertNotIn("updated_at_utc", payload)
             self.assertFalse(any(path.parent.glob("*.tmp")))
 
@@ -104,6 +115,7 @@ class BenchmarkInputTest(unittest.TestCase):
             self.assertIn("25/100", line)
             self.assertIn("25.00%", line)
             self.assertIn("matrix=1.50 GiB", line)
+            self.assertIn("vram=1.00/2.00 GiB", line)
 
             reporter.complete(report_path="report.json")
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -139,6 +151,70 @@ class BenchmarkInputTest(unittest.TestCase):
             report["peak_observed_cupy_pool_reserved_bytes"], 120
         )
         self.assertEqual(len(report["samples"]), 2)
+
+    def test_vram_tracker_aggregates_overall_and_stage_high_water(self):
+        tracker = benchmark.VRAMPeakTracker(
+            "gpu", sample_interval_s=0.1
+        )
+        tracker._record_sample(
+            {
+                "stage": "energy",
+                "elapsed_s": 0.0,
+                "gpu_free_device_bytes": 900,
+                "gpu_total_device_bytes": 1000,
+                "gpu_device_used_bytes": 100,
+                "cupy_pool_used_bytes": 40,
+                "cupy_pool_reserved_bytes": 60,
+            }
+        )
+        tracker._record_sample(
+            {
+                "stage": "gradient",
+                "elapsed_s": 0.1,
+                "gpu_free_device_bytes": 650,
+                "gpu_total_device_bytes": 1000,
+                "gpu_device_used_bytes": 350,
+                "cupy_pool_used_bytes": 180,
+                "cupy_pool_reserved_bytes": 240,
+            }
+        )
+        tracker._record_sample(
+            {
+                "stage": "gradient",
+                "elapsed_s": 0.2,
+                "gpu_free_device_bytes": 700,
+                "gpu_total_device_bytes": 1000,
+                "gpu_device_used_bytes": 300,
+                "cupy_pool_used_bytes": 100,
+                "cupy_pool_reserved_bytes": 220,
+            }
+        )
+
+        report = tracker.report()
+        self.assertEqual(report["sample_count"], 3)
+        self.assertEqual(report["baseline_gpu_device_used_bytes"], 100)
+        self.assertEqual(report["peak_observed_gpu_device_used_bytes"], 350)
+        self.assertEqual(
+            report[
+                "peak_observed_gpu_device_used_delta_from_baseline_bytes"
+            ],
+            250,
+        )
+        self.assertEqual(
+            report["peak_observed_cupy_pool_reserved_bytes"], 240
+        )
+        self.assertEqual(report["stage_peaks"]["gradient"]["sample_count"], 2)
+        self.assertEqual(
+            report["stage_peaks"]["gradient"][
+                "peak_observed_gpu_device_used_bytes"
+            ],
+            350,
+        )
+
+    def test_cpu_vram_tracker_is_explicitly_disabled(self):
+        report = benchmark.VRAMPeakTracker("cpu").stop()
+        self.assertEqual(report["status"], "disabled")
+        self.assertEqual(report["reason"], "cpu_run")
 
 
 if __name__ == "__main__":

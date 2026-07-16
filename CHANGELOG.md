@@ -18,3 +18,5 @@ All notable changes to the public packages will be documented here.
   target-J/Z-vector response that retains no full dCDERI, dJ, or dK tensors.
 - Separate RSDF full-tensor validation, production scalar contraction, and
   bounded GPU memory/OOM scheduling into independently testable modules.
+- Add configurable periodic VRAM high-water sampling to PBC benchmark reports,
+  live progress output, failure reports, and queue summary CSV files.

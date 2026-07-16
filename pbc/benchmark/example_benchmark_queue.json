@@ -21,6 +21,8 @@
     "conv_tol_grad": 1e-08,
     "max_cycle": 80,
     "num_threads": 64,
+    "track_vram_peak": true,
+    "vram_sample_interval_s": 0.05,
     "run_fd": false,
     "fd_step_bohr": 0.0001,
     "fd_atoms": "all",

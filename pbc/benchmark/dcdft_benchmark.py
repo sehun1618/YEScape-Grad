@@ -13,12 +13,13 @@ import json
 import os
 import resource
 import sys
+import threading
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -102,10 +103,12 @@ class ProgressReporter:
         *,
         context: Mapping[str, Any] | None = None,
         minimum_write_interval_s: float = 2.0,
+        memory_provider: Callable[[], Mapping[str, Any]] | None = None,
     ):
         self.path = Path(path)
         self.context = dict(context or {})
         self.minimum_write_interval_s = float(minimum_write_interval_s)
+        self.memory_provider = memory_provider
         self.started_at = perf_counter()
         self.stage_started_at = self.started_at
         self.last_write_at = float("-inf")
@@ -181,6 +184,17 @@ class ProgressReporter:
             "details": self.details,
             "history": self.history,
         }
+        if self.memory_provider is not None:
+            try:
+                payload["vram_peak_tracking"] = dict(
+                    self.memory_provider()
+                )
+            except Exception as exc:
+                payload["vram_peak_tracking"] = {
+                    "status": "snapshot_failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(
             f".{self.path.name}.{os.getpid()}.tmp"
@@ -425,6 +439,278 @@ def _host_peak_rss_bytes() -> int:
 
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return value if sys.platform == "darwin" else value * 1024
+
+
+class VRAMPeakTracker:
+    """Poll CUDA memory without changing the scientific execution route.
+
+    CUDA ``memGetInfo`` reports device-wide free memory, whereas the CuPy
+    memory-pool counters are process-local. Sampling both makes the ownership
+    distinction explicit and avoids presenting a stage-boundary snapshot as
+    an exact transient peak.
+    """
+
+    def __init__(
+        self,
+        device: str,
+        *,
+        enabled: bool = True,
+        sample_interval_s: float = 0.05,
+        stage_provider: Callable[[], str | None] | None = None,
+    ):
+        if float(sample_interval_s) <= 0.0:
+            raise ValueError("vram_sample_interval_s must be positive")
+        self.device = str(device).lower()
+        self.requested = bool(enabled)
+        self.sample_interval_s = float(sample_interval_s)
+        self.stage_provider = stage_provider
+        self._enabled = self.requested and self.device == "gpu"
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._cupy = None
+        self._device_id: int | None = None
+        self._started_at: float | None = None
+        self._stopped_at: float | None = None
+        self._sample_count = 0
+        self._baseline: dict[str, Any] | None = None
+        self._current: dict[str, Any] | None = None
+        self._peak_device_used_bytes = 0
+        self._minimum_device_free_bytes: int | None = None
+        self._peak_pool_used_bytes = 0
+        self._peak_pool_reserved_bytes = 0
+        self._stage_peaks: dict[str, dict[str, Any]] = {}
+        self._errors: list[dict[str, str]] = []
+
+    def start(self) -> None:
+        """Start polling after GPU warm-up; failure disables monitoring only."""
+
+        if not self._enabled or self._thread is not None:
+            return
+        self._started_at = perf_counter()
+        try:
+            import cupy as cp
+
+            self._cupy = cp
+            self._device_id = int(cp.cuda.Device().id)
+            self._sample_once()
+        except Exception as exc:
+            self._record_error(exc)
+            self._enabled = False
+            return
+        self._thread = threading.Thread(
+            target=self._poll,
+            name="pbc-dcdft-vram-sampler",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> dict[str, Any]:
+        """Stop polling, take one final sample, and return the report."""
+
+        thread = self._thread
+        if thread is not None:
+            self._stop_event.set()
+            thread.join(timeout=max(1.0, 5.0 * self.sample_interval_s))
+            self._thread = None
+            try:
+                self._sample_once()
+            except Exception as exc:
+                self._record_error(exc)
+        if self._started_at is not None and self._stopped_at is None:
+            self._stopped_at = perf_counter()
+        return self.report()
+
+    def progress_snapshot(self) -> dict[str, Any]:
+        """Return a compact lock-safe view suitable for ``progress.json``."""
+
+        with self._lock:
+            current = dict(self._current or {})
+            return {
+                "status": self._status(),
+                "sample_count": self._sample_count,
+                "sample_interval_s": self.sample_interval_s,
+                "current_stage": current.get("stage"),
+                "current_device_used_bytes": current.get(
+                    "gpu_device_used_bytes"
+                ),
+                "peak_observed_device_used_bytes": (
+                    self._peak_device_used_bytes or None
+                ),
+                "peak_observed_cupy_pool_reserved_bytes": (
+                    self._peak_pool_reserved_bytes or None
+                ),
+            }
+
+    def report(self) -> dict[str, Any]:
+        """Return the complete JSON-safe polling high-water report."""
+
+        with self._lock:
+            baseline = dict(self._baseline or {})
+            current = dict(self._current or {})
+            elapsed = None
+            if self._started_at is not None:
+                end = self._stopped_at or perf_counter()
+                elapsed = end - self._started_at
+            baseline_used = baseline.get("gpu_device_used_bytes")
+            peak_delta = None
+            if baseline_used is not None and self._sample_count:
+                peak_delta = max(
+                    0,
+                    self._peak_device_used_bytes - int(baseline_used),
+                )
+            reason = None
+            if not self.requested:
+                reason = "disabled_by_input"
+            elif self.device != "gpu":
+                reason = "cpu_run"
+            elif self._sample_count == 0:
+                reason = "cuda_sampling_unavailable"
+            return {
+                "schema": "pbc_dcdft_vram_peak_v1",
+                "status": self._status(),
+                "enabled": self.requested and self.device == "gpu",
+                "reason": reason,
+                "measurement": (
+                    "periodic_cuda_mem_info_and_cupy_pool_high_water"
+                ),
+                "sample_interval_s": self.sample_interval_s,
+                "sample_count": self._sample_count,
+                "elapsed_s": elapsed,
+                "cuda_device_id": self._device_id,
+                "gpu_total_device_bytes": current.get(
+                    "gpu_total_device_bytes",
+                    baseline.get("gpu_total_device_bytes"),
+                ),
+                "baseline_gpu_device_used_bytes": baseline_used,
+                "minimum_observed_gpu_free_device_bytes": (
+                    self._minimum_device_free_bytes
+                ),
+                "peak_observed_gpu_device_used_bytes": (
+                    self._peak_device_used_bytes or None
+                ),
+                "peak_observed_gpu_device_used_delta_from_baseline_bytes": (
+                    peak_delta
+                ),
+                "peak_observed_cupy_pool_used_bytes": (
+                    self._peak_pool_used_bytes or None
+                ),
+                "peak_observed_cupy_pool_reserved_bytes": (
+                    self._peak_pool_reserved_bytes or None
+                ),
+                "stage_peaks": {
+                    stage: dict(values)
+                    for stage, values in self._stage_peaks.items()
+                },
+                "sampling_errors": list(self._errors),
+                "limitations": [
+                    "device-used bytes include allocations from other processes",
+                    "CuPy pool bytes are process-local but exclude non-CuPy CUDA allocations",
+                    "allocations shorter than the polling interval can be missed",
+                ],
+            }
+
+    def _status(self) -> str:
+        if not self.requested or self.device != "gpu":
+            return "disabled"
+        if self._sample_count == 0:
+            return "unavailable"
+        if self._thread is None and self._stopped_at is not None:
+            return "complete"
+        return "running"
+
+    def _poll(self) -> None:
+        while not self._stop_event.wait(self.sample_interval_s):
+            try:
+                self._sample_once()
+            except Exception as exc:
+                self._record_error(exc)
+
+    def _sample_once(self) -> None:
+        cp = self._cupy
+        if cp is None or self._device_id is None:
+            raise RuntimeError("CUDA sampler has not been initialized")
+        with cp.cuda.Device(self._device_id):
+            free_bytes, total_bytes = cp.cuda.runtime.memGetInfo()
+            pool = cp.get_default_memory_pool()
+            pool_used = int(pool.used_bytes())
+            pool_reserved = int(pool.total_bytes())
+        stage = "unreported"
+        if self.stage_provider is not None:
+            stage = str(self.stage_provider() or stage)
+        elapsed = perf_counter() - (self._started_at or perf_counter())
+        self._record_sample(
+            {
+                "stage": stage,
+                "elapsed_s": elapsed,
+                "gpu_free_device_bytes": int(free_bytes),
+                "gpu_total_device_bytes": int(total_bytes),
+                "gpu_device_used_bytes": int(total_bytes - free_bytes),
+                "cupy_pool_used_bytes": pool_used,
+                "cupy_pool_reserved_bytes": pool_reserved,
+            }
+        )
+
+    def _record_sample(self, sample: Mapping[str, Any]) -> None:
+        value = dict(sample)
+        stage = str(value.get("stage") or "unreported")
+        used = int(value["gpu_device_used_bytes"])
+        free = int(value["gpu_free_device_bytes"])
+        pool_used = int(value["cupy_pool_used_bytes"])
+        pool_reserved = int(value["cupy_pool_reserved_bytes"])
+        with self._lock:
+            if self._baseline is None:
+                self._baseline = value
+            self._current = value
+            self._sample_count += 1
+            self._peak_device_used_bytes = max(
+                self._peak_device_used_bytes, used
+            )
+            self._minimum_device_free_bytes = (
+                free
+                if self._minimum_device_free_bytes is None
+                else min(self._minimum_device_free_bytes, free)
+            )
+            self._peak_pool_used_bytes = max(
+                self._peak_pool_used_bytes, pool_used
+            )
+            self._peak_pool_reserved_bytes = max(
+                self._peak_pool_reserved_bytes, pool_reserved
+            )
+            stage_peak = self._stage_peaks.setdefault(
+                stage,
+                {
+                    "sample_count": 0,
+                    "minimum_observed_gpu_free_device_bytes": free,
+                    "peak_observed_gpu_device_used_bytes": used,
+                    "peak_observed_cupy_pool_used_bytes": pool_used,
+                    "peak_observed_cupy_pool_reserved_bytes": pool_reserved,
+                },
+            )
+            stage_peak["sample_count"] += 1
+            stage_peak["minimum_observed_gpu_free_device_bytes"] = min(
+                stage_peak["minimum_observed_gpu_free_device_bytes"], free
+            )
+            stage_peak["peak_observed_gpu_device_used_bytes"] = max(
+                stage_peak["peak_observed_gpu_device_used_bytes"], used
+            )
+            stage_peak["peak_observed_cupy_pool_used_bytes"] = max(
+                stage_peak["peak_observed_cupy_pool_used_bytes"], pool_used
+            )
+            stage_peak["peak_observed_cupy_pool_reserved_bytes"] = max(
+                stage_peak["peak_observed_cupy_pool_reserved_bytes"],
+                pool_reserved,
+            )
+
+    def _record_error(self, exc: BaseException) -> None:
+        with self._lock:
+            if len(self._errors) < 8:
+                self._errors.append(
+                    {
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
 
 
 def memory_snapshot(device: str, stage: str) -> dict[str, Any]:
@@ -745,6 +1031,7 @@ def run_benchmark(
     output_dir: Path,
     input_base_dir: Path,
     progress: ProgressReporter | None = None,
+    vram_tracker: VRAMPeakTracker | None = None,
 ) -> dict[str, Any]:
     """Run one energy/gradient benchmark and write its numerical arrays."""
 
@@ -755,6 +1042,10 @@ def run_benchmark(
     if bool(config.get("device_warmup", True)):
         warmup_device(device)
     warmup_wall_s = perf_counter() - warmup_start
+    if vram_tracker is not None:
+        vram_tracker.start()
+        if progress is not None:
+            progress.memory_provider = vram_tracker.progress_snapshot
     memory_samples = [memory_snapshot(device, "after_device_warmup")]
     workflow_start = perf_counter()
     setup_start = perf_counter()
@@ -889,6 +1180,10 @@ def run_benchmark(
             "max_cycle": method.max_cycle,
             "num_threads": int(config.get("num_threads", 1)),
             "device_warmup": bool(config.get("device_warmup", True)),
+            "track_vram_peak": bool(config.get("track_vram_peak", True)),
+            "vram_sample_interval_s": float(
+                config.get("vram_sample_interval_s", 0.05)
+            ),
             "z_solver": getattr(gradient_object, "z_solver", None),
             "z_tolerance": getattr(gradient_object, "z_tolerance", None),
             "z_residual_tolerance": getattr(
@@ -953,6 +1248,12 @@ def main() -> int:
             "xc": config.get("xc", "PBE"),
         },
     )
+    vram_tracker = VRAMPeakTracker(
+        str(config.get("device", "cpu")),
+        enabled=bool(config.get("track_vram_peak", True)),
+        sample_interval_s=float(config.get("vram_sample_interval_s", 0.05)),
+        stage_provider=lambda: progress.stage,
+    )
     progress.update("starting", force=True)
     try:
         report = run_benchmark(
@@ -960,10 +1261,14 @@ def main() -> int:
             output_dir,
             input_path.parent,
             progress=progress,
+            vram_tracker=vram_tracker,
         )
+        vram_report = vram_tracker.stop()
+        report.setdefault("memory", {})["vram_peak_tracking"] = vram_report
         write_json(report_path, report)
         progress.complete(report_path=str(report_path))
     except Exception as exc:
+        vram_report = vram_tracker.stop()
         failure = {
             "status": "failed",
             "schema_version": 1,
@@ -971,6 +1276,7 @@ def main() -> int:
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),
+            "memory": {"vram_peak_tracking": vram_report},
         }
         write_json(report_path, failure)
         progress.fail(exc)

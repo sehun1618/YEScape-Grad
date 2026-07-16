@@ -156,6 +156,7 @@ def _summary_row(run_id: str, case_dir: Path, report: Mapping[str, Any]):
     system = report.get("system") or {}
     settings = report.get("numerical_settings") or {}
     memory = report.get("memory") or {}
+    vram = memory.get("vram_peak_tracking") or {}
     return {
         "run_id": run_id,
         "status": report.get("status"),
@@ -182,6 +183,16 @@ def _summary_row(run_id: str, case_dir: Path, report: Mapping[str, Any]):
         "minimum_observed_gpu_free_device_bytes": memory.get(
             "minimum_observed_gpu_free_device_bytes"
         ),
+        "peak_sampled_gpu_device_used_bytes": vram.get(
+            "peak_observed_gpu_device_used_bytes"
+        ),
+        "peak_sampled_gpu_device_used_delta_from_baseline_bytes": vram.get(
+            "peak_observed_gpu_device_used_delta_from_baseline_bytes"
+        ),
+        "peak_sampled_cupy_pool_reserved_bytes": vram.get(
+            "peak_observed_cupy_pool_reserved_bytes"
+        ),
+        "vram_sample_count": vram.get("sample_count"),
         "report_path": str(case_dir / "report.json"),
     }
 

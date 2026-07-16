@@ -42,6 +42,33 @@ conda run -n gpu python run_benchmark_queue.py \
   --only cpu_fftdf
 ```
 
+### RSDF release benchmark
+
+현재 RSDF production 경로의 반복 timing과 선택 FD 검증은 다음 queue로 실행한다.
+
+```bash
+cd pbc/benchmark
+conda run -n gpu python run_benchmark_queue.py \
+  --queue rsdf_r1_release_gate.json \
+  --output-root results/rsdf_user_run
+```
+
+이 queue는 Water8/Gamma/r2SCAN/SZV-GTH 조건에서 GPU RSDF analytic gradient를 독립
+process로 세 번 측정하고, 마지막 job에서 atom 0의 z component만 central FD로
+검증한다. `--output-root`를 생략하면 queue에 고정된 기존 release evidence directory를
+사용하므로 완료된 case는 skip된다. 새 측정에는 위 예시처럼 별도 output root를 지정한다.
+
+```bash
+conda run -n gpu python run_benchmark_queue.py \
+  --queue rsdf_r1_release_gate.json \
+  --output-root results/my_rsdf_benchmark
+```
+
+다른 구조를 사용하려면 queue를 복사해 `atom_file`, `lattice_vectors`, `basis`,
+`pseudo`, `auxbasis`, `ke_cutoff_ha`, `kmesh`, `xc`를 바꾼다. 핵심 route 선택은
+`"device": "gpu"`, `"df_backend": "rsdf"`이다. CPU/GPU를 함께 비교하려면 한
+job에 `"devices": ["cpu", "gpu"]`를 사용한다.
+
 ## 2. Queue 형식
 
 `defaults`는 모든 job에 공통으로 적용되고, 각 `jobs` 항목은 필요한 값만
@@ -63,6 +90,8 @@ conda run -n gpu python run_benchmark_queue.py \
     "kmesh": [1, 1, 1],
     "xc": "PBE",
     "num_threads": 64,
+    "track_vram_peak": true,
+    "vram_sample_interval_s": 0.05,
     "run_fd": false
   },
   "jobs": [
@@ -237,6 +266,31 @@ GPU 외부 wall time은 각 구간 전후에 CUDA stream synchronization을 수�
 Host는 process `ru_maxrss`, GPU는 free/total device bytes와 CuPy pool used/reserved bytes를
 기록한다. 이는 exact asynchronous kernel peak가 아니라 **observed high-water**이므로,
 짧은 transient allocation 분석에는 Nsight/CUDA profiler가 별도로 필요하다.
+
+GPU benchmark는 추가로 계산 동안 기본 0.05초마다 VRAM을 sampling한다. Queue에서
+
+```json
+"track_vram_peak": true,
+"vram_sample_interval_s": 0.05
+```
+
+를 설정할 수 있으며, GPU에서는 tracking이 default로 켜져 있다. `report.json`의
+`memory.vram_peak_tracking`에는 다음 값이 저장된다.
+
+- `peak_observed_gpu_device_used_bytes`: `total - free`로 관측한 device-wide VRAM high-water
+- `peak_observed_gpu_device_used_delta_from_baseline_bytes`: warm-up 직후 시작점 대비 증가량
+- `peak_observed_cupy_pool_used_bytes`와 `...reserved_bytes`: 현재 benchmark process의 CuPy pool high-water
+- `stage_peaks`: SCF, target energy, Z-vector, one-electron/DF response, FD 등 progress stage별 high-water
+- `sample_count`, `sample_interval_s`, `sampling_errors`: sampling 품질과 상태
+
+`progress.json`에도 현재/peak VRAM이 갱신되며 `show_progress.py`는
+`vram=current/peak GiB`를 표시한다. `summary.csv`에는 sampled device peak, baseline 증가량,
+CuPy reserved peak와 sample 수가 별도 column으로 들어간다.
+
+이 polling 값은 stage-boundary sample보다 순간 peak를 훨씬 잘 포착하지만 CUDA allocation이
+sampling interval보다 짧으면 놓칠 수 있다. 또한 device-used 값에는 같은 GPU를 사용하는
+다른 process의 allocation도 포함된다. 따라서 재현 가능한 측정에서는 해당 GPU를 단독으로
+사용하고, kernel 단위의 정확한 peak가 필요할 때는 Nsight Systems/Compute를 사용한다.
 
 ## 5. Single case 실행
 

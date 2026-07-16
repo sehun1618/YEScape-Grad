@@ -50,6 +50,19 @@ def _eta(payload: Mapping[str, Any]) -> str:
     return f" eta={_duration(remaining)}"
 
 
+def _vram(payload: Mapping[str, Any]) -> str:
+    tracking = payload.get("vram_peak_tracking") or {}
+    peak = tracking.get("peak_observed_device_used_bytes")
+    if peak is None:
+        return ""
+    current = tracking.get("current_device_used_bytes")
+    peak_gib = float(peak) / 1024.0**3
+    if current is None:
+        return f" vram_peak={peak_gib:.2f} GiB"
+    current_gib = float(current) / 1024.0**3
+    return f" vram={current_gib:.2f}/{peak_gib:.2f} GiB"
+
+
 def format_progress(path: Path, payload: Mapping[str, Any]) -> str:
     """Format one compact status line without requiring external tools."""
 
@@ -71,7 +84,7 @@ def format_progress(path: Path, payload: Mapping[str, Any]) -> str:
         f"{_counter(payload)}{_percentage(payload)}"
         f" elapsed={_duration(payload.get('elapsed_s'))}"
         f" stage={_duration(payload.get('stage_elapsed_s'))}"
-        f"{_eta(payload)}{matrix_text}"
+        f"{_eta(payload)}{matrix_text}{_vram(payload)}"
     )
 
 
