@@ -61,6 +61,32 @@ class CDERIFactorization:
         value = solved.reshape(solved.shape[0], int(nao), int(nao))
         return cls(factor=factor, value=value, nao=int(nao))
 
+    @classmethod
+    def from_value_and_metric(cls, value, metric, *, nao: int):
+        """Factor ``M`` while retaining an authoritative central CDERI.
+
+        Production response contractions already receive the provider-owned
+        ``C`` tensor.  Reconstructing the much larger three-center source
+        ``B`` merely to solve ``C=L^-1 B`` again is unnecessary.  This
+        constructor validates ``C``, factors the matching metric, and reuses
+        the supplied value without changing the response algebra.
+        """
+
+        nao = int(nao)
+        metric_array = _square_metric(metric)
+        value_array = cp.asarray(value)
+        expected = (metric_array.shape[0], nao, nao)
+        if value_array.ndim != 3 or value_array.shape != expected:
+            raise ValueError(
+                f"CDERI value must have shape {expected}, got "
+                f"{value_array.shape}"
+            )
+        dtype = cp.result_type(metric_array.dtype, value_array.dtype)
+        metric_array = metric_array.astype(dtype, copy=False)
+        value_array = value_array.astype(dtype, copy=False)
+        factor = cp.linalg.cholesky(metric_array)
+        return cls(factor=factor, value=value_array, nao=nao)
+
     def astype(self, dtype):
         """Return this factorization in a solve-safe common dtype."""
 

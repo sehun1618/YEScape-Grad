@@ -22,6 +22,7 @@ class SourceContractionResult:
     setup_seconds: float
     short_range_seconds: float
     reciprocal_seconds: float
+    reciprocal_memory: dict[str, object] | None = None
 
     @property
     def total_seconds(self) -> float:
@@ -76,13 +77,19 @@ def contract_gamma_sources_profiled(optimizer, source_adjoints):
         pair_addresses,
     )
     events[2].record()
+    reciprocal_memory = {}
     reciprocal = source_reciprocal.contract_gamma_batch(
         optimizer,
         sources,
+        diagnostics=reciprocal_memory,
     )
     events[3].record()
     events[3].synchronize()
-    return _source_result(short_range + reciprocal, events)
+    return _source_result(
+        short_range + reciprocal,
+        events,
+        reciprocal_memory=reciprocal_memory,
+    )
 
 
 def contract_kpoint_sources(optimizer, kpts, source_adjoint_groups):
@@ -127,22 +134,28 @@ def contract_kpoint_sources_profiled(
         pair_addresses,
     )
     events[2].record()
+    reciprocal_memory = {}
     reciprocal = source_reciprocal.contract_kpoint_batch(
         optimizer,
         ordered,
         momentum,
         points,
+        diagnostics=reciprocal_memory,
     )
     events[3].record()
     events[3].synchronize()
-    return _source_result(short_range + reciprocal, events)
+    return _source_result(
+        short_range + reciprocal,
+        events,
+        reciprocal_memory=reciprocal_memory,
+    )
 
 
 def _phase_events():
     return tuple(cp.cuda.Event() for _unused in range(4))
 
 
-def _source_result(values, events):
+def _source_result(values, events, *, reciprocal_memory=None):
     elapsed = [
         cp.cuda.get_elapsed_time(first, second) / 1000.0
         for first, second in zip(events, events[1:])
@@ -152,6 +165,7 @@ def _source_result(values, events):
         setup_seconds=elapsed[0],
         short_range_seconds=elapsed[1],
         reciprocal_seconds=elapsed[2],
+        reciprocal_memory=reciprocal_memory,
     )
 
 

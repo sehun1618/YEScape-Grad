@@ -71,11 +71,14 @@ class DCRestrictedBase(lib.StreamObject):
         )
         return self
 
-    def rs_density_fit(self, auxbasis=None):
-        """Select project-local GPU RSDF and return ``self``."""
+    def rs_density_fit(self, auxbasis=None, *, central_setup="reference"):
+        """Select GPU RSDF with explicit central-factor ownership."""
 
         self.with_df = df.RSDF(
-            self.cell, kpts=self.kpts, auxbasis=auxbasis
+            self.cell,
+            kpts=self.kpts,
+            auxbasis=auxbasis,
+            central_setup=central_setup,
         )
         return self
 

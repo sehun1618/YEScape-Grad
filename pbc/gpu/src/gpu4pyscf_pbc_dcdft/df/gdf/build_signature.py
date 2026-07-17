@@ -54,7 +54,7 @@ def make_gdf_build_signature(provider) -> GDFBuildSignature:
         mesh=tuple(int(value) for value in np.asarray(mesh).reshape(3)),
         omega=float(cell.omega),
         auxbasis=_digest(provider.auxbasis),
-        setup_mode=str(provider.setup_mode),
+        setup_mode=_setup_mode(provider),
         linear_dep_threshold=float(provider.linear_dep_threshold),
         exp_to_discard=(
             None if exp_to_discard is None else float(exp_to_discard)
@@ -66,6 +66,14 @@ def make_gdf_build_signature(provider) -> GDFBuildSignature:
 def _digest(value: Any) -> str:
     payload = repr(_freeze(value)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _setup_mode(provider) -> str:
+    """Include backend-specific central ownership in the cache key."""
+
+    mode = str(provider.setup_mode)
+    central = getattr(provider, "central_setup", None)
+    return mode if central is None else f"{mode}:{central}"
 
 
 def _freeze(value: Any):

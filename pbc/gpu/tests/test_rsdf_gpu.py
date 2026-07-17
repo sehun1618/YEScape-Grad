@@ -11,7 +11,10 @@ import numpy as np
 from pyscf.pbc import gto
 from pyscf_pbc_dcdft import df as cpu_df
 from pyscf_pbc_dcdft import dft as cpu_dft
-from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
+from pyscf_pbc_dcdft.df.gdf.storage import (
+    canonical_pairs,
+    load_cderi_storage,
+)
 from pyscf_pbc_dcdft.df.rsdf.parameters import parameters_from_provider
 from pyscf_pbc_dcdft.df.rsdf.metric import rsdf_metric_derivatives
 from pyscf_pbc_dcdft.df.rsdf.source import (
@@ -23,12 +26,18 @@ from gpu4pyscf_pbc_dcdft import dft as gpu_dft
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     component_stream as rsdf_stream_module,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf.central_exact import (
+    _source_builder_memory_plan,
+)
+from gpu4pyscf_pbc_dcdft.df.rsdf import rsdf as rsdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     source_reciprocal as source_reciprocal_module,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf import pp_value as pp_value_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     build_rsdf_contracted_response,
     build_rsdf_response_tensors,
+    build_exact_cderi,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
     build_pair_source_adjoints,
@@ -74,7 +83,20 @@ def _cell():
     ).build()
 
 
-def _method(cell, kmesh, *, device):
+def _water_cell():
+    return gto.Cell(
+        atom="O 0 0 0; H 0 1.4 0; H 0 -1.4 0",
+        a=np.eye(3) * 8.0,
+        unit="Bohr",
+        basis="gth-szv",
+        pseudo="gth-hf",
+        ke_cutoff=15.0,
+        precision=1.0e-9,
+        verbose=0,
+    ).build()
+
+
+def _method(cell, kmesh, *, device, central_setup=None):
     kpts = cell.make_kpts(kmesh, wrap_around=True)
     dft_module = gpu_dft if device == "gpu" else cpu_dft
     df_module = gpu_df if device == "gpu" else cpu_df
@@ -82,9 +104,13 @@ def _method(cell, kmesh, *, device):
         method = dft_module.DCRKS(cell, xc="PBE")
     else:
         method = dft_module.DCKRKS(cell, kpts=kpts, xc="PBE")
-    method.with_df = df_module.RSDF(
-        cell, kpts=kpts, auxbasis="gth-szv"
-    )
+    provider_kwargs = {
+        "kpts": kpts,
+        "auxbasis": "gth-szv",
+    }
+    if device == "gpu" and central_setup is not None:
+        provider_kwargs["central_setup"] = central_setup
+    method.with_df = df_module.RSDF(cell, **provider_kwargs)
     method.conv_tol = 1.0e-11
     method.conv_tol_grad = 1.0e-9
     method.kernel()
@@ -92,6 +118,174 @@ def _method(cell, kmesh, *, device):
 
 
 class RSDFGPUParityTest(unittest.TestCase):
+    def test_exact_central_source_builder_memory_is_bounded(self):
+        reported, plan = _source_builder_memory_plan(
+            100 * 1024**3,
+            source_mesh=(25, 25, 25),
+            naux=384,
+        )
+
+        self.assertEqual(reported, 512 * 1024**2)
+        self.assertEqual(plan["reported_free_device_bytes"], reported)
+        self.assertLess(
+            plan["estimated_full_auxiliary_grid_cache_bytes"],
+            reported,
+        )
+
+    def test_exact_gpu_source_provider_avoids_host_cderi(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            central_setup="exact_gpu_source",
+        )
+
+        provider.build(j_only=False)
+
+        self.assertIsNone(provider.cpu_witness._cderi)
+        self.assertEqual(provider.central_setup, "exact_gpu_source")
+        self.assertEqual(
+            provider.capability()["central_build_metadata"]["source_owner"],
+            "GPU4PySCF CUDA three-center builder",
+        )
+
+    def test_exact_central_gamma_matches_cpu_storage(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        witness = cpu_df.RSDF(cell, kpts=kpts, auxbasis="gth-szv")
+        witness.build(j_only=False)
+        parameters = parameters_from_provider(witness)
+        reference = load_cderi_storage(witness).blocks
+
+        result = build_exact_cderi(
+            cell,
+            witness.auxcell,
+            kpts,
+            parameters,
+        )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(result.blocks[(0, 0)]),
+            reference[(0, 0)],
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        self.assertIsNone(result.negative_blocks)
+        self.assertEqual(result.metadata["pair_count"], 1)
+        self.assertEqual(
+            result.metadata["short_range_metric_owner"],
+            "PySCF screened two-center primitive",
+        )
+
+    def test_exact_central_kpoint_matches_cpu_storage(self):
+        cell = _cell()
+        kpts = cell.make_kpts((2, 1, 1), wrap_around=True)
+        witness = cpu_df.RSDF(cell, kpts=kpts, auxbasis="gth-szv")
+        witness.build(j_only=False)
+        parameters = parameters_from_provider(witness)
+        reference = load_cderi_storage(witness).blocks
+
+        result = build_exact_cderi(
+            cell,
+            witness.auxcell,
+            kpts,
+            parameters,
+        )
+
+        for pair in canonical_pairs(len(kpts)):
+            np.testing.assert_allclose(
+                cp.asnumpy(result.blocks[pair]),
+                reference[pair],
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+        self.assertEqual(result.metadata["pair_count"], 3)
+
+    def test_exact_central_handles_heterogeneous_auxiliary_basis(self):
+        cell = _water_cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        witness = cpu_df.RSDF(cell, kpts=kpts, auxbasis="gth-szv")
+        witness.build(j_only=False)
+        parameters = parameters_from_provider(witness)
+        reference = load_cderi_storage(witness).blocks[(0, 0)]
+
+        result = build_exact_cderi(
+            cell,
+            witness.auxcell,
+            kpts,
+            parameters,
+        )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(result.blocks[(0, 0)]),
+            reference,
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+
+    def test_pseudopotential_grid_plan_caps_large_device_block(self):
+        with mock.patch.object(
+            pp_value_module,
+            "get_avail_mem",
+            return_value=100 * 1024**3,
+        ):
+            plan = pp_value_module._plan_grid_blocks(
+                100_000,
+                nao_pairs=73_920,
+            )
+
+        self.assertLessEqual(plan.initial_block_size, 4096)
+        self.assertLessEqual(
+            plan.initial_block_size * plan.bytes_per_grid,
+            plan.budget_bytes,
+        )
+
+    def test_reference_pseudopotential_value_is_cached_and_reset(self):
+        method = _method(_cell(), (1, 1, 1), device="gpu")
+        provider = method.with_df
+        provider._clear_pp_cache()
+        with mock.patch.object(
+            rsdf_provider_module,
+            "build_pp_value",
+            wraps=rsdf_provider_module.build_pp_value,
+        ) as get_pp:
+            first = provider.get_pp()
+            reference = first.copy()
+            first += 1.0
+            second = provider.get_pp()
+
+        np.testing.assert_allclose(
+            cp.asnumpy(second),
+            cp.asnumpy(reference),
+            atol=0.0,
+            rtol=0.0,
+        )
+        self.assertEqual(get_pp.call_count, 1)
+        self.assertEqual(provider._dc_pp_cache_hits, 1)
+        self.assertEqual(provider._dc_pp_cache_misses, 1)
+        provider.reset()
+        self.assertEqual(provider._dc_pp_cache, {})
+        self.assertEqual(provider._dc_pp_cache_hits, 0)
+        self.assertEqual(provider._dc_pp_cache_misses, 0)
+
+    def test_gpu_pseudopotential_value_matches_cpu_witness(self):
+        for kmesh in ((1, 1, 1), (2, 1, 1)):
+            method = _method(_cell(), kmesh, device="gpu")
+            provider = method.with_df
+            kpts = np.asarray(provider.kpts)
+            cpu_value = provider.cpu_witness.get_pp(kpts)
+            provider._clear_pp_cache()
+            gpu_value = provider.get_pp(kpts)
+
+            np.testing.assert_allclose(
+                cp.asnumpy(gpu_value),
+                np.asarray(cpu_value),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+
     def test_source_reciprocal_rebatch_is_transactional(self):
         calls = []
         plan = SimpleNamespace(
@@ -152,6 +346,21 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertEqual(execution.final_block_size, 1)
         np.testing.assert_allclose(cp.asnumpy(ao_derivative), 3.0)
         np.testing.assert_allclose(cp.asnumpy(auxiliary_partial), 3.0)
+
+    def test_source_reciprocal_plan_caps_large_device_block(self):
+        with mock.patch.object(
+            source_reciprocal_module,
+            "get_avail_mem",
+            return_value=100 * 1024**3,
+        ):
+            plan = source_reciprocal_module._memory_plan(
+                15_625,
+                nao=384,
+                naux=384,
+            )
+
+        self.assertLessEqual(plan.initial_block_size, 4096)
+        self.assertEqual(plan.memory_fraction, 0.25)
 
     def test_kpoint_source_contractions_match_cpu_primitives(self):
         method = _method(_cell(), (2, 1, 1), device="gpu")
@@ -661,6 +870,15 @@ class RSDFGPUParityTest(unittest.TestCase):
             native_metric_derivatives=True,
             observable_mode="fused",
         )
+        production = build_rsdf_contracted_response(
+            method.with_df,
+            reference,
+            response,
+            native_source_derivatives=True,
+            native_metric_derivatives=True,
+            observable_mode="fused",
+            validate_central_source=False,
+        )
         self.assertLess(
             float(
                 cp.max(
@@ -777,6 +995,19 @@ class RSDFGPUParityTest(unittest.TestCase):
             "native_source_native_metric_fused_adjoint",
         )
         self.assertEqual(fused.profile.metadata()["observable_count"], 1)
+        np.testing.assert_allclose(
+            cp.asnumpy(production.coupled_target_j_bilinear),
+            cp.asnumpy(fused.coupled_target_j_bilinear),
+            atol=1.0e-10,
+            rtol=0.0,
+        )
+        self.assertIsNone(production.value_parity_max_abs)
+        self.assertEqual(production.profile.host_source_value_seconds, 0.0)
+        self.assertFalse(production.profile.central_source_validation)
+        self.assertNotIn(
+            "RSDF three-center source value",
+            production.profile.metadata()["host_owned_operations"],
+        )
 
     def test_component_oom_retries_without_double_commit(self):
         source = np.zeros((4, 1))
@@ -893,6 +1124,18 @@ class RSDFGPUParityTest(unittest.TestCase):
     def test_kpoint_energy_gradient_parity(self):
         self._assert_parity((2, 1, 1))
 
+    def test_exact_gpu_source_gamma_energy_gradient_parity(self):
+        self._assert_parity(
+            (1, 1, 1),
+            central_setup="exact_gpu_source",
+        )
+
+    def test_exact_gpu_source_kpoint_energy_gradient_parity(self):
+        self._assert_parity(
+            (2, 1, 1),
+            central_setup="exact_gpu_source",
+        )
+
     def test_cpu_to_gpu_and_back_preserves_backend(self):
         cell = _cell()
         kpts = cell.make_kpts((2, 1, 1), wrap_around=True)
@@ -904,10 +1147,15 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertEqual(gpu.with_df.backend_name, "rsdf")
         self.assertEqual(gpu.to_cpu().with_df.backend_name, "rsdf")
 
-    def _assert_parity(self, kmesh):
+    def _assert_parity(self, kmesh, *, central_setup=None):
         cell = _cell()
         cpu = _method(cell, kmesh, device="cpu")
-        gpu = _method(cell, kmesh, device="gpu")
+        gpu = _method(
+            cell,
+            kmesh,
+            device="gpu",
+            central_setup=central_setup,
+        )
         cpu_gradient = cpu.nuc_grad_method().kernel()
         gpu_gradient_object = gpu.nuc_grad_method()
         gpu_gradient = gpu_gradient_object.kernel()
@@ -915,10 +1163,16 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertLess(np.max(np.abs(cpu_gradient - gpu_gradient)), 1.0e-7)
         metadata = gpu_gradient_object.result.metadata()
         capability = gpu.with_df.capability()
+        if central_setup is not None:
+            self.assertEqual(capability["central_setup"], central_setup)
+            self.assertEqual(
+                metadata["rsdf_central_setup"],
+                central_setup,
+            )
         self.assertEqual(metadata["backend"], "rsdf")
         self.assertFalse(metadata["silent_cpu_fallback"])
         self.assertTrue(metadata["native_one_electron"])
-        self.assertLess(metadata["cderi_value_parity_max_abs"], 1.0e-7)
+        self.assertIsNone(metadata["cderi_value_parity_max_abs"])
         profile = metadata["df_response_profile"]
         nkpts = metadata["nkpts"]
         self.assertEqual(
@@ -935,6 +1189,11 @@ class RSDFGPUParityTest(unittest.TestCase):
         )
         self.assertEqual(profile["observable_mode"], "fused")
         self.assertEqual(profile["observable_count"], 1)
+        self.assertFalse(profile["central_source_validation"])
+        self.assertEqual(profile["host_source_value_seconds"], 0.0)
+        self.assertIsNotNone(
+            profile["device_native_source_reciprocal_memory"]
+        )
         self.assertEqual(
             metadata["gradient_partition"],
             "explicit_response_coupled",

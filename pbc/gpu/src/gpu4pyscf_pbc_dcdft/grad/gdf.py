@@ -75,6 +75,7 @@ class GDFGradientResult:
     nuclear: np.ndarray
     z_vector: ZVectorResult
     gdf_setup_mode: str
+    rsdf_central_setup: str | None
     cderi_value_parity_max_abs: float | None
     omega: float | None
     metric_omega: float | None
@@ -102,6 +103,10 @@ class GDFGradientResult:
 
         label = self.backend.upper()
         native = self.gdf_setup_mode == "native"
+        exact_rsdf_central = (
+            self.backend == "rsdf"
+            and self.rsdf_central_setup == "exact_gpu_source"
+        )
         native_one_electron = self.native_one_electron
         host_boundaries = [
             "PySCF Cell/AuxCell and integral-optimizer metadata",
@@ -117,7 +122,9 @@ class GDFGradientResult:
             )
         elif self.backend == "rsdf" and self.df_response_profile is not None:
             host_boundaries.append(
-                "RSDF central 2-center/3-center integral and CDERI setup"
+                "RSDF parameter resolution and screened two-center metric value"
+                if exact_rsdf_central
+                else "RSDF central 2-center/3-center integral and CDERI setup"
             )
             host_boundaries.extend(
                 self.df_response_profile.get("host_owned_operations", ())
@@ -184,6 +191,7 @@ class GDFGradientResult:
             "backend": self.backend,
             "device": "gpu",
             "gdf_setup_mode": self.gdf_setup_mode,
+            "rsdf_central_setup": self.rsdf_central_setup,
             "gdf_bilinear_mode": self.gdf_bilinear_mode,
             "gdf_reciprocal_memory": self.gdf_reciprocal_memory,
             "df_response_profile": self.df_response_profile,
@@ -457,6 +465,7 @@ def _gaussian_df_gpu_gradient(
                 context.density,
                 transition_density,
                 observable_mode="fused",
+                validate_central_source=False,
             )
             fused_target_j_z_bilinear = (
                 cderi_response.coupled_target_j_bilinear
@@ -776,6 +785,11 @@ def _gaussian_df_gpu_gradient(
         nuclear=nuclear,
         z_vector=z_result,
         gdf_setup_mode=("native" if native_gdf else "reference"),
+        rsdf_central_setup=getattr(
+            dc_mf.with_df,
+            "central_setup",
+            None,
+        ),
         cderi_value_parity_max_abs=parity,
         omega=omega,
         metric_omega=metric_omega,

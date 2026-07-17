@@ -88,7 +88,9 @@ def plan_central_pair_factorization(
     # Conservative complex128 ownership: source upload/cast/solve plus metric
     # upload/cast/factor/workspace. The retained provider CDERI is already
     # reflected in ``free_bytes`` and is not counted a second time.
-    source_bytes = int(primitives.source.size) * 16
+    source_bytes = (
+        0 if primitives.source is None else int(primitives.source.size) * 16
+    )
     metric_bytes = int(primitives.metric.size) * 16
     working_bytes = 3 * source_bytes + 5 * metric_bytes
     if working_bytes > budget:

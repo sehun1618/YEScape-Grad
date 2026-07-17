@@ -61,6 +61,24 @@ CDERI setup과 production PySCF convention을 보존하는 exact screened short-
 `ip1/ip2`는 명시적인 host boundary다. 성분별 진단은 low-level builder의
 `observable_mode="resolved"`를 사용한다.
 
+RSDF central factor의 기본값은 정확도와 현재 end-to-end 성능이 고정된
+`central_setup="reference"`다. Host memory가 제약일 때는 다음 opt-in을 사용할 수
+있다.
+
+```python
+mf.rs_density_fit(
+    "gth-szv",
+    central_setup="exact_gpu_source",
+)
+```
+
+이 mode는 PySCF로 source/metric parameter와 작은 screened two-center metric만
+계산하고, 큰 three-center source, reciprocal metric 및 Cholesky/CDERI 변환을 GPU에서
+수행한다. Gamma와 sampled-k에서 CPU central factor와 `1e-9` 이내로 검증되며,
+upstream source-builder working memory는 bounded batch policy를 사용한다. 현재
+Water64/SZ evidence에서는 host RSS는 감소했지만 5% end-to-end promotion gate를
+통과하지 않았으므로 자동 선택하지 않는다.
+
 Public examples:
 
 ```text

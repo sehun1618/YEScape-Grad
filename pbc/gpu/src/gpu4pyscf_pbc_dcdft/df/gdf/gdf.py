@@ -76,6 +76,10 @@ class GDF(GPU4PySCFGDF):
         self._cpu_witness = None
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
+        self._dc_pp_cache = {}
+        self._dc_pp_cache_hits = 0
+        self._dc_pp_cache_misses = 0
+        self._dc_pp_build_metadata = None
 
     @property
     def uses_native_integrals(self):
@@ -113,6 +117,7 @@ class GDF(GPU4PySCFGDF):
         self._cpu_witness = None
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
+        self._clear_pp_cache()
         return self
 
     def build(self, j_only=None, kpts_band=None):
@@ -120,6 +125,12 @@ class GDF(GPU4PySCFGDF):
 
         if kpts_band is not None:
             raise NotImplementedError("GDF kpts_band is not supported")
+        current_signature = make_gdf_build_signature(self)
+        if (
+            self._dc_build_signature is not None
+            and self._dc_build_signature != current_signature
+        ):
+            self._clear_pp_cache()
         if self.uses_native_integrals:
             GPU4PySCFGDF.build(
                 self,
@@ -183,7 +194,23 @@ class GDF(GPU4PySCFGDF):
         if self.uses_native_integrals:
             return GPU4PySCFGDF.get_pp(self, kpts)
         self._ensure_built()
-        return cp.asarray(self._cpu_witness.get_pp(kpts))
+        return self._cached_pp_value(
+            kpts,
+            lambda: self._cpu_witness.get_pp(kpts),
+        )
+
+    def _cached_pp_value(self, kpts, builder):
+        """Cache an immutable PP value while returning mutable copies."""
+
+        key = _kpoint_cache_key(kpts)
+        cached = self._dc_pp_cache.get(key)
+        if cached is not None:
+            self._dc_pp_cache_hits += 1
+            return cached.copy()
+        value = cp.asarray(builder())
+        self._dc_pp_cache[key] = value
+        self._dc_pp_cache_misses += 1
+        return value.copy()
 
     def get_nuc(self, kpts=None):
         """Return CPU-identical all-electron nuclear matrices on the device."""
@@ -351,6 +378,15 @@ class GDF(GPU4PySCFGDF):
         self._cpu_witness = None
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
+        self._clear_pp_cache()
+
+    def _clear_pp_cache(self):
+        """Discard geometry-dependent pseudopotential value matrices."""
+
+        self._dc_pp_cache.clear()
+        self._dc_pp_cache_hits = 0
+        self._dc_pp_cache_misses = 0
+        self._dc_pp_build_metadata = None
 
     def _host_boundaries(self):
         boundaries = ["PySCF Cell/AuxCell metadata"]
@@ -457,6 +493,13 @@ def _validate_kpoints(provider_kpts, kpts, kpts_band):
             band, reference, atol=1.0e-10, rtol=0.0
         ):
             raise NotImplementedError("GDF kpts_band is not supported")
+
+
+def _kpoint_cache_key(kpts):
+    if kpts is None:
+        return ("default",)
+    points = np.asarray(kpts, dtype=float)
+    return ("explicit", points.shape, points.tobytes())
 
 
 def _infer_kmesh(cell, kpts):

@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Compute sampled-k-point DC-PBE energy and analytic gradient with GPU RSDF.
+"""Compute sampled-k-point DC-PBE with exact GPU-source central RSDF.
 
-PySCF generates the central periodic RSDF factors and exact screened
-short-range metric ``ip1/ip2`` at explicit host boundaries.  Native source
-derivatives, reciprocal metric/Cholesky adjoints, fused target-J/Z-bilinear
-response, AX/Z-vector, and final electronic assembly are owned by the GPU
-package.  No CPU DC-DFT energy or gradient routine is called.
+PySCF resolves independent RSDF parameters and the small exact screened
+two-center metric. GPU4PySCF generates the large three-center source and the
+reciprocal metric correction; CuPy owns factorization and all repeated
+contractions. Native source derivatives, reciprocal metric/Cholesky adjoints,
+fused target-J/Z-bilinear response, AX/Z-vector, and final electronic assembly
+remain on the GPU. No CPU DC-DFT energy or gradient routine is called.
 
 Coordinates and lattice vectors are in Bohr.  The gradient is ``dE/dR`` in
 Hartree/Bohr; force would have the opposite sign.
@@ -29,7 +30,8 @@ cell = gto.Cell(
 kpts = cell.make_kpts([2, 1, 1])
 
 mf = dft.DCKRKS(cell, kpts=kpts, xc="PBE").rs_density_fit(
-    auxbasis="gth-szv"
+    auxbasis="gth-szv",
+    central_setup="exact_gpu_source",
 )
 mf.conv_tol = 1.0e-11
 mf.conv_tol_grad = 1.0e-9

@@ -396,11 +396,15 @@ def build_method(config: Mapping[str, Any], cell, device: str, backend: str):
             )
         method.with_df = df.GDF(cell, **gdf_kwargs)
     else:
-        method.with_df = df.RSDF(
-            cell,
-            kpts=provider_kpts,
-            auxbasis=config.get("auxbasis"),
-        )
+        rsdf_kwargs = {
+            "kpts": provider_kpts,
+            "auxbasis": config.get("auxbasis"),
+        }
+        if device == "gpu":
+            rsdf_kwargs["central_setup"] = config.get(
+                "rsdf_central_setup", "reference"
+            )
+        method.with_df = df.RSDF(cell, **rsdf_kwargs)
     method.conv_tol = float(config.get("conv_tol", 1.0e-10))
     conv_tol_grad = config.get("conv_tol_grad", 1.0e-8)
     method.conv_tol_grad = None if conv_tol_grad is None else float(conv_tol_grad)
@@ -1167,6 +1171,11 @@ def run_benchmark(
             "gdf_setup_mode": (
                 config.get("gdf_setup_mode", "native")
                 if device == "gpu" and backend == "gdf"
+                else None
+            ),
+            "rsdf_central_setup": (
+                config.get("rsdf_central_setup", "reference")
+                if device == "gpu" and backend == "rsdf"
                 else None
             ),
             "kmesh": list(_normalize_kmesh(config)),

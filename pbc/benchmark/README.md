@@ -79,6 +79,22 @@ conda run -n gpu python run_benchmark_queue.py \
 `"device": "gpu"`, `"df_backend": "rsdf"`이다. CPU/GPU를 함께 비교하려면 한
 job에 `"devices": ["cpu", "gpu"]`를 사용한다.
 
+GPU RSDF의 central factor 생성 경로는 `rsdf_central_setup`으로 선택한다.
+
+- `reference` (현재 default): PySCF가 central two-/three-center CDERI를 모두 만들고
+  canonical factor를 GPU로 올린다.
+- `exact_gpu_source`: PySCF는 independent source/metric parameter와 작은 screened
+  two-center metric만 담당한다. 큰 three-center source와 long-range metric,
+  Cholesky/CDERI 변환은 GPU4PySCF/CuPy에서 수행한다.
+
+두 경로는 같은 source/metric omega와 mesh를 사용하며 Gamma 및 sampled-k에서
+CPU CDERI와 `1e-9` 이내 parity를 만족해야 한다. 새 경로를 비교 측정할 때는 다음을
+job 또는 defaults에 추가한다.
+
+```json
+"rsdf_central_setup": "exact_gpu_source"
+```
+
 ## 2. Queue 형식
 
 `defaults`는 모든 job에 공통으로 적용되고, 각 `jobs` 항목은 필요한 값만
@@ -96,6 +112,7 @@ job에 `"devices": ["cpu", "gpu"]`를 사용한다.
     "pseudo": "gth-hf",
     "auxbasis": "gth-szv",
     "gdf_setup_mode": "native",
+    "rsdf_central_setup": "reference",
     "ke_cutoff_ha": 20.0,
     "kmesh": [1, 1, 1],
     "xc": "PBE",

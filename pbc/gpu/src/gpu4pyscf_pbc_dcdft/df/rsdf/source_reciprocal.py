@@ -20,6 +20,10 @@ from ..gdf.reciprocal_memory import (
 )
 
 
+DEFAULT_SOURCE_RECIPROCAL_MEMORY_FRACTION = 0.25
+DEFAULT_SOURCE_RECIPROCAL_MAX_BLOCK_SIZE = 4096
+
+
 @dataclass(frozen=True)
 class _BlockResult:
     ao_derivative: cp.ndarray
@@ -32,7 +36,7 @@ def contract_gamma(optimizer, source):
     return contract_gamma_batch(optimizer, cp.asarray(source)[None])[0]
 
 
-def contract_gamma_batch(optimizer, sources):
+def contract_gamma_batch(optimizer, sources, *, diagnostics=None):
     """Contract several Gamma sources with one Fourier-integral traversal."""
 
     sources = cp.asarray(sources)
@@ -95,7 +99,7 @@ def contract_gamma_batch(optimizer, sources):
             **kernel_inputs,
         )
 
-    _execute_blocks(
+    execution = _execute_blocks(
         len(vectors),
         plan,
         worker,
@@ -103,6 +107,7 @@ def contract_gamma_batch(optimizer, sources):
         auxiliary_partial,
         phase="rsdf_source_reciprocal",
     )
+    _record_diagnostics(diagnostics, "gamma", plan, execution)
     return ao_derivative * 2.0 + _group_auxiliary_batch(
         auxcell,
         auxiliary_partial,
@@ -120,7 +125,14 @@ def contract_kpoint(optimizer, ordered_source, momentum, kpts):
     )[0]
 
 
-def contract_kpoint_batch(optimizer, ordered_sources, momentum, kpts):
+def contract_kpoint_batch(
+    optimizer,
+    ordered_sources,
+    momentum,
+    kpts,
+    *,
+    diagnostics=None,
+):
     """Contract sampled-k sources with one Fourier-integral traversal."""
 
     ordered_sources = cp.asarray(ordered_sources)
@@ -185,7 +197,7 @@ def contract_kpoint_batch(optimizer, ordered_sources, momentum, kpts):
             **kernel_inputs,
         )
 
-    _execute_blocks(
+    execution = _execute_blocks(
         len(vectors),
         plan,
         worker,
@@ -193,6 +205,7 @@ def contract_kpoint_batch(optimizer, ordered_sources, momentum, kpts):
         auxiliary_partial,
         phase="rsdf_kpoint_source_reciprocal",
     )
+    _record_diagnostics(diagnostics, "sampled_k", plan, execution)
     return ao_derivative + _group_auxiliary_batch(
         auxcell,
         auxiliary_partial,
@@ -227,13 +240,6 @@ def _gamma_block(
     pair_complex = pair_real.view(np.complex128)
     auxiliary_g = ft_ao.ft_ao(auxcell, block_vectors).T
     auxiliary_weighted = auxiliary_g.conj() * coulomb[start:stop]
-    ao_source = cp.einsum(
-        "spqr,rG->spqG",
-        sources,
-        auxiliary_weighted,
-        optimize=True,
-    )
-    ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
     auxiliary_source = cp.einsum(
         "spqr,pqG->srG",
         sources,
@@ -247,6 +253,14 @@ def _gamma_block(
         block_vectors,
         auxiliary_source,
     )
+    del pair_complex, pair_real, auxiliary_source
+    ao_source = cp.einsum(
+        "spqr,rG->spqG",
+        sources,
+        auxiliary_weighted,
+        optimize=True,
+    )
+    ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
     ao_derivative = cp.stack(
         [
             _run_fourier_kernel(
@@ -315,6 +329,7 @@ def _kpoint_block(
             shifted[q_index, start:stop],
             auxiliary_source,
         )
+        del pair_g, auxiliary_source
         ao_source = _kpoint_ao_source(
             pair_sources,
             auxiliary_g[:, q_index],
@@ -464,6 +479,33 @@ def _memory_plan(ngrids, nao, naux):
         naux,
         1,
         free_device_bytes=int(get_avail_mem(exclude_memory_pool=True)),
+        memory_fraction=DEFAULT_SOURCE_RECIPROCAL_MEMORY_FRACTION,
+        max_block_size=DEFAULT_SOURCE_RECIPROCAL_MAX_BLOCK_SIZE,
+    )
+
+
+def _record_diagnostics(diagnostics, route, plan, execution):
+    if diagnostics is None:
+        return
+    diagnostics.clear()
+    diagnostics.update(
+        {
+            "route": str(route),
+            "policy": {
+                "memory_fraction": (
+                    DEFAULT_SOURCE_RECIPROCAL_MEMORY_FRACTION
+                ),
+                "max_block_size": (
+                    DEFAULT_SOURCE_RECIPROCAL_MAX_BLOCK_SIZE
+                ),
+                "lifetime_shortening": (
+                    "AO-pair and source-contracted grid tensors do not "
+                    "overlap"
+                ),
+            },
+            "plan": plan.metadata(),
+            "execution": execution.metadata(),
+        }
     )
 
 

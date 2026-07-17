@@ -56,6 +56,8 @@ class RSDFResponseProfile:
     device_native_source_setup_seconds: float = 0.0
     device_native_source_short_range_seconds: float = 0.0
     device_native_source_reciprocal_seconds: float = 0.0
+    central_source_validation: bool = True
+    device_native_source_reciprocal_memory: Mapping[str, object] | None = None
 
     def metadata(self) -> dict[str, object]:
         """Return JSON-safe profile fields with explicit ownership labels."""
@@ -66,10 +68,13 @@ class RSDFResponseProfile:
         observable_mode = (
             "fused" if "fused_adjoint" in self.response_mode else "resolved"
         )
-        device_operations = [
-            "host-to-device primitive transfer",
-            "metric Cholesky and central CDERI solve",
-        ]
+        device_operations = ["host-to-device primitive transfer"]
+        if self.central_source_validation:
+            device_operations.append("metric Cholesky and central CDERI solve")
+        else:
+            device_operations.append(
+                "provider CDERI reuse and metric Cholesky factorization"
+            )
         if component_stream:
             device_operations.extend(
                 [
@@ -148,9 +153,21 @@ class RSDFResponseProfile:
             "device_native_source_reciprocal_seconds": (
                 self.device_native_source_reciprocal_seconds
             ),
+            "central_source_validation": self.central_source_validation,
+            "central_value_ownership": (
+                "independently reconstructed from source and metric"
+                if self.central_source_validation
+                else "provider-authoritative CDERI with reconstructed metric"
+            ),
+            "device_native_source_reciprocal_memory": (
+                None
+                if self.device_native_source_reciprocal_memory is None
+                else dict(self.device_native_source_reciprocal_memory)
+            ),
             "host_owned_operations": _host_owned_operations(
                 native_source=native_source,
                 native_metric=native_metric,
+                central_source_validation=self.central_source_validation,
             ),
             "device_owned_operations": device_operations,
         }
@@ -160,7 +177,7 @@ class RSDFResponseProfile:
 class _HostPairPrimitives:
     """Host arrays and exclusive primitive timings for one k-point pair."""
 
-    source: np.ndarray
+    source: np.ndarray | None
     metric: np.ndarray
     source_derivatives: np.ndarray | None
     metric_derivatives: np.ndarray | None
@@ -319,21 +336,28 @@ def _host_pair_primitives(
     pair,
     parameters,
     *,
+    include_source_value=True,
     include_source_derivatives=True,
     include_metric_derivatives=True,
 ):
     ki, kj = pair
     first = kpts[ki]
     second = kpts[kj]
-    start = perf_counter()
-    source = rsdf_source(
-        cell,
-        auxcell,
-        parameters,
-        kpti=first,
-        kptj=second,
-    )
-    source_value_seconds = perf_counter() - start
+    if include_source_value:
+        start = perf_counter()
+        source = np.asarray(
+            rsdf_source(
+                cell,
+                auxcell,
+                parameters,
+                kpti=first,
+                kptj=second,
+            )
+        )
+        source_value_seconds = perf_counter() - start
+    else:
+        source = None
+        source_value_seconds = 0.0
 
     start = perf_counter()
     metric = rsdf_metric(
@@ -373,7 +397,7 @@ def _host_pair_primitives(
         metric_derivatives = None
         metric_derivative_seconds = 0.0
     return _HostPairPrimitives(
-        source=np.asarray(source),
+        source=source,
         metric=np.asarray(metric),
         source_derivatives=source_derivatives,
         metric_derivatives=metric_derivatives,
@@ -384,11 +408,16 @@ def _host_pair_primitives(
     )
 
 
-def _host_owned_operations(*, native_source, native_metric):
-    operations = [
-        "RSDF three-center source value",
-        "RSDF two-center metric value",
-    ]
+def _host_owned_operations(
+    *,
+    native_source,
+    native_metric,
+    central_source_validation=True,
+):
+    operations = []
+    if central_source_validation:
+        operations.append("RSDF three-center source value")
+    operations.append("RSDF two-center metric value")
     if not native_source:
         operations.append("RSDF three-center source nuclear derivatives")
     if native_metric:

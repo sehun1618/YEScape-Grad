@@ -44,7 +44,7 @@ from .source_native import (
 class _ContractedPairExecution:
     """Measurements from one streamed canonical-pair response."""
 
-    parity: float
+    parity: float | None
     central_seconds: float
     derivative_seconds: float
     peak_explicit_bytes: int
@@ -64,7 +64,7 @@ class RSDFContractedResponse:
     restricted_hf_bilinear: cp.ndarray | None
     coupled_target_j_bilinear: cp.ndarray | None
     parameters: RSDFParameters
-    value_parity_max_abs: float
+    value_parity_max_abs: float | None
     host_primitive_seconds: float
     device_response_seconds: float
     profile: RSDFResponseProfile
@@ -86,6 +86,7 @@ def build_rsdf_contracted_response(
     native_source_derivatives: bool | str = "auto",
     native_metric_derivatives: bool | str = "auto",
     observable_mode: str = "resolved",
+    validate_central_source: bool = True,
 ) -> RSDFContractedResponse:
     """Stream primitive derivatives into the two required force scalars.
 
@@ -134,7 +135,9 @@ def build_rsdf_contracted_response(
     initial_component_batch_size = None
     final_component_batch_size = None
     component_rebatch_count = 0
-    parity = 0.0
+    validate_central_source = bool(validate_central_source)
+    parity = 0.0 if validate_central_source else None
+    reciprocal_memory = None
     pairs = canonical_pairs(len(kpts))
     source_optimizer = _native_source_optimizer(
         provider,
@@ -174,6 +177,7 @@ def build_rsdf_contracted_response(
             kpts,
             pair,
             parameters,
+            include_source_value=validate_central_source,
             include_source_derivatives=(source_optimizer is None),
             include_metric_derivatives=(metric_context is None),
         )
@@ -197,7 +201,8 @@ def build_rsdf_contracted_response(
             minimum_reserve_bytes=component_minimum_reserve_bytes,
             max_component_batch_size=max_component_batch_size,
         )
-        parity = max(parity, pair_response.parity)
+        if pair_response.parity is not None:
+            parity = max(float(parity), pair_response.parity)
         device_central_seconds += pair_response.central_seconds
         device_derivative_seconds += pair_response.derivative_seconds
         device_native_metric_seconds += pair_response.native_metric_seconds
@@ -245,6 +250,7 @@ def build_rsdf_contracted_response(
         device_native_source_reciprocal_seconds = (
             source_result.reciprocal_seconds
         )
+        reciprocal_memory = source_result.reciprocal_memory
         device_derivative_seconds += device_native_source_seconds
 
     host_seconds = sum(
@@ -258,7 +264,7 @@ def build_rsdf_contracted_response(
     )
     cp.cuda.Stream.null.synchronize()
     device_seconds = device_central_seconds + device_derivative_seconds
-    if parity > float(value_tolerance):
+    if parity is not None and parity > float(value_tolerance):
         raise RuntimeError(
             "GPU RSDF source/metric convention does not reproduce CPU "
             f"storage: max gap {parity:.3e} > {float(value_tolerance):.3e}"
@@ -288,6 +294,8 @@ def build_rsdf_contracted_response(
         device_native_source_reciprocal_seconds=(
             device_native_source_reciprocal_seconds
         ),
+        central_source_validation=validate_central_source,
+        device_native_source_reciprocal_memory=reciprocal_memory,
     )
     return RSDFContractedResponse(
         target_coulomb=target_coulomb,
@@ -434,6 +442,8 @@ def _contracted_profile(
     device_native_source_setup_seconds,
     device_native_source_short_range_seconds,
     device_native_source_reciprocal_seconds,
+    central_source_validation,
+    device_native_source_reciprocal_memory,
 ):
     device_adjoint_seconds = max(
         0.0,
@@ -482,6 +492,10 @@ def _contracted_profile(
         device_native_source_reciprocal_seconds=(
             device_native_source_reciprocal_seconds
         ),
+        central_source_validation=central_source_validation,
+        device_native_source_reciprocal_memory=(
+            device_native_source_reciprocal_memory
+        ),
     )
 
 
@@ -526,11 +540,18 @@ def _contract_device_pair(
     central_end = cp.cuda.Event()
     central_start.record()
     try:
-        factorization = CDERIFactorization.build(
-            cp.asarray(primitives.source),
-            cp.asarray(primitives.metric),
-            nao=nao,
-        )
+        if primitives.source is None:
+            factorization = CDERIFactorization.from_value_and_metric(
+                central[pair],
+                cp.asarray(primitives.metric),
+                nao=nao,
+            )
+        else:
+            factorization = CDERIFactorization.build(
+                cp.asarray(primitives.source),
+                cp.asarray(primitives.metric),
+                nao=nao,
+            )
     except Exception as error:
         if not _is_gpu_out_of_memory(error):
             raise
@@ -545,8 +566,12 @@ def _contract_device_pair(
     central_seconds = cp.cuda.get_elapsed_time(
         central_start, central_end
     ) / 1000.0
-    parity = float(
-        cp.max(cp.abs(factorization.value - central[pair])).get()
+    parity = (
+        None
+        if primitives.source is None
+        else float(
+            cp.max(cp.abs(factorization.value - central[pair])).get()
+        )
     )
 
     derivative_start = cp.cuda.Event()

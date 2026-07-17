@@ -353,3 +353,31 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
   metric/Cholesky adjoint, fused target-J/Z-bilinear, exact host short-range metric 및
   central-CDERI boundary를 구분해 보고한다. Silent CPU fallback과 누락 block은 없다.
 - N0--N5 전체 goal이 완료됐다. Water64는 실행하지 않았다.
+
+## 14. 2026-07-17 conditional central follow-up
+
+- 이후 사용자가 SZV-GTH에 한해 Water64 실행을 명시적으로 허용했다. 이 section의
+  Water64 한정 scaling evidence는 위의 기존 non-goal을 변경하지 않으며 DZ 계산은
+  실행하지 않았다.
+- GPU4PySCF의 unmodified central builder는 PySCF CDERI와 최대 약
+  $7.2\times10^{-6}$ 차이가 났다. 분해 결과 GPU three-center source는
+  $7.74\times10^{-12}$ 이내로 일치했고, 차이는 GPU screened two-center metric에
+  있었다.
+- `exact_gpu_source` opt-in은 큰 source와 reciprocal metric/Cholesky를 GPU에서,
+  작은 exact screened metric만 PySCF에서 계산한다. Gamma, heterogeneous H2O 및
+  $2\times1\times1$ central/full-gradient gate를 통과했다. CPU parameter witness의
+  `_cderi`는 `None`이다.
+- Upstream source builder가 free VRAM 대부분을 batch로 잡지 않도록 reported working
+  memory를 512 MiB로 제한했다. Water64 HF-stage peak는 첫 exact probe의
+  19.52 GiB에서 10.17 GiB로 감소했다.
+- Water8 3회 median의 analytic total은 2.06%, host RSS는 7.75% 감소했다. Water64
+  host RSS는 10.24% 감소했지만 analytic total은 3.32% 증가하고 전체 sampled VRAM
+  peak도 감소하지 않았다.
+- 따라서 `reference`를 default로 유지하고 `exact_gpu_source`는 host-memory 제약을
+  위한 명시적 opt-in으로 보존한다. 5% end-to-end promotion gate를 통과하지 않은
+  경로를 자동 선택하거나 silent fallback하지 않는다.
+- 최종 회귀 검증은 RSDF GPU 25개, SCAN/r2SCAN MGGA 4개, benchmark lifecycle 12개,
+  CPU/GPU package-boundary 4개 test를 통과했다. Public sampled-k exact-central 예제도
+  완료됐다. R5에서는 Water64 FD를 새로 실행하지 않았으며, Water64 정확성 판단은
+  analytic reference parity이고 FD gate는 동일 response/assembly 경로를 사용하는
+  소형 release system이 담당한다.
