@@ -26,6 +26,9 @@ from gpu4pyscf_pbc_dcdft import dft as gpu_dft
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     component_stream as rsdf_stream_module,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf import (
+    contracted_response as contracted_response_module,
+)
 from gpu4pyscf_pbc_dcdft.df.rsdf.central_exact import (
     _source_builder_memory_plan,
 )
@@ -33,6 +36,7 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import rsdf as rsdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     source_reciprocal as source_reciprocal_module,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf import source_adjoint as source_adjoint_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import source_native as source_native_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import pp_value as pp_value_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
@@ -45,6 +49,8 @@ from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
     build_pair_fused_cderi_adjoint,
     build_pair_source_adjoints,
     contract_source_derivative,
+    plan_fused_adjoint_auxiliary_blocks,
+    push_cderi_adjoint_through_source,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.metric_adjoint import (
     build_pair_metric_adjoints,
@@ -155,6 +161,7 @@ class RSDFGPUParityTest(unittest.TestCase):
             auxiliary_reference,
             auxiliary_response,
         )
+        diagnostics = {}
         fused = build_pair_fused_cderi_adjoint(
             central,
             (0, 0),
@@ -162,6 +169,8 @@ class RSDFGPUParityTest(unittest.TestCase):
             response,
             auxiliary_reference,
             auxiliary_response,
+            max_auxiliary_block=1,
+            memory_diagnostics=diagnostics,
         )
 
         self.assertEqual(fused.dtype, cp.float64)
@@ -171,6 +180,194 @@ class RSDFGPUParityTest(unittest.TestCase):
             atol=1.0e-11,
             rtol=1.0e-11,
         )
+        self.assertEqual(diagnostics["execution"]["block_count"], naux)
+        self.assertEqual(
+            diagnostics["execution"]["completed_auxiliary_count"], naux
+        )
+
+    def test_fused_adjoint_oom_retries_without_partial_commit(self):
+        rng = np.random.default_rng(32)
+        naux, nao = 4, 3
+        central = {(0, 0): cp.asarray(rng.normal(size=(naux, nao, nao)))}
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response = cp.asarray(rng.normal(size=(1, nao, nao)))
+        auxiliary_reference = cp.asarray(rng.normal(size=naux))
+        auxiliary_response = cp.asarray(rng.normal(size=naux))
+        expected = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+        )
+        original = source_adjoint_module._build_fused_adjoint_block
+        failed = False
+
+        def fail_first_large_block(*args, start, stop, **kwargs):
+            nonlocal failed
+            if not failed and stop - start > 1:
+                failed = True
+                raise RuntimeError("cudaErrorMemoryAllocation: out of memory")
+            return original(*args, start=start, stop=stop, **kwargs)
+
+        diagnostics = {}
+        with mock.patch.object(
+            source_adjoint_module,
+            "_build_fused_adjoint_block",
+            side_effect=fail_first_large_block,
+        ):
+            actual = build_pair_fused_cderi_adjoint(
+                central,
+                (0, 0),
+                reference,
+                response,
+                auxiliary_reference,
+                auxiliary_response,
+                memory_fraction=1.0,
+                minimum_reserve_bytes=0,
+                max_auxiliary_block=naux,
+                memory_diagnostics=diagnostics,
+            )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+        execution = diagnostics["execution"]
+        self.assertEqual(execution["rebatch_count"], 1)
+        self.assertEqual(execution["completed_auxiliary_count"], naux)
+        self.assertEqual(execution["final_block_size"], 2)
+
+    def test_blocked_fused_complex_pair_matches_resolved(self):
+        rng = np.random.default_rng(34)
+        nkpts, naux, nao = 2, 4, 3
+
+        def complex_random(shape):
+            return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+        central = {
+            (0, 0): cp.asarray(complex_random((naux, nao, nao))),
+            (0, 1): cp.asarray(complex_random((naux, nao, nao))),
+            (1, 1): cp.asarray(complex_random((naux, nao, nao))),
+        }
+        reference = cp.asarray(complex_random((nkpts, nao, nao)))
+        response = cp.asarray(complex_random((nkpts, nao, nao)))
+        auxiliary_reference = cp.asarray(complex_random((naux,)))
+        auxiliary_response = cp.asarray(complex_random((naux,)))
+
+        target, bilinear = build_pair_cderi_adjoints(
+            central,
+            (0, 1),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+        )
+        fused = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 1),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+        )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(fused),
+            cp.asnumpy(target + bilinear),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+
+    def test_water64_dz_fused_adjoint_plan_is_bounded(self):
+        free = int(21.5 * 1024**3)
+        plan = plan_fused_adjoint_auxiliary_blocks(
+            1472,
+            1472,
+            np.float64,
+            free_device_bytes=free,
+        )
+
+        self.assertLessEqual(plan["initial_block_size"], 32)
+        self.assertGreaterEqual(plan["reserve_bytes"], 2 * 1024**3)
+        self.assertLessEqual(
+            plan["initial_block_size"]
+            * plan["working_bytes_per_auxiliary"],
+            plan["budget_bytes"],
+        )
+
+    def test_inplace_source_reverse_solve_matches_allocating_route(self):
+        rng = np.random.default_rng(35)
+        for dtype in (np.float64, np.complex128):
+            naux, nao = 4, 3
+            factor = np.tril(rng.normal(size=(naux, naux)))
+            factor[np.diag_indices(naux)] += 5.0
+            adjoint = rng.normal(size=(naux, nao, nao))
+            if dtype == np.complex128:
+                factor = factor + 0.1j * np.tril(
+                    rng.normal(size=factor.shape), k=-1
+                )
+                adjoint = adjoint + 1j * rng.normal(size=adjoint.shape)
+            factor = cp.asarray(factor, dtype=dtype)
+            adjoint = cp.asarray(adjoint, dtype=dtype)
+            expected = push_cderi_adjoint_through_source(
+                factor,
+                adjoint,
+            )
+            working = adjoint.copy()
+            actual = push_cderi_adjoint_through_source(
+                factor,
+                working,
+                overwrite=True,
+            )
+
+            self.assertTrue(cp.shares_memory(actual, working))
+            np.testing.assert_allclose(
+                cp.asnumpy(actual),
+                cp.asnumpy(expected),
+                atol=1.0e-11,
+                rtol=1.0e-11,
+            )
+
+    def test_gamma_source_sorting_releases_cderi_under_pressure(self):
+        releases = []
+
+        def release(*, reason):
+            releases.append(reason)
+            return {
+                "released": True,
+                "reason": reason,
+                "released_cderi_bytes": 4096,
+            }
+
+        provider = SimpleNamespace(release_cderi_cache=release)
+        optimizer = SimpleNamespace(
+            cell=SimpleNamespace(nao=4),
+            auxcell=SimpleNamespace(nao=5),
+        )
+        groups = ({(0, 0): cp.zeros((9, 3), dtype=cp.float64)},)
+        with mock.patch.object(
+            contracted_response_module.cp.cuda.runtime,
+            "memGetInfo",
+            return_value=(1, 2),
+        ):
+            metadata = (
+                contracted_response_module._release_gamma_central_if_needed(
+                    provider,
+                    optimizer,
+                    np.zeros((1, 3)),
+                    groups,
+                    minimum_reserve_bytes=0,
+                )
+            )
+
+        self.assertEqual(releases, ["native_gamma_source_sorting"])
+        self.assertTrue(metadata["released"])
 
     def test_single_gamma_source_consumes_owner_without_stack_copy(self):
         class IdentityTransform:
@@ -1127,6 +1324,17 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertIsNone(production.value_parity_max_abs)
         self.assertEqual(production.profile.host_source_value_seconds, 0.0)
         self.assertFalse(production.profile.central_source_validation)
+        fused_memory = production.profile.metadata()[
+            "device_fused_adjoint_memory"
+        ]
+        self.assertEqual(len(fused_memory["pairs"]), 1)
+        self.assertEqual(fused_memory["pairs"][0]["pair"], [0, 0])
+        self.assertEqual(
+            fused_memory["pairs"][0]["execution"][
+                "completed_auxiliary_count"
+            ],
+            int(method.with_df.auxcell.nao_nr()),
+        )
         self.assertNotIn(
             "RSDF three-center source value",
             production.profile.metadata()["host_owned_operations"],

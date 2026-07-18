@@ -373,3 +373,46 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
   다른 provider-owned allocation 때문에 실패하면 다음 단계는 AO-pair reverse solve와
   native source contraction의 진짜 streaming/fusion이며, silent CPU fallback은 사용하지
   않는다.
+
+### 15.1 First Water64 rerun and auxiliary-block repair
+
+- Commit `e2bf2e5`의 첫 사용자 재실행은 이전 `bilinear=zeros_like(target)`를 통과했지만
+  같은 `gdf_response_tensors` 단계에서 다시 실패했다. 새 traceback은 fused output에 두
+  번째 Coulomb outer product를 더하기 위한
+  `cp.multiply(auxiliary[:,None,None], density.T[None])` 전체 temporary였다.
+- 이는 23.764 GiB fused output은 성공적으로 할당됐지만, 남은 free VRAM 21.514 GiB보다
+  큰 23.764 GiB temporary를 추가로 요구했기 때문이다. 따라서 real/fused dtype 수리는
+  유효했지만 전체 auxiliary 축을 한 번에 계산하는 연산이 하나 남아 있었다.
+- Fused adjoint assembly를 auxiliary block 단위로 변경했다. 기본 block 상한은 32이며
+  Water64/DZVP real tensor에서 한 block은 약 0.516 GiB, output/temporary/workspace 세 배
+  보수 추정은 약 1.55 GiB다. Planner는 현재 free VRAM의 20%만 사용하고 최소 2 GiB를
+  남긴다.
+- 각 block은 별도 working array에서 Coulomb과 exchange 네 항을 모두 완성한 뒤 output에
+  commit한다. Allocation failure이면 미완성 block을 버리고 같은 구간을 절반 크기로
+  다시 계산하므로 중복 누적이나 누락이 없다.
+- Forced block-1 Gamma parity, sampled-k complex pair parity, synthetic OOM 4-to-2 retry와
+  21.5 GiB free-memory Water64 planner test가 통과했다. 상태는
+  `candidate v2; post-blocking Water64/DZVP rerun required`다.
+
+### 15.2 Reverse-solve and sorted-source lifetime repair
+
+- Blocked fused output 23.764 GiB를 완성한 뒤 기존
+  `solve_triangular(L.T, adjoint_flat)`은 C-order RHS를 Fortran order로 복사해 같은 크기의
+  source adjoint를 추가로 만들 수 있었다. CuBLAS right-side triangular solve로
+  $A^T L^{-1}$을 C-contiguous fused storage에 직접 덮어쓰도록 변경했다. 반환 source
+  adjoint는 이 storage의 transpose view이며 추가 dense allocation이 아니다.
+- Metric adjoint는 overwrite 전에 먼저 계산한다. 따라서 source와 metric reverse map은
+  같은 fused array를 순서대로 공유하며 수식과 Cholesky gauge는 바뀌지 않는다.
+- Source sorted-basis 변환에는 physical source, Cartesian-AO intermediate와 fully-sorted
+  output이 순서대로 필요하다. 현재 free VRAM으로 두 변환 phase가 들어가지 않을 때만
+  이미 마지막 J/K 사용이 끝난 provider central CDERI cache를 해제한다. Provider는
+  release byte와 이유를 metadata에 기록하며 이후 J/K 요청에서 factors를 재구축한다.
+- Fully-sorted `(naux,nao,nao)` 결과를 `(nao,nao,naux)` C-order로 다시 복사하지 않고
+  strided transpose view로 native SR/LR contraction에 전달한다. Existing kernels는
+  auxiliary slice 또는 einsum에서 필요한 block만 materialize한다.
+- Real/complex in-place solve parity, pressure-triggered cache release와 H2O/DZVP consumed
+  transform이 통과했다. Fused block plan과 central-release decision은
+  `device_fused_adjoint_memory` metadata로 report에 남는다.
+- 상태는 `candidate v3; Water64/DZVP rerun required`다. 현재 실행 중이던 두 번째 RSDF
+  process는 `e2bf2e5`를 이미 import한 뒤 시작됐으므로 v2/v3 patch의 검증으로 사용하지
+  않는다.

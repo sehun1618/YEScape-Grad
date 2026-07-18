@@ -55,6 +55,7 @@ class _ContractedPairExecution:
     component_rebatch_count: int
     native_metric_seconds: float = 0.0
     source_adjoints: tuple[cp.ndarray, ...] | None = None
+    fused_adjoint_memory: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ def build_rsdf_contracted_response(
     validate_central_source = bool(validate_central_source)
     parity = 0.0 if validate_central_source else None
     reciprocal_memory = None
+    fused_adjoint_memory = []
     pairs = canonical_pairs(len(kpts))
     source_optimizer = _native_source_optimizer(
         provider,
@@ -230,9 +232,29 @@ def build_rsdf_contracted_response(
                 strict=True,
             ):
                 group[pair] = adjoint
+        if pair_response.fused_adjoint_memory is not None:
+            fused_adjoint_memory.append(
+                {
+                    "pair": [int(pair[0]), int(pair[1])],
+                    **pair_response.fused_adjoint_memory,
+                }
+            )
         del pair_response
 
+    central_release_memory = None
     if source_optimizer is not None:
+        central_release_memory = _release_gamma_central_if_needed(
+            provider,
+            source_optimizer,
+            kpts,
+            source_adjoint_groups,
+        )
+        if central_release_memory.get("released", False):
+            central = None
+            _release_unused_device_memory()
+            central_release_memory["free_device_bytes_after"] = int(
+                cp.cuda.runtime.memGetInfo()[0]
+            )
         source_result = _contract_native_sources(
             source_optimizer,
             kpts,
@@ -298,6 +320,14 @@ def build_rsdf_contracted_response(
         ),
         central_source_validation=validate_central_source,
         device_native_source_reciprocal_memory=reciprocal_memory,
+        device_fused_adjoint_memory=(
+            {
+                "pairs": fused_adjoint_memory,
+                "central_release": central_release_memory,
+            }
+            if fused_adjoint_memory or central_release_memory is not None
+            else None
+        ),
     )
     return RSDFContractedResponse(
         target_coulomb=target_coulomb,
@@ -446,6 +476,7 @@ def _contracted_profile(
     device_native_source_reciprocal_seconds,
     central_source_validation,
     device_native_source_reciprocal_memory,
+    device_fused_adjoint_memory,
 ):
     device_adjoint_seconds = max(
         0.0,
@@ -498,6 +529,7 @@ def _contracted_profile(
         device_native_source_reciprocal_memory=(
             device_native_source_reciprocal_memory
         ),
+        device_fused_adjoint_memory=device_fused_adjoint_memory,
     )
 
 
@@ -585,17 +617,19 @@ def _contract_device_pair(
     metric_components = _flatten_components(
         primitives.metric_derivatives
     )
-    source_adjoints, metric_adjoints = _build_native_pair_adjoints(
-        central,
-        pair,
-        factorization,
-        reference,
-        response,
-        auxiliary_reference,
-        auxiliary_response,
-        native_source=(source_components is None),
-        native_metric=(metric_context is not None),
-        observable_mode=observable_mode,
+    source_adjoints, metric_adjoints, fused_adjoint_memory = (
+        _build_native_pair_adjoints(
+            central,
+            pair,
+            factorization,
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            native_source=(source_components is None),
+            native_metric=(metric_context is not None),
+            observable_mode=observable_mode,
+        )
     )
     context_bytes = (
         0
@@ -671,6 +705,7 @@ def _contract_device_pair(
         component_rebatch_count=rebatch_count,
         native_metric_seconds=native_metric_seconds,
         source_adjoints=source_adjoints,
+        fused_adjoint_memory=fused_adjoint_memory,
     )
 
 
@@ -694,8 +729,10 @@ def _build_native_pair_adjoints(
     observable_mode,
 ):
     if not native_source and not native_metric:
-        return None, None
+        return None, None, None
+    fused_adjoint_memory = None
     if observable_mode == "fused":
+        fused_adjoint_memory = {}
         cderi_adjoints = (
             build_pair_fused_cderi_adjoint(
                 central,
@@ -704,6 +741,7 @@ def _build_native_pair_adjoints(
                 response,
                 auxiliary_reference,
                 auxiliary_response,
+                memory_diagnostics=fused_adjoint_memory,
             ),
         )
     else:
@@ -715,15 +753,6 @@ def _build_native_pair_adjoints(
             auxiliary_reference,
             auxiliary_response,
         )
-    source_adjoints = None
-    if native_source:
-        source_adjoints = tuple(
-            push_cderi_adjoint_through_source(
-                factorization.factor,
-                adjoint,
-            )
-            for adjoint in cderi_adjoints
-        )
     metric_adjoints = None
     if native_metric:
         metric_adjoints = tuple(
@@ -733,7 +762,76 @@ def _build_native_pair_adjoints(
             )
             for adjoint in cderi_adjoints
         )
-    return source_adjoints, metric_adjoints
+    source_adjoints = None
+    if native_source:
+        source_adjoints = tuple(
+            push_cderi_adjoint_through_source(
+                factorization.factor,
+                adjoint,
+                overwrite=(observable_mode == "fused"),
+            )
+            for adjoint in cderi_adjoints
+        )
+    return source_adjoints, metric_adjoints, fused_adjoint_memory
+
+
+def _release_gamma_central_if_needed(
+    provider,
+    optimizer,
+    kpts,
+    source_adjoint_groups,
+    *,
+    minimum_reserve_bytes=2 * 1024**3,
+):
+    """Evict rebuildable Gamma CDERI only when source sorting cannot fit."""
+
+    points = np.asarray(kpts, dtype=float).reshape(-1, 3)
+    groups = tuple(source_adjoint_groups)
+    if (
+        len(points) != 1
+        or np.linalg.norm(points[0]) > 1.0e-10
+        or len(groups) != 1
+        or not groups[0]
+    ):
+        return {"released": False, "reason": "not_single_fused_gamma"}
+    source = next(iter(groups[0].values()))
+    itemsize = int(source.dtype.itemsize)
+    source_bytes = int(source.nbytes)
+    physical_naux = int(source.shape[1])
+    sorted_nao = int(optimizer.cell.nao)
+    sorted_naux = int(optimizer.auxcell.nao)
+    ao_sorted_bytes = physical_naux * sorted_nao**2 * itemsize
+    fully_sorted_bytes = sorted_naux * sorted_nao**2 * itemsize
+    free_before = int(cp.cuda.runtime.memGetInfo()[0])
+    reserve = int(minimum_reserve_bytes)
+    phase_one_fits = free_before >= ao_sorted_bytes + reserve
+    phase_two_free = free_before - ao_sorted_bytes + source_bytes
+    phase_two_fits = phase_two_free >= fully_sorted_bytes + reserve
+    metadata = {
+        "released": False,
+        "reason": "source_sorting_already_fits",
+        "free_device_bytes_before": free_before,
+        "source_adjoint_bytes": source_bytes,
+        "ao_sorted_intermediate_bytes": int(ao_sorted_bytes),
+        "fully_sorted_source_bytes": int(fully_sorted_bytes),
+        "minimum_reserve_bytes": reserve,
+    }
+    if phase_one_fits and phase_two_fits:
+        return metadata
+    release = getattr(provider, "release_cderi_cache", None)
+    if release is None:
+        metadata["reason"] = "provider_does_not_support_cderi_eviction"
+        return metadata
+    provider_metadata = release(reason="native_gamma_source_sorting")
+    metadata.update(provider_metadata)
+    return metadata
+
+
+def _release_unused_device_memory():
+    cp.get_default_memory_pool().free_all_blocks()
+    pinned = cp.get_default_pinned_memory_pool()
+    if hasattr(pinned, "free_all_blocks"):
+        pinned.free_all_blocks()
 
 
 def _execute_host_component_stream(

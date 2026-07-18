@@ -58,6 +58,7 @@ class RSDFResponseProfile:
     device_native_source_reciprocal_seconds: float = 0.0
     central_source_validation: bool = True
     device_native_source_reciprocal_memory: Mapping[str, object] | None = None
+    device_fused_adjoint_memory: object | None = None
 
     def metadata(self) -> dict[str, object]:
         """Return JSON-safe profile fields with explicit ownership labels."""
@@ -164,6 +165,7 @@ class RSDFResponseProfile:
                 if self.device_native_source_reciprocal_memory is None
                 else dict(self.device_native_source_reciprocal_memory)
             ),
+            "device_fused_adjoint_memory": self.device_fused_adjoint_memory,
             "host_owned_operations": _host_owned_operations(
                 native_source=native_source,
                 native_metric=native_metric,

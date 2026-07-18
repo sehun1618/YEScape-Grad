@@ -329,7 +329,9 @@ def _sorted_source_owned(optimizer, owner):
     del source
     fully_sorted = optimizer.auxcell.apply_C_dot(ao_sorted, axis=0)
     del ao_sorted
-    return cp.asarray(fully_sorted.transpose(1, 2, 0), order="C")
+    # Native contractions accept this strided view.  Keeping it as a view
+    # avoids a second fully-sorted dense allocation solely for C ordering.
+    return fully_sorted.transpose(1, 2, 0)
 
 
 def _kpoint_inputs(optimizer, kpts, source_adjoints):

@@ -78,8 +78,14 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   the production observable directly as one real 23.8 GiB adjoint, performs
   source/metric reverse contractions from that shared array, and consumes
   obsolete basis-transform generations instead of stacking them.  Small
-  Gamma, sampled-k, DZVP-transform, and full-response parity gates pass; the
-  Water64/DZVP rerun is still required before declaring this case complete.
+  Gamma, sampled-k, DZVP-transform, and full-response parity gates pass.  The
+  first rerun then exposed one remaining full-size outer-product temporary;
+  fused assembly now uses transactional auxiliary blocks capped at 32 and
+  halves the current block after an allocation failure.  The reverse
+  triangular solve overwrites that fused storage, and memory pressure may
+  evict the now-consumed central CDERI before source-basis sorting; the next
+  J/K request rebuilds it.  A post-v3 Water64/DZVP rerun is still required
+  before declaring this case complete.
 - `multigrid_j_xc` changes the numerical representation of target Coulomb J;
   it is an explicit experimental route, not a drop-in accuracy-equivalent
   replacement for finite-auxiliary GDF/RSDF J.

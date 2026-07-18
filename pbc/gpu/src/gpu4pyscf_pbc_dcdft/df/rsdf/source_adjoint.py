@@ -17,12 +17,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import cupy as cp
+import numpy as np
+from cupy_backends.cuda.libs import cublas
 from cupyx.scipy.linalg import solve_triangular
 
 from ..gdf.jk_derivative import (
     auxiliary_density_contraction,
     pair_block,
 )
+
+
+DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION = 0.20
+DEFAULT_FUSED_ADJOINT_RESERVE_BYTES = 2 * 1024**3
+DEFAULT_FUSED_ADJOINT_MAX_AUX_BLOCK = 32
 
 
 @dataclass(frozen=True)
@@ -191,6 +198,11 @@ def build_pair_fused_cderi_adjoint(
     response,
     auxiliary_reference,
     auxiliary_response,
+    *,
+    memory_fraction=DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION,
+    minimum_reserve_bytes=DEFAULT_FUSED_ADJOINT_RESERVE_BYTES,
+    max_auxiliary_block=DEFAULT_FUSED_ADJOINT_MAX_AUX_BLOCK,
+    memory_diagnostics=None,
 ):
     """Build the production target-J plus HF-response adjoint in one array.
 
@@ -212,79 +224,240 @@ def build_pair_fused_cderi_adjoint(
         auxiliary_reference,
         auxiliary_response,
     )
-    fused = cp.zeros(central.shape, dtype=dtype)
+    fused = cp.empty(central.shape, dtype=dtype)
     normalization = float(len(reference) ** 2)
+    plan = plan_fused_adjoint_auxiliary_blocks(
+        central.shape[0],
+        central.shape[1],
+        dtype,
+        memory_fraction=memory_fraction,
+        minimum_reserve_bytes=minimum_reserve_bytes,
+        maximum_block_size=max_auxiliary_block,
+    )
+    execution = _execute_fused_adjoint_blocks(
+        fused,
+        cderi,
+        canonical,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        normalization=normalization,
+        initial_block_size=plan["initial_block_size"],
+    )
+    if memory_diagnostics is not None:
+        memory_diagnostics.clear()
+        memory_diagnostics.update({"plan": plan, "execution": execution})
+    return fused
 
+
+def plan_fused_adjoint_auxiliary_blocks(
+    naux,
+    nao,
+    dtype,
+    *,
+    memory_fraction=DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION,
+    minimum_reserve_bytes=DEFAULT_FUSED_ADJOINT_RESERVE_BYTES,
+    maximum_block_size=DEFAULT_FUSED_ADJOINT_MAX_AUX_BLOCK,
+    free_device_bytes=None,
+):
+    """Plan a bounded auxiliary tile for transactional adjoint assembly."""
+
+    naux = int(naux)
+    nao = int(nao)
+    if naux < 1 or nao < 1:
+        raise ValueError("naux and nao must be positive")
+    fraction = float(memory_fraction)
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError("memory_fraction must be in (0, 1]")
+    maximum = max(1, int(maximum_block_size))
+    if free_device_bytes is None:
+        free_device_bytes = int(cp.cuda.runtime.memGetInfo()[0])
+    reserve = min(int(minimum_reserve_bytes), int(free_device_bytes))
+    available = max(0, int(free_device_bytes) - reserve)
+    budget = max(1, int(available * fraction))
+    bytes_per_auxiliary = nao**2 * cp.dtype(dtype).itemsize
+    # One output tile and at most one einsum/outer-product contribution are
+    # live.  A third tile allowance covers contraction-engine workspace.
+    working_bytes_per_auxiliary = 3 * bytes_per_auxiliary
+    block_size = max(1, budget // working_bytes_per_auxiliary)
+    block_size = min(naux, maximum, int(block_size))
+    return {
+        "naux": naux,
+        "nao": nao,
+        "dtype": cp.dtype(dtype).str,
+        "free_device_bytes_at_plan": int(free_device_bytes),
+        "memory_fraction": fraction,
+        "reserve_bytes": reserve,
+        "budget_bytes": budget,
+        "bytes_per_auxiliary": int(bytes_per_auxiliary),
+        "working_bytes_per_auxiliary": int(
+            working_bytes_per_auxiliary
+        ),
+        "initial_block_size": int(block_size),
+        "maximum_block_size": maximum,
+    }
+
+
+def _execute_fused_adjoint_blocks(
+    output,
+    cderi,
+    pair,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    normalization,
+    initial_block_size,
+):
+    """Assemble and commit complete auxiliary tiles with OOM rebatching."""
+
+    naux = int(output.shape[0])
+    start = 0
+    block_size = max(1, min(naux, int(initial_block_size)))
+    minimum_block_size = block_size
+    block_count = 0
+    rebatch_count = 0
+    while start < naux:
+        stop = min(naux, start + block_size)
+        try:
+            block = _build_fused_adjoint_block(
+                cderi,
+                pair,
+                reference,
+                response,
+                auxiliary_reference,
+                auxiliary_response,
+                start=start,
+                stop=stop,
+                normalization=normalization,
+                dtype=output.dtype,
+            )
+        except Exception as error:
+            if not _is_gpu_out_of_memory(error) or stop - start <= 1:
+                raise
+            block_size = max(1, (stop - start) // 2)
+            minimum_block_size = min(minimum_block_size, block_size)
+            rebatch_count += 1
+            _release_unused_gpu_memory()
+            continue
+        output[start:stop] = block
+        del block
+        minimum_block_size = min(minimum_block_size, stop - start)
+        block_count += 1
+        start = stop
+    return {
+        "completed_auxiliary_count": naux,
+        "initial_block_size": int(initial_block_size),
+        "final_block_size": int(block_size),
+        "minimum_block_size": int(minimum_block_size),
+        "block_count": int(block_count),
+        "rebatch_count": int(rebatch_count),
+    }
+
+
+def _build_fused_adjoint_block(
+    cderi,
+    pair,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    start,
+    stop,
+    normalization,
+    dtype,
+):
+    first, second = pair
+    shape = (int(stop - start), reference.shape[-1], reference.shape[-1])
+    block = cp.empty(shape, dtype=dtype)
+    auxiliary_slice = slice(int(start), int(stop))
     if first == second:
         _assign_outer_product(
-            fused,
-            auxiliary_reference,
+            block,
+            auxiliary_reference[auxiliary_slice],
             reference[first],
             scale=1.0 / normalization,
         )
         _accumulate_outer_product(
-            fused,
-            auxiliary_reference,
+            block,
+            auxiliary_reference[auxiliary_slice],
             response[first],
             scale=2.0 / normalization,
         )
         _accumulate_outer_product(
-            fused,
-            auxiliary_response,
+            block,
+            auxiliary_response[auxiliary_slice],
             reference[first],
             scale=2.0 / normalization,
         )
+    else:
+        block.fill(0)
 
     exchange_scale = -0.5 / normalization
     ordered_pairs = (
-        (canonical,)
-        if first == second
-        else (canonical, (second, first))
+        (pair,) if first == second else (pair, (second, first))
     )
     for ki, kj in ordered_pairs:
-        factor_ij = pair_block(cderi, ki, kj)
-        factor_ji = pair_block(cderi, kj, ki)
+        factor_ij = pair_block(cderi, ki, kj)[auxiliary_slice]
+        factor_ji = pair_block(cderi, kj, ki)[auxiliary_slice]
         _accumulate_exchange(
-            fused,
+            block,
             _exchange_adjoint_for_first_factor(
                 reference[ki], response[kj], factor_ji
             ),
-            canonical,
+            pair,
             ki,
             kj,
             scale=exchange_scale,
         )
         _accumulate_exchange(
-            fused,
+            block,
             _exchange_adjoint_for_first_factor(
                 response[ki], reference[kj], factor_ji
             ),
-            canonical,
+            pair,
             ki,
             kj,
             scale=exchange_scale,
         )
         _accumulate_exchange(
-            fused,
+            block,
             _exchange_adjoint_for_second_factor(
                 reference[ki], factor_ij, response[kj]
             ),
-            canonical,
+            pair,
             kj,
             ki,
             scale=exchange_scale,
         )
         _accumulate_exchange(
-            fused,
+            block,
             _exchange_adjoint_for_second_factor(
                 response[ki], factor_ij, reference[kj]
             ),
-            canonical,
+            pair,
             kj,
             ki,
             scale=exchange_scale,
         )
-    return fused
+    return block
+
+
+def _is_gpu_out_of_memory(error):
+    if isinstance(error, cp.cuda.memory.OutOfMemoryError):
+        return True
+    message = str(error).lower()
+    return "out of memory" in message or "memoryallocation" in message
+
+
+def _release_unused_gpu_memory():
+    cp.get_default_memory_pool().free_all_blocks()
+    pinned = cp.get_default_pinned_memory_pool()
+    if hasattr(pinned, "free_all_blocks"):
+        pinned.free_all_blocks()
 
 
 def _adjoint_dtype(
@@ -382,14 +555,31 @@ def _return_to_canonical_orientation(value, canonical, first, second):
     )
 
 
-def push_cderi_adjoint_through_source(factor, cderi_adjoint):
-    """Apply the transpose adjoint of ``C = solve(L, B.T)``."""
+def push_cderi_adjoint_through_source(
+    factor,
+    cderi_adjoint,
+    *,
+    overwrite=False,
+):
+    """Apply the transpose adjoint of ``C = solve(L, B.T)``.
+
+    ``overwrite=True`` uses a right-side cuBLAS triangular solve on the
+    C-contiguous adjoint storage.  Interpreting that storage as a Fortran
+    ``(nao**2,naux)`` matrix gives the required
+    ``A.T @ inv(L)`` directly, so no full-size C-to-Fortran RHS copy is made.
+    """
 
     factor_array = cp.asarray(factor)
     adjoint = cp.asarray(cderi_adjoint)
     dtype = cp.result_type(factor_array.dtype, adjoint.dtype)
     factor_array = factor_array.astype(dtype, copy=False)
     adjoint = adjoint.astype(dtype, copy=False)
+    if overwrite:
+        if not adjoint.flags.c_contiguous:
+            raise ValueError(
+                "in-place source-adjoint solve requires C-contiguous storage"
+            )
+        return _right_triangular_source_solve(factor_array, adjoint)
     flat = adjoint.reshape(adjoint.shape[0], -1)
     solved = solve_triangular(
         factor_array.T,
@@ -398,6 +588,42 @@ def push_cderi_adjoint_through_source(factor, cderi_adjoint):
         check_finite=False,
     )
     return solved.T
+
+
+def _right_triangular_source_solve(factor, adjoint):
+    """Overwrite ``adjoint`` with its source-order reverse solve."""
+
+    factor = cp.ascontiguousarray(factor)
+    naux = int(factor.shape[0])
+    flat = adjoint.reshape(naux, -1)
+    source_pair_count = int(flat.shape[1])
+    dtype = cp.dtype(flat.dtype)
+    alpha = np.array(1, dtype=dtype)
+    kernels = {
+        cp.dtype(cp.float32): cublas.strsm,
+        cp.dtype(cp.float64): cublas.dtrsm,
+        cp.dtype(cp.complex64): cublas.ctrsm,
+        cp.dtype(cp.complex128): cublas.ztrsm,
+    }
+    try:
+        triangular_solve = kernels[dtype]
+    except KeyError as error:
+        raise TypeError(f"unsupported source-adjoint dtype {dtype}") from error
+    triangular_solve(
+        cp.cuda.device.get_cublas_handle(),
+        cublas.CUBLAS_SIDE_RIGHT,
+        cublas.CUBLAS_FILL_MODE_UPPER,
+        cublas.CUBLAS_OP_T,
+        cublas.CUBLAS_DIAG_NON_UNIT,
+        source_pair_count,
+        naux,
+        alpha.ctypes.data,
+        factor.data.ptr,
+        naux,
+        flat.data.ptr,
+        source_pair_count,
+    )
+    return flat.T
 
 
 def _density_array(value):

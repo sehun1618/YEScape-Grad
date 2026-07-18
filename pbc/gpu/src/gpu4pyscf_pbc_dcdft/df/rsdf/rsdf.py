@@ -67,6 +67,7 @@ class RSDF(GDF):
         )
         self.central_setup = _validate_central_setup(central_setup)
         self._dc_central_build_metadata = None
+        self._dc_cderi_eviction_metadata = None
         template = cpu_df.RSDF(
             cell, kpts=np.asarray(self.kpts), auxbasis=auxbasis
         )
@@ -77,10 +78,13 @@ class RSDF(GDF):
 
         super().reset(cell)
         self._dc_central_build_metadata = None
+        self._dc_cderi_eviction_metadata = None
         return self
 
     def build(self, j_only=None, kpts_band=None):
         """Build full exchange-capable factors through the selected route."""
+
+        self._dc_cderi_eviction_metadata = None
 
         if self.central_setup == "reference":
             result = super().build(j_only=j_only, kpts_band=kpts_band)
@@ -123,6 +127,25 @@ class RSDF(GDF):
         self._dc_central_build_metadata = central.metadata
         self._dc_build_signature = make_gdf_build_signature(self)
         return self
+
+    def release_cderi_cache(self, *, reason):
+        """Release rebuildable central factors after their final gradient use."""
+
+        blocks = self._dc_cderi_blocks
+        released_bytes = 0
+        if blocks is not None:
+            released_bytes = sum(
+                int(value.nbytes) for value in blocks.values()
+            )
+        self._dc_cderi_blocks = None
+        self._cderi = None
+        self._dc_cderi_eviction_metadata = {
+            "released": True,
+            "reason": str(reason),
+            "released_cderi_bytes": int(released_bytes),
+            "rebuild_on_next_jk_request": True,
+        }
+        return dict(self._dc_cderi_eviction_metadata)
 
     def _build_cpu_witness(self, points):
         witness = self._configured_cpu_witness(points)
@@ -188,6 +211,7 @@ class RSDF(GDF):
                 else "PySCF RSDF host setup, canonical CuPy storage"
             ),
             "central_build_metadata": self._dc_central_build_metadata,
+            "cderi_eviction_metadata": self._dc_cderi_eviction_metadata,
             "pseudopotential_value_cache": {
                 "builder": "project-local bounded GPU4PySCF RSDF PP",
                 "scope": "same geometry and k-point argument",

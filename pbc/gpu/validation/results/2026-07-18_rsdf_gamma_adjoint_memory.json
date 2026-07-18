@@ -2,8 +2,15 @@
   "schema": "gpu4pyscf_pbc_dcdft_rsdf_gamma_adjoint_memory_v1",
   "date": "2026-07-18",
   "baseline_commit": "6a9717a",
-  "overall_status": "candidate_small_system_pass",
+  "overall_status": "candidate_v3_full_suite_pass",
   "water64_dzvp_rerun_completed": false,
+  "first_rerun": {
+    "source_commit": "e2bf2e5",
+    "status": "failed_after_original_allocation_site",
+    "failed_operation": "full-size outer-product temporary in _accumulate_outer_product",
+    "minimum_observed_free_device_bytes": 21514223616,
+    "interpretation": "the 23.8 GiB real fused output succeeded; a second 23.8 GiB temporary did not fit"
+  },
   "incident": {
     "system": "Water64 DZVP-GTH Gamma",
     "failed_stage": "gdf_response_tensors",
@@ -18,8 +25,15 @@
     "gamma_dtype": "float64 when central CDERI and both densities are exact-real",
     "real_adjoint_gib": 23.763671875,
     "exchange_temporaries": "one dense contribution at a time",
-    "source_reverse_solve": "shared fused adjoint",
     "single_observable_stack_copy": false,
+    "fused_auxiliary_block_cap": 32,
+    "fused_auxiliary_memory_fraction": 0.2,
+    "fused_auxiliary_reserve_bytes": 2147483648,
+    "transactional_oom_rebatch": true,
+    "source_reverse_solve": "in-place cuBLAS right-side triangular solve",
+    "pressure_triggered_cderi_eviction": true,
+    "cderi_rebuild_on_next_jk": true,
+    "final_sorted_transpose_copy": false,
     "basis_transform_lifetime": "consume obsolete physical and intermediate sorted generations",
     "sampled_k_complex_path_changed": false,
     "silent_cpu_fallback": false
@@ -31,18 +45,24 @@
   },
   "validation": {
     "fused_vs_resolved_gamma_algebra": "pass",
+    "blocked_complex_pair_vs_resolved": "pass",
+    "forced_block_one": "pass",
+    "synthetic_oom_retry_without_partial_commit": "pass",
+    "water64_free_memory_planner": "pass",
+    "real_and_complex_inplace_source_solve": "pass",
+    "pressure_triggered_cderi_release": "pass",
     "single_source_ownership_consumption": "pass",
     "h2o_dzvp_sorted_transform_parity": "pass",
     "full_tensor_contracted_response_witness": "pass",
     "exact_gpu_source_gamma_full_gradient": "pass",
     "exact_gpu_source_sampled_k_full_gradient": "pass",
     "full_rsdf_gpu_suite": {
-      "passed": 28,
+      "passed": 33,
       "failed": 0,
-      "wall_time_s": 434.786
+      "wall_time_s": 433.784
     },
     "compileall": "pass",
     "git_diff_check": "pass"
   },
-  "next_gate": "rerun the existing Water64 DZVP RSDF queue on the user-controlled large-system benchmark; if it still fails, implement true AO-pair reverse-solve/source-contraction streaming"
+  "next_gate": "rerun the existing Water64 DZVP RSDF queue after the v3 auxiliary-block, in-place reverse-solve and conditional-CDERI-release patch; if source sorting still fails, implement true auxiliary/source contraction streaming"
 }
