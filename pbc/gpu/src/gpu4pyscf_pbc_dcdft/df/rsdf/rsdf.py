@@ -213,7 +213,7 @@ class RSDF(GDF):
             "central_build_metadata": self._dc_central_build_metadata,
             "cderi_eviction_metadata": self._dc_cderi_eviction_metadata,
             "pseudopotential_value_cache": {
-                "builder": "project-local bounded GPU4PySCF RSDF PP",
+                "builder": "project-local bounded GPU4PySCF PP",
                 "scope": "same geometry and k-point argument",
                 "entries": len(self._dc_pp_cache),
                 "hits": self._dc_pp_cache_hits,

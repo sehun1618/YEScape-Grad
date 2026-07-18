@@ -1,0 +1,39 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_gdf_large_cell_build_memory_v1",
+  "date": "2026-07-18",
+  "system": "414-atom water-ethanol SZV-GTH Gamma",
+  "dimensions": {
+    "natoms": 414,
+    "nao": 828,
+    "source_mesh": [311, 311, 311],
+    "source_mesh_points": 30080231
+  },
+  "original_failure": {
+    "source_commit": "2e0ded4",
+    "reported_stage": "source_hf_scf",
+    "reported_error": "cudaErrorIllegalAddress",
+    "blocking_diagnosis": "GPU4PySCF PP local-part-1 contiguous contraction OOM"
+  },
+  "implementation": {
+    "native_gdf_bounded_pp": true,
+    "native_gdf_cderi_reported_free_cap_bytes": 536870912,
+    "silent_cpu_fallback": false,
+    "source_hf_mesh_changed": false
+  },
+  "post_repair_diagnosis": {
+    "source_hf_scf": "pass",
+    "default_target_multigrid_mesh": [311, 311, 311],
+    "default_target_multigrid_status": "GPU4PySCF illegal-address",
+    "bounded_target_multigrid_mesh": [240, 240, 240],
+    "bounded_target_energy_status": "pass",
+    "bounded_target_energy_ha": -2216.9241450547293,
+    "analytic_gradient_completed": false
+  },
+  "validation": {
+    "native_pp_value_and_cache": "pass",
+    "native_cderi_memory_policy": "pass",
+    "gamma_gdf_energy_parity": "pass",
+    "sampled_k_gdf_energy_parity": "pass"
+  },
+  "next_gate": "run the queue with target mesh 240^3, then establish target-mesh convergence before production use"
+}

@@ -1,4 +1,4 @@
-"""Bounded GPU pseudopotential value assembly for periodic RSDF.
+"""Bounded GPU pseudopotential value assembly for periodic Gaussian DF.
 
 The integral decomposition follows GPU4PySCF's RSDF PP builder.  This module
 changes only the reciprocal-grid execution policy: local-part-1 Fourier
@@ -87,7 +87,7 @@ def build_pp_value(cell, kpts=None) -> PPValueResult:
     return PPValueResult(
         value=value,
         metadata={
-            "builder": "project-local bounded GPU4PySCF RSDF PP",
+            "builder": "project-local bounded GPU4PySCF PP",
             "local_part1": reciprocal_metadata,
             "local_part2_owner": "PySCF host primitive",
             "nonlocal_owner": "GPU4PySCF device kernel",
@@ -169,7 +169,7 @@ def _get_pp_loc_part1(cell, kpts):
         plan.initial_block_size,
         worker,
         accept,
-        phase="rsdf_pp_local_part1",
+        phase="pbc_pp_local_part1",
         is_oom=_is_gpu_out_of_memory,
         block_alignment=DEFAULT_PP_BLOCK_ALIGNMENT,
         on_oom=_release_cached_blocks,
@@ -218,7 +218,7 @@ def _plan_grid_blocks(ngrids, nao_pairs):
     )
     if raw_block < 1:
         raise MemoryError(
-            "insufficient GPU memory for one RSDF PP reciprocal vector: "
+            "insufficient GPU memory for one PBC PP reciprocal vector: "
             f"budget={budget} bytes, required={bytes_per_grid} bytes"
         )
     block_size = int(raw_block)

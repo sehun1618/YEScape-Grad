@@ -27,6 +27,10 @@ from gpu4pyscf_pbc_dcdft import dft as gpu_dft
 from gpu4pyscf_pbc_dcdft.df.gdf.build_signature import (
     make_gdf_build_signature,
 )
+from gpu4pyscf_pbc_dcdft.df.gdf.gdf import (
+    _NATIVE_BUILD_REPORTED_FREE_BYTES,
+    _bounded_native_build_memory,
+)
 from gpu4pyscf_pbc_dcdft.df.gdf.cholesky import CDERIFactorization
 from gpu4pyscf_pbc_dcdft.df.gdf.contracted_derivative import (
     _bounded_sr_derivative_batches,
@@ -64,6 +68,7 @@ from gpu4pyscf_pbc_dcdft.df.gdf.signed_density import (
     contract_kpoint_bilinear_cderi_derivative,
     ewald_restricted_hf_bilinear_derivative,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf import pp_value as pp_value_module
 
 
 def _gpu_available() -> bool:
@@ -169,6 +174,62 @@ class GDFGPUEnergyTest(unittest.TestCase):
         self.assertFalse(provider.uses_native_integrals)
         self.assertIsNotNone(provider.cpu_witness)
         self.assertGreater(len(provider.central_cderi_blocks), 0)
+
+    def test_native_pp_uses_bounded_builder_and_cache(self):
+        cell = _cell()
+        kpts = np.zeros((1, 3))
+        provider = gpu_df.GDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            setup_mode="native",
+        )
+        with patch.object(
+            pp_value_module,
+            "build_pp_value",
+            wraps=pp_value_module.build_pp_value,
+        ) as build_pp:
+            first = provider.get_pp(kpts)
+            reference = first.copy()
+            first += 1.0
+            second = provider.get_pp(kpts)
+
+        np.testing.assert_allclose(
+            cp.asnumpy(second),
+            cp.asnumpy(reference),
+            atol=0.0,
+            rtol=0.0,
+        )
+        self.assertEqual(build_pp.call_count, 1)
+        metadata = provider.capability()["pseudopotential_value_cache"]
+        self.assertEqual(metadata["hits"], 1)
+        self.assertEqual(metadata["misses"], 1)
+        self.assertIn("local_part1", metadata["build_metadata"])
+
+    def test_native_cderi_builder_uses_bounded_memory_report(self):
+        from gpu4pyscf.pbc.df import rsdf_builder
+
+        actual = 100 * 1024**3
+        original = rsdf_builder.get_avail_mem
+        with patch.object(
+            rsdf_builder,
+            "get_avail_mem",
+            return_value=actual,
+        ):
+            patched = rsdf_builder.get_avail_mem
+            with _bounded_native_build_memory() as metadata:
+                reported = rsdf_builder.get_avail_mem(
+                    exclude_memory_pool=True
+                )
+            self.assertIs(rsdf_builder.get_avail_mem, patched)
+
+        self.assertIs(rsdf_builder.get_avail_mem, original)
+        self.assertEqual(reported, _NATIVE_BUILD_REPORTED_FREE_BYTES)
+        self.assertEqual(metadata["actual_free_device_bytes"], actual)
+        self.assertEqual(
+            metadata["reported_free_device_bytes"],
+            _NATIVE_BUILD_REPORTED_FREE_BYTES,
+        )
 
     def test_native_get_j_and_k_e1_contract(self):
         _cpu, gpu = _methods((1, 1, 1))

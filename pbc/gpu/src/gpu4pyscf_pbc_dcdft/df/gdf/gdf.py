@@ -17,6 +17,8 @@ call this provider's CuPy J/K implementation.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from threading import RLock
 from types import MappingProxyType
 
 import cupy as cp
@@ -24,6 +26,7 @@ import numpy as np
 from gpu4pyscf.lib.cupy_helper import get_avail_mem
 from gpu4pyscf.pbc.df import GDF as GPU4PySCFGDF
 from gpu4pyscf.pbc.df import df_jk as gpu_df_jk
+from gpu4pyscf.pbc.df import rsdf_builder
 from gpu4pyscf.pbc.df.fft_jk import _ewald_exxdiv_for_G0
 from pyscf.pbc.lib.kpts_helper import is_zero
 from pyscf_pbc_dcdft import df as cpu_df
@@ -38,6 +41,8 @@ from .build_signature import make_gdf_build_signature
 _EXCHANGE_MEMORY_FRACTION = 0.20
 _EXCHANGE_MINIMUM_RESERVE_BYTES = 2 * 1024**3
 _EXCHANGE_MAX_AUX_BLOCK = 128
+_NATIVE_BUILD_REPORTED_FREE_BYTES = 512 * 1024**2
+_NATIVE_BUILD_ADAPTER_LOCK = RLock()
 
 
 class GDF(GPU4PySCFGDF):
@@ -87,6 +92,7 @@ class GDF(GPU4PySCFGDF):
         self._dc_pp_cache_misses = 0
         self._dc_pp_build_metadata = None
         self._dc_jk_contraction_metadata = None
+        self._dc_native_build_memory_metadata = None
 
     @property
     def uses_native_integrals(self):
@@ -125,6 +131,7 @@ class GDF(GPU4PySCFGDF):
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
         self._dc_jk_contraction_metadata = None
+        self._dc_native_build_memory_metadata = None
         self._clear_pp_cache()
         return self
 
@@ -140,11 +147,13 @@ class GDF(GPU4PySCFGDF):
         ):
             self._clear_pp_cache()
         if self.uses_native_integrals:
-            GPU4PySCFGDF.build(
-                self,
-                j_only=False,
-                kpts_band=None,
-            )
+            with _bounded_native_build_memory() as memory_metadata:
+                self._dc_native_build_memory_metadata = memory_metadata
+                GPU4PySCFGDF.build(
+                    self,
+                    j_only=False,
+                    kpts_band=None,
+                )
             self._dc_build_signature = make_gdf_build_signature(self)
             return self
         points = np.asarray(self.kpts, dtype=float).reshape(-1, 3)
@@ -190,17 +199,27 @@ class GDF(GPU4PySCFGDF):
         return int(first.shape[0])
 
     def get_pp(self, kpts=None):
-        """Return CPU-identical GDF GTH matrices as device arrays.
+        """Return CPU-identical GTH matrices with bounded GPU grid work.
 
-        GPU4PySCF does not yet expose nuclear derivatives for its independent
-        GDF pseudopotential value builder.  Using the witness value here keeps
-        the central Hamiltonian and the project-local analytic H1 in the same
-        representation.  The matrix is transferred once; SCF contractions
-        and diagonalization remain on the GPU.
+        Native GPU4PySCF local-part-1 selects a reciprocal block from almost
+        all currently free VRAM.  CuPy may then require another contiguous
+        contraction operand, making large cells fail after the asynchronous
+        kernel launch.  Reuse the project-local transactional PP builder that
+        RSDF already validates; it changes only the grid execution policy and
+        preserves the same GTH decomposition.
         """
 
         if self.uses_native_integrals:
-            return GPU4PySCFGDF.get_pp(self, kpts)
+            # Import lazily to avoid the RSDF-provider/GDF-provider module
+            # cycle during package initialization.
+            from ..rsdf.pp_value import build_pp_value
+
+            def builder():
+                result = build_pp_value(self.cell, kpts)
+                self._dc_pp_build_metadata = result.metadata
+                return result.value
+
+            return self._cached_pp_value(kpts, builder)
         self._ensure_built()
         return self._cached_pp_value(
             kpts,
@@ -371,6 +390,17 @@ class GDF(GPU4PySCFGDF):
             ),
             "silent_cpu_fallback": False,
             "jk_contraction_metadata": self._dc_jk_contraction_metadata,
+            "native_cderi_build_memory": getattr(
+                self,
+                "_dc_native_build_memory_metadata",
+                None,
+            ),
+            "pseudopotential_value_cache": {
+                "builder": "project-local bounded GPU4PySCF PP",
+                "hits": int(self._dc_pp_cache_hits),
+                "misses": int(self._dc_pp_cache_misses),
+                "build_metadata": self._dc_pp_build_metadata,
+            },
             "host_boundaries": self._host_boundaries(),
         }
 
@@ -398,6 +428,7 @@ class GDF(GPU4PySCFGDF):
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
         self._dc_jk_contraction_metadata = None
+        self._dc_native_build_memory_metadata = None
         self._clear_pp_cache()
 
     def _clear_pp_cache(self):
@@ -674,6 +705,36 @@ def _infer_kmesh(cell, kpts):
     from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 
     return np.asarray(kpts_to_kmesh(cell, kpts), dtype=int)
+
+
+@contextmanager
+def _bounded_native_build_memory():
+    """Bound upstream GDF batch planning without changing its algebra."""
+
+    metadata = {
+        "max_reported_free_device_bytes": int(
+            _NATIVE_BUILD_REPORTED_FREE_BYTES
+        ),
+        "actual_free_device_bytes": None,
+        "reported_free_device_bytes": None,
+    }
+    with _NATIVE_BUILD_ADAPTER_LOCK:
+        original = rsdf_builder.get_avail_mem
+
+        def bounded_available_memory(exclude_memory_pool=True):
+            actual = int(
+                original(exclude_memory_pool=exclude_memory_pool)
+            )
+            reported = min(actual, _NATIVE_BUILD_REPORTED_FREE_BYTES)
+            metadata["actual_free_device_bytes"] = actual
+            metadata["reported_free_device_bytes"] = int(reported)
+            return int(reported)
+
+        rsdf_builder.get_avail_mem = bounded_available_memory
+        try:
+            yield metadata
+        finally:
+            rsdf_builder.get_avail_mem = original
 
 
 def _validate_setup_mode(value):

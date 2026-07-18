@@ -439,3 +439,23 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
 - 상태는 `candidate v4; Water64/DZVP rerun required`다. v4 이후 실패가 source sorted-basis
   transform에서 발생하면 다음 단계는 fully-sorted source materialization을 제거하는
   auxiliary/source contraction streaming이다.
+
+## 16. 2026-07-18 water-ethanol native GDF large-cell build gate
+
+- 414-atom water-ethanol/SZV-GTH Gamma input은 828 AO, source mesh `311^3`이다.
+  원래 report는 source HF SCF의 native GDF setup에서 asynchronous
+  `cudaErrorIllegalAddress`로 실패했다.
+- `CUDA_LAUNCH_BLOCKING=1` 재현은 첫 실제 실패가 upstream GPU4PySCF
+  pseudopotential local-part-1의 `pqG` contiguous contraction allocation OOM임을 보였다.
+  RSDF에서 검증한 transactional reciprocal-grid PP builder를 native GDF에도 연결했다.
+- PP 수리 후 두 번째 동기 재현은 upstream CDERI builder의
+  `j3c += auxG_c.dot(pqG.T)`에서 oversized AO-pair/grid batch illegal-address를 보였다.
+  Builder의 수식과 kernel은 유지하고 batch planner에 보고하는 free memory만 최대
+  512 MiB로 제한했다. 작은 Gamma/sampled-k GDF energy와 cache/policy tests가 통과했다.
+- 두 bounded policy를 함께 적용하면 source HF SCF가 완료됐다. 기본 target r2SCAN
+  multigrid mesh `311^3`은 GPU4PySCF multigrid kernel에서 다시 illegal-address를 냈지만,
+  target mesh만 `240^3`으로 명시한 energy-only 진단은
+  `-2216.9241450547293 Ha`로 완료됐다. Source HF mesh와 `ke_cutoff=500 Ha`는 바뀌지 않았다.
+- Queue의 두 `multigrid_xc` job에는 `target_multigrid_mesh=[240,240,240]`을 명시했다.
+  이 mesh는 실행 가능성 gate이며 최종 production 정확도는 별도의 target-mesh 수렴
+  시험으로 결정한다. 전체 analytic gradient는 아직 실행하지 않았다.

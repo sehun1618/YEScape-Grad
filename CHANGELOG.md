@@ -36,6 +36,11 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   auxiliary-blocked implementation.  The planner reserves 2 GiB, uses a
   bounded fraction of currently free VRAM, and retries the same range with a
   smaller block after a recoverable allocation failure.
+- Reuse the transactional pseudopotential local-part-1 grid builder for
+  native GDF as well as RSDF, and cap the free-memory value reported to the
+  upstream GPU4PySCF CDERI batch planner at 512 MiB.  This prevents large
+  cells from selecting AO-pair/grid batches whose explicit arrays fit alone
+  but whose contiguous contraction operands do not.
 
 ### Target integration and gradients
 
