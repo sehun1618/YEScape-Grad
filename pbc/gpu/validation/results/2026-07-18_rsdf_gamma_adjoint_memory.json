@@ -2,7 +2,7 @@
   "schema": "gpu4pyscf_pbc_dcdft_rsdf_gamma_adjoint_memory_v1",
   "date": "2026-07-18",
   "baseline_commit": "6a9717a",
-  "overall_status": "candidate_v3_full_suite_pass",
+  "overall_status": "candidate_v4_full_suite_pass",
   "water64_dzvp_rerun_completed": false,
   "first_rerun": {
     "source_commit": "e2bf2e5",
@@ -10,6 +10,13 @@
     "failed_operation": "full-size outer-product temporary in _accumulate_outer_product",
     "minimum_observed_free_device_bytes": 21514223616,
     "interpretation": "the 23.8 GiB real fused output succeeded; a second 23.8 GiB temporary did not fit"
+  },
+  "second_rerun": {
+    "source_commit": "090a259",
+    "status": "failed_after_blocked_fused_assembly",
+    "failed_operation": "full-size common-dtype copy in metric adjoint",
+    "minimum_observed_free_device_bytes": 17099718656,
+    "interpretation": "blocked assembly passed; metric reverse propagation attempted to cast a large (naux, nao**2) operand before forming the small metric adjoint"
   },
   "incident": {
     "system": "Water64 DZVP-GTH Gamma",
@@ -22,7 +29,7 @@
   },
   "implementation": {
     "production_cderi_adjoint": "direct fused target-J plus HF-bilinear",
-    "gamma_dtype": "float64 when central CDERI and both densities are exact-real",
+    "gamma_dtype": "float64 when central CDERI is real and both density imaginary maxima are at most 1e-10",
     "real_adjoint_gib": 23.763671875,
     "exchange_temporaries": "one dense contribution at a time",
     "single_observable_stack_copy": false,
@@ -30,6 +37,8 @@
     "fused_auxiliary_memory_fraction": 0.2,
     "fused_auxiliary_reserve_bytes": 2147483648,
     "transactional_oom_rebatch": true,
+    "gamma_roundoff_complex_container_projection": true,
+    "metric_mixed_dtype_full_operand_copy": false,
     "source_reverse_solve": "in-place cuBLAS right-side triangular solve",
     "pressure_triggered_cderi_eviction": true,
     "cderi_rebuild_on_next_jk": true,
@@ -51,18 +60,22 @@
     "water64_free_memory_planner": "pass",
     "real_and_complex_inplace_source_solve": "pass",
     "pressure_triggered_cderi_release": "pass",
+    "gamma_roundoff_real_projection": "pass",
+    "gamma_significant_imaginary_retention": "pass",
+    "strided_real_cderi_complex_metric_adjoint": "pass",
+    "bounded_mixed_precision_metric_product": "pass",
     "single_source_ownership_consumption": "pass",
     "h2o_dzvp_sorted_transform_parity": "pass",
     "full_tensor_contracted_response_witness": "pass",
     "exact_gpu_source_gamma_full_gradient": "pass",
     "exact_gpu_source_sampled_k_full_gradient": "pass",
     "full_rsdf_gpu_suite": {
-      "passed": 33,
+      "passed": 35,
       "failed": 0,
-      "wall_time_s": 433.784
+      "wall_time_s": 433.24
     },
     "compileall": "pass",
     "git_diff_check": "pass"
   },
-  "next_gate": "rerun the existing Water64 DZVP RSDF queue after the v3 auxiliary-block, in-place reverse-solve and conditional-CDERI-release patch; if source sorting still fails, implement true auxiliary/source contraction streaming"
+  "next_gate": "rerun the existing Water64 DZVP RSDF queue after the v4 Gamma-density normalization and mixed-dtype metric-adjoint patch; if source sorting still fails, implement true auxiliary/source contraction streaming"
 }

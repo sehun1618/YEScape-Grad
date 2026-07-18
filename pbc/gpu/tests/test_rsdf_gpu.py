@@ -55,6 +55,7 @@ from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
 from gpu4pyscf_pbc_dcdft.df.rsdf.metric_adjoint import (
     build_pair_metric_adjoints,
     contract_metric_derivative,
+    push_cderi_adjoint_through_metric,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.metric_native import (
     build_metric_contraction_context,
@@ -184,6 +185,66 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertEqual(
             diagnostics["execution"]["completed_auxiliary_count"], naux
         )
+
+    def test_fused_gamma_discards_only_roundoff_imaginary_density(self):
+        rng = np.random.default_rng(36)
+        naux, nao = 3, 4
+        central = {(0, 0): cp.asarray(rng.normal(size=(naux, nao, nao)))}
+        reference_real = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response_real = cp.asarray(rng.normal(size=(1, nao, nao)))
+        reference = reference_real.astype(cp.complex128)
+        response = response_real.astype(cp.complex128)
+        reference += 1.0e-13j
+        response -= 2.0e-13j
+        auxiliary_reference = auxiliary_density_contraction(
+            central, reference_real
+        ).astype(cp.complex128)
+        auxiliary_response = auxiliary_density_contraction(
+            central, response_real
+        ).astype(cp.complex128)
+
+        expected = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference_real,
+            response_real,
+            auxiliary_reference.real,
+            auxiliary_response.real,
+            max_auxiliary_block=1,
+        )
+        actual = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+        )
+
+        self.assertEqual(actual.dtype, cp.float64)
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+
+        complex_response = response_real.astype(cp.complex128)
+        complex_response += 1.0e-6j
+        complex_auxiliary_response = auxiliary_density_contraction(
+            central, complex_response
+        )
+        retained = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            complex_response,
+            auxiliary_reference,
+            complex_auxiliary_response,
+            max_auxiliary_block=1,
+        )
+        self.assertEqual(retained.dtype, cp.complex128)
 
     def test_fused_adjoint_oom_retries_without_partial_commit(self):
         rng = np.random.default_rng(32)
@@ -1059,6 +1120,75 @@ class RSDFGPUParityTest(unittest.TestCase):
                 ),
                 1.0e-10,
             )
+
+    def test_metric_adjoint_avoids_full_mixed_dtype_promotion(self):
+        rng = np.random.default_rng(44)
+        naux, nao = 4, 3
+        factor = np.tril(rng.normal(size=(naux, naux)))
+        factor[np.diag_indices(naux)] += 5.0
+        # Match the auxiliary-fast strided Gamma layout returned by the
+        # GPU4PySCF CDERI unpacker after AO padding is removed.
+        storage = cp.asarray(
+            rng.normal(size=(nao, 1, nao, naux)),
+            dtype=cp.float64,
+        )
+        value = storage.transpose(1, 3, 0, 2)[0]
+        adjoint = cp.asarray(
+            rng.normal(size=value.shape)
+            + 1j * rng.normal(size=value.shape),
+            dtype=cp.complex128,
+        )
+        factorization = CDERIFactorization(
+            factor=cp.asarray(factor),
+            value=value,
+            nao=nao,
+        )
+
+        actual = push_cderi_adjoint_through_metric(
+            factorization,
+            adjoint,
+        )
+        promoted = CDERIFactorization(
+            factor=cp.asarray(factor, dtype=cp.complex128),
+            value=value.astype(cp.complex128),
+            nao=nao,
+        )
+        expected = push_cderi_adjoint_through_metric(
+            promoted,
+            adjoint,
+        )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+
+        mixed_precision = CDERIFactorization(
+            factor=cp.asarray(factor),
+            value=value.astype(cp.float32),
+            nao=nao,
+        )
+        mixed_actual = push_cderi_adjoint_through_metric(
+            mixed_precision,
+            adjoint,
+        )
+        mixed_promoted = CDERIFactorization(
+            factor=cp.asarray(factor, dtype=cp.complex128),
+            value=value.astype(cp.complex128),
+            nao=nao,
+        )
+        mixed_expected = push_cderi_adjoint_through_metric(
+            mixed_promoted,
+            adjoint,
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(mixed_actual),
+            cp.asnumpy(mixed_expected),
+            atol=1.0e-6,
+            rtol=1.0e-6,
+        )
 
     def test_native_metric_contraction_matches_cpu_primitives(self):
         rng = np.random.default_rng(47)

@@ -30,6 +30,7 @@ from ..gdf.jk_derivative import (
 DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION = 0.20
 DEFAULT_FUSED_ADJOINT_RESERVE_BYTES = 2 * 1024**3
 DEFAULT_FUSED_ADJOINT_MAX_AUX_BLOCK = 32
+DEFAULT_GAMMA_IMAGINARY_TOLERANCE = 1.0e-10
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,13 @@ def build_pair_cderi_adjoints(
 
     first, second = pair
     central = pair_block(cderi, first, second)
-    auxiliary_reference, auxiliary_response, dtype = _adjoint_dtype(
+    (
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        dtype,
+    ) = _prepare_adjoint_operands(
         pair,
         central,
         reference,
@@ -216,7 +223,13 @@ def build_pair_fused_cderi_adjoint(
     first, second = (int(pair[0]), int(pair[1]))
     canonical = (first, second)
     central = pair_block(cderi, first, second)
-    auxiliary_reference, auxiliary_response, dtype = _adjoint_dtype(
+    (
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        dtype,
+    ) = _prepare_adjoint_operands(
         canonical,
         central,
         reference,
@@ -460,7 +473,7 @@ def _release_unused_gpu_memory():
         pinned.free_all_blocks()
 
 
-def _adjoint_dtype(
+def _prepare_adjoint_operands(
     pair,
     central,
     reference,
@@ -468,16 +481,30 @@ def _adjoint_dtype(
     auxiliary_reference,
     auxiliary_response,
 ):
-    """Return exact-real Gamma auxiliaries without complex container growth."""
+    """Normalize numerically real Gamma operands before dense assembly.
 
+    Matrix-free response solvers may retain a complex container at Gamma even
+    when its imaginary part is only roundoff.  Letting that container select
+    the fused-adjoint dtype doubles a large-system tensor and later forces the
+    real provider CDERI through another full complex copy.  The central CDERI
+    is authoritative here: when it is real and both densities are real within
+    the same tolerance enforced by the native Gamma source contraction, all
+    operands can be consumed through zero-copy real views.
+    """
+
+    reference = cp.asarray(reference)
+    response = cp.asarray(response)
     auxiliary_reference = cp.asarray(auxiliary_reference)
     auxiliary_response = cp.asarray(auxiliary_response)
-    core_arrays = (central, reference, response)
-    exact_real_gamma = (
+    numerically_real_gamma = (
         int(pair[0]) == int(pair[1])
-        and all(cp.asarray(value).dtype.kind != "c" for value in core_arrays)
+        and cp.asarray(central).dtype.kind != "c"
+        and _is_numerically_real(reference)
+        and _is_numerically_real(response)
     )
-    if exact_real_gamma:
+    if numerically_real_gamma:
+        reference = reference.real
+        response = response.real
         auxiliary_reference = auxiliary_reference.real
         auxiliary_response = auxiliary_response.real
     dtype = cp.result_type(
@@ -487,7 +514,25 @@ def _adjoint_dtype(
         auxiliary_reference.dtype,
         auxiliary_response.dtype,
     )
-    return auxiliary_reference, auxiliary_response, dtype
+    return (
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        dtype,
+    )
+
+
+def _is_numerically_real(
+    value,
+    *,
+    tolerance=DEFAULT_GAMMA_IMAGINARY_TOLERANCE,
+):
+    array = cp.asarray(value)
+    if array.dtype.kind != "c" or array.size == 0:
+        return True
+    maximum = float(cp.max(cp.abs(array.imag)).get())
+    return maximum <= float(tolerance)
 
 
 def _assign_outer_product(output, auxiliary, density, *, scale):

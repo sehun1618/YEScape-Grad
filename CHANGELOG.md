@@ -84,8 +84,13 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   halves the current block after an allocation failure.  The reverse
   triangular solve overwrites that fused storage, and memory pressure may
   evict the now-consumed central CDERI before source-basis sorting; the next
-  J/K request rebuilds it.  A post-v3 Water64/DZVP rerun is still required
-  before declaring this case complete.
+  J/K request rebuilds it.  The second rerun passed blocked assembly and then
+  exposed a full-size common-dtype copy in the metric adjoint.  Gamma density
+  containers whose imaginary part is at most `1e-10` now use zero-copy real
+  views, while genuine mixed real/complex metric products assemble only their
+  small `naux x naux` result from separate real and imaginary contractions.
+  A post-v4 Water64/DZVP rerun is still required before declaring this case
+  complete.
 - `multigrid_j_xc` changes the numerical representation of target Coulomb J;
   it is an explicit experimental route, not a drop-in accuracy-equivalent
   replacement for finite-auxiliary GDF/RSDF J.

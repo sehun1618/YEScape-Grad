@@ -416,3 +416,26 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
 - 상태는 `candidate v3; Water64/DZVP rerun required`다. 현재 실행 중이던 두 번째 RSDF
   process는 `e2bf2e5`를 이미 import한 뒤 시작됐으므로 v2/v3 patch의 검증으로 사용하지
   않는다.
+
+### 15.3 Second Water64 rerun and metric dtype repair
+
+- Commit `090a259`의 Water64/DZVP RSDF 재실행은 blocked fused assembly를 통과했다.
+  다음 실패는 metric reverse map의
+  `value_flat.astype(common_dtype, copy=False)`였으며, 당시 최소 free VRAM은
+  17,099,718,656 bytes(15.925 GiB)였다. 즉 v3가 이전 outer-product OOM을 해결했고,
+  metric adjoint가 large `(naux, nao**2)` operand를 공통 dtype으로 복사하는 다음
+  allocation이 드러났다.
+- Restricted Gamma Z-response는 물리적으로 실수지만 matrix-free solver와 MO gauge 때문에
+  complex container에 roundoff 허수부가 남을 수 있다. Central CDERI가 실수이고 reference
+  및 response density의 최대 허수부가 `1e-10` 이하일 때만 네 density/auxiliary operand를
+  zero-copy real view로 정규화한다. 허수부가 이 gate보다 크면 complex path를 유지한다.
+- Metric adjoint는 이 Gamma 정규화와 독립적으로 mixed dtype large operand를 더 이상
+  통째로 cast하지 않는다. 실수부/허수부 행렬곱을 원래 dtype view에서 수행하고 작은
+  `(naux,naux)` gauge adjoint만 complex로 조립한다. GPU4PySCF Gamma unpacker의
+  auxiliary-fast strided CDERI layout도 그대로 소비한다.
+- Roundoff-only Gamma, significant-imaginary Gamma, strided real-CDERI/complex-adjoint metric
+  parity와 exact GPU-source Gamma/sampled-k 전체 gradient가 통과했다. RSDF GPU 전체 suite는
+  35/35 통과했으며 wall time은 433.240 s였다.
+- 상태는 `candidate v4; Water64/DZVP rerun required`다. v4 이후 실패가 source sorted-basis
+  transform에서 발생하면 다음 단계는 fully-sorted source materialization을 제거하는
+  auxiliary/source contraction streaming이다.

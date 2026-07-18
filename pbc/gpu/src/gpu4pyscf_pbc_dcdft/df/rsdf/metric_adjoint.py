@@ -81,7 +81,10 @@ def build_pair_metric_adjoints(
             factorization,
             bilinear,
         ),
-    )
+)
+
+
+DEFAULT_METRIC_PRODUCT_INNER_BLOCK = 8192
 
 
 def contract_metric_derivative(metric_adjoint, metric_derivative):
@@ -104,21 +107,19 @@ def push_cderi_adjoint_through_metric(factorization, cderi_adjoint):
     value = cp.asarray(factorization.value)
     value_flat = value.reshape(value.shape[0], -1)
     adjoint_flat = cp.asarray(cderi_adjoint).reshape(value.shape[0], -1)
-    dtype = cp.result_type(
-        factor_array.dtype,
-        value_flat.dtype,
-        adjoint_flat.dtype,
-    )
-    factor_array = factor_array.astype(dtype, copy=False)
-    value_flat = value_flat.astype(dtype, copy=False)
-    adjoint_flat = adjoint_flat.astype(dtype, copy=False)
 
     # dC_metric = -Phi(L^-1 dM L^-H) C.  Phi retains the strict lower
     # triangle and half of the real diagonal in the Cholesky gauge.
-    gauge_adjoint = -(adjoint_flat @ value_flat.T)
+    # Build only the small (naux,naux) mixed-dtype result.  Casting either
+    # (naux,nao**2) operand to a common complex dtype can add tens of GiB for
+    # larger Gamma cells even though the final metric adjoint is small.
+    gauge_adjoint = -_plain_mixed_product(adjoint_flat, value_flat.T)
     reduced_adjoint = cp.tril(gauge_adjoint, k=-1)
     reduced_adjoint += cp.diag(0.5 * cp.diag(gauge_adjoint))
 
+    dtype = cp.result_type(factor_array.dtype, reduced_adjoint.dtype)
+    factor_array = factor_array.astype(dtype, copy=False)
+    reduced_adjoint = reduced_adjoint.astype(dtype, copy=False)
     identity = cp.eye(factor_array.shape[0], dtype=dtype)
     inverse = solve_triangular(
         factor_array,
@@ -127,6 +128,54 @@ def push_cderi_adjoint_through_metric(factorization, cderi_adjoint):
         check_finite=False,
     )
     return inverse.T @ reduced_adjoint @ inverse.conj()
+
+
+def _plain_mixed_product(left, right):
+    """Return ``left @ right`` without whole-input real/complex promotion."""
+
+    left = cp.asarray(left)
+    right = cp.asarray(right)
+    if left.dtype.kind != "c" and right.dtype.kind != "c":
+        return _real_component_product(left, right)
+
+    real = _real_component_product(left.real, right.real)
+    if left.dtype.kind == "c" and right.dtype.kind == "c":
+        real -= _real_component_product(left.imag, right.imag)
+        imaginary = _real_component_product(left.real, right.imag)
+        imaginary += _real_component_product(left.imag, right.real)
+    elif left.dtype.kind == "c":
+        imaginary = _real_component_product(left.imag, right)
+    else:
+        imaginary = _real_component_product(left, right.imag)
+    return real + 1j * imaginary
+
+
+def _real_component_product(
+    left,
+    right,
+    *,
+    maximum_inner_block=DEFAULT_METRIC_PRODUCT_INNER_BLOCK,
+):
+    """Multiply real components with bounded mixed-precision promotion."""
+
+    left = cp.asarray(left)
+    right = cp.asarray(right)
+    if left.dtype == right.dtype:
+        return left @ right
+    if left.ndim != 2 or right.ndim != 2 or left.shape[1] != right.shape[0]:
+        raise ValueError(
+            "metric product operands must be compatible matrices, got "
+            f"{left.shape} and {right.shape}"
+        )
+    dtype = cp.result_type(left.dtype, right.dtype)
+    output = cp.zeros((left.shape[0], right.shape[1]), dtype=dtype)
+    block = max(1, int(maximum_inner_block))
+    for start in range(0, int(left.shape[1]), block):
+        stop = min(int(left.shape[1]), start + block)
+        left_block = left[:, start:stop].astype(dtype, copy=False)
+        right_block = right[start:stop].astype(dtype, copy=False)
+        output += left_block @ right_block
+    return output
 
 
 def _density_array(value):
