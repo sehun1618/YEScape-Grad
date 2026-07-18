@@ -40,6 +40,8 @@ def evaluate_energy(
     kpts,
     kpoint_mode: bool,
     with_df,
+    target_integrator="uniform",
+    target_multigrid_mesh=None,
 ) -> tuple[DCEnergyResult, Any]:
     """Evaluate ``E_DFA[n_HF]`` without optimizing target KS orbitals.
 
@@ -52,6 +54,14 @@ def evaluate_energy(
     must not receive another ``1/Nk`` factor here.
     """
 
+    if str(target_integrator).lower() != "uniform":
+        raise NotImplementedError(
+            "CPU fixed-density target evaluation supports uniform integration only"
+        )
+    if target_multigrid_mesh is not None:
+        raise ValueError(
+            "target_multigrid_mesh requires a GPU multigrid target integrator"
+        )
     density = np.asarray(reference_mf.make_rdm1())
     target = build_target_ks(
         reference_mf.cell,
@@ -96,6 +106,7 @@ def evaluate_energy(
             "df_backend": getattr(with_df, "backend_name", with_df.__class__.__name__),
             "kpoint_mode": bool(kpoint_mode),
             "formula": "E_DFA[n_HF]",
+            "target_integrator": "uniform",
         },
     )
     return result, target

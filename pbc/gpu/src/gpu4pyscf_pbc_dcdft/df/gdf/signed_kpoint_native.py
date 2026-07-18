@@ -215,7 +215,8 @@ def _weighted_energy_derivative(
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
     reference = states[0].original_density
-    nkpts, nao = reference.shape[:2]
+    nkpts = int(reference.shape[0])
+    nao = _state_ao_count(states, nkpts=nkpts)
     bvk_ncells = len(int3c2e_opt.bvkmesh_Ls)
     if bvk_ncells != nkpts:
         raise ValueError(
@@ -306,6 +307,23 @@ def _weighted_energy_derivative(
         omega=float(omega or 0.0),
     )
     return np.asarray(result, dtype=float)
+
+
+def _state_ao_count(states, *, nkpts):
+    """Return the sorted-AO dimension shared by all sampled-k states."""
+
+    shapes = {tuple(state.density.shape) for state in states}
+    if len(shapes) != 1:
+        raise ValueError(
+            f"sampled-k signed states have inconsistent shapes: {shapes}"
+        )
+    shape = shapes.pop()
+    if len(shape) != 3 or shape[0] != nkpts or shape[1] != shape[2]:
+        raise ValueError(
+            "sampled-k sorted density must have shape "
+            f"({nkpts},nao,nao), got {shape}"
+        )
+    return int(shape[1])
 
 
 def _hermitian_kpoint_density(value, nkpts, name):

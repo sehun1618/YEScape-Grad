@@ -178,7 +178,7 @@ Profile에서 derivative tensor materialization이 병목으로 확인되면 다
 
 - FFTDF 추가 최적화
 - stress/cell derivative
-- multigrid
+- multigrid (별도 `Goal_GDF_RSDF_Multigrid.md`에서 추적)
 - open-shell/UHF
 - 새로운 functional, basis 또는 pseudopotential 범위 확장
 - system-specific threshold나 fitted force correction
@@ -319,3 +319,26 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
 - Release evidence는
   `pbc/gpu/validation/results/2026-07-16_rsdf_optimization.json`에 고정했다.
 - 모든 completion gate가 small/medium test로 닫혔고 Water64는 실행하지 않았다.
+
+## 14. 2026-07-18 DZ larger-basis repair record
+
+- 사용자 Water64/DZVP 네 경로 evidence에서 GDF는 reciprocal derivative의 AO reshape,
+  RSDF는 source HF exchange의 allocation에서 실패했다. Water64는 재실행하지 않고 생성된
+  report를 read-only evidence로 사용했다.
+- GDF 실패는 spherical physical AO 1472와 GPU4PySCF `SortedCell`의 Cartesian AO
+  1536을 혼동한 문제였다. 산소의 d shell이 spherical 5개에서 Cartesian 6개로 확장되어
+  산소 64개만큼 차이가 났다. Gamma와 sampled-k signed derivative가 모두 transformed
+  density의 sorted-Cartesian AO 차원을 사용하도록 수정했다.
+- H2O/DZVP는 physical AO 23, sorted AO 24로 같은 조건을 작게 재현한다. One-pass와
+  two-pass analytic derivative의 최대 차이는 $10^{-8}$ Ha/Bohr gate 안에서 통과했다.
+- Canonical GDF/RSDF exchange는 auxiliary 전체의
+  `einsum("pij,jk,pkl->il")`을 제거하고 free-VRAM 기반 auxiliary block 두 단계 matmul로
+  교체했다. Allocation failure는 결과를 commit하지 않고 같은 auxiliary interval을 절반
+  block으로 재시도하며 CPU fallback은 없다.
+- 22.5 GiB free-memory Water64/DZ planner, forced block-1 complex parity와 synthetic OOM
+  retry 테스트가 통과했다. 기존 Gamma/sampled-k GDF와 RSDF exact-source energy/gradient
+  회귀도 통과했다.
+- Public H2O/DZVP DC-PBE analytic 경로는 GDF와 RSDF 모두 완료됐다. 두 경로의 energy
+  차이는 $3.40\times10^{-7}$ Ha, gradient 최대 차이는
+  $5.01\times10^{-7}$ Ha/Bohr였다.
+- Water64/DZVP 최종 completion은 사용자가 수정 후 queue를 재실행해 확인한다.

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..lib.kpoints import normalize_kpts
+from ..dft.state import require_current_state
 
 
 def _with_kpoint_axis(value, *, matrix_rank: int, label: str) -> np.ndarray:
@@ -76,6 +77,7 @@ class RestrictedGradientContext:
     def from_dc_method(cls, dc_mf) -> "RestrictedGradientContext":
         """Build a checked context after ``dc_mf.kernel()`` has completed."""
 
+        require_current_state(dc_mf)
         source = getattr(dc_mf, "source_scf", None)
         target = getattr(dc_mf, "target_ks", None)
         if source is None or target is None or not bool(getattr(dc_mf, "converged", False)):

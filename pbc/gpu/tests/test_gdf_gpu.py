@@ -30,6 +30,7 @@ from gpu4pyscf_pbc_dcdft.df.gdf.build_signature import (
 from gpu4pyscf_pbc_dcdft.df.gdf.cholesky import CDERIFactorization
 from gpu4pyscf_pbc_dcdft.df.gdf.contracted_derivative import (
     _bounded_sr_derivative_batches,
+    _build_gamma_derivative_optimizer,
     coulomb_energy_derivative,
     gpu_gdf_grad_krhf,
     gpu_gdf_grad_rhf,
@@ -92,6 +93,19 @@ def _water_cell():
         basis="gth-szv",
         pseudo="gth-hf",
         ke_cutoff=15.0,
+        verbose=0,
+    ).build()
+
+
+def _water_dzvp_cell():
+    return gto.Cell(
+        atom="O 0 0 0; H 0 1.43 1.11; H 0 -1.43 1.11",
+        a=np.eye(3) * 8.0,
+        unit="Bohr",
+        basis="DZVP-GTH",
+        pseudo="GTH-PBE",
+        ke_cutoff=15.0,
+        precision=1.0e-8,
         verbose=0,
     ).build()
 
@@ -333,6 +347,45 @@ class GDFGPUAlgebraTest(unittest.TestCase):
             1.0e-9,
         )
 
+    def test_native_gamma_dzvp_sorted_cartesian_ao_matrix_parity(self):
+        cell = _water_dzvp_cell()
+        provider = gpu_df.GDF(
+            cell,
+            kpts=np.zeros((1, 3)),
+            auxbasis="DZVP-GTH",
+            setup_mode="native",
+        ).build()
+        optimizer = _build_gamma_derivative_optimizer(provider)
+        transformed = optimizer.cell.apply_C_dot(
+            cp.eye(cell.nao), axis=0
+        )
+        self.assertNotEqual(cell.nao, transformed.shape[0])
+        rng = np.random.default_rng(110)
+        raw_reference = cp.asarray(rng.normal(size=(cell.nao, cell.nao)))
+        raw_response = cp.asarray(rng.normal(size=(cell.nao, cell.nao)))
+        reference = cp.eye(cell.nao) + 0.02 * (
+            raw_reference + raw_reference.T
+        )
+        response = 0.02 * (raw_response + raw_response.T)
+
+        two_pass = restricted_hf_bilinear_derivative(
+            provider,
+            reference,
+            response,
+            exxdiv="ewald",
+        )
+        one_pass = restricted_hf_bilinear_derivative_one_pass_gamma(
+            provider,
+            reference,
+            response,
+            exxdiv="ewald",
+        )
+
+        self.assertLess(
+            float(cp.max(cp.abs(one_pass - two_pass))),
+            1.0e-8,
+        )
+
     def test_native_gamma_forced_reciprocal_multiblock_parity(self):
         _cpu, gpu = _methods((1, 1, 1))
         gpu.kernel()
@@ -457,6 +510,48 @@ class GDFGPUAlgebraTest(unittest.TestCase):
         self.assertLess(
             float(cp.max(cp.abs(one_pass - two_pass))),
             1.0e-9,
+        )
+
+    def test_native_kpoint_dzvp_sorted_cartesian_ao_matrix_parity(self):
+        cell = _water_dzvp_cell()
+        kpts = cell.make_kpts((2, 1, 1))
+        provider = gpu_df.GDF(
+            cell,
+            kpts=kpts,
+            auxbasis="DZVP-GTH",
+            setup_mode="native",
+        ).build()
+        rng = np.random.default_rng(129)
+        shape = (len(kpts), cell.nao, cell.nao)
+        raw_reference = cp.asarray(
+            rng.normal(size=shape) + 1j * rng.normal(size=shape)
+        )
+        raw_response = cp.asarray(
+            rng.normal(size=shape) + 1j * rng.normal(size=shape)
+        )
+        reference = cp.eye(cell.nao)[None] + 0.02 * (
+            raw_reference + raw_reference.swapaxes(-1, -2).conj()
+        )
+        response = 0.02 * (
+            raw_response + raw_response.swapaxes(-1, -2).conj()
+        )
+
+        two_pass = restricted_hf_bilinear_derivative(
+            provider,
+            reference,
+            response,
+            exxdiv="ewald",
+        )
+        one_pass = restricted_hf_bilinear_derivative_one_pass(
+            provider,
+            reference,
+            response,
+            exxdiv="ewald",
+        )
+
+        self.assertLess(
+            float(cp.max(cp.abs(one_pass - two_pass))),
+            1.0e-8,
         )
 
     def test_native_gamma_target_j_and_bilinear_fused_parity(self):

@@ -170,7 +170,7 @@ Timing은 Water8 독립 process 최소 3회 median을 사용한다. 필요한 �
 
 - GDF 추가 최적화 또는 FFTDF 변경
 - stress/cell derivative
-- multigrid
+- multigrid (별도 `Goal_GDF_RSDF_Multigrid.md`에서 추적)
 - open-shell/UHF
 - 새로운 functional, basis 또는 pseudopotential 범위 확장
 - `j2c_eig_always=True` analytic response

@@ -21,6 +21,7 @@ from types import MappingProxyType
 
 import cupy as cp
 import numpy as np
+from gpu4pyscf.lib.cupy_helper import get_avail_mem
 from gpu4pyscf.pbc.df import GDF as GPU4PySCFGDF
 from gpu4pyscf.pbc.df import df_jk as gpu_df_jk
 from gpu4pyscf.pbc.df.fft_jk import _ewald_exxdiv_for_G0
@@ -32,6 +33,11 @@ from pyscf_pbc_dcdft.df.gdf.storage import (
 from pyscf_pbc_dcdft.lib.kpoints import normalize_kpts
 
 from .build_signature import make_gdf_build_signature
+
+
+_EXCHANGE_MEMORY_FRACTION = 0.20
+_EXCHANGE_MINIMUM_RESERVE_BYTES = 2 * 1024**3
+_EXCHANGE_MAX_AUX_BLOCK = 128
 
 
 class GDF(GPU4PySCFGDF):
@@ -80,6 +86,7 @@ class GDF(GPU4PySCFGDF):
         self._dc_pp_cache_hits = 0
         self._dc_pp_cache_misses = 0
         self._dc_pp_build_metadata = None
+        self._dc_jk_contraction_metadata = None
 
     @property
     def uses_native_integrals(self):
@@ -117,6 +124,7 @@ class GDF(GPU4PySCFGDF):
         self._cpu_witness = None
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
+        self._dc_jk_contraction_metadata = None
         self._clear_pp_cache()
         return self
 
@@ -281,7 +289,17 @@ class GDF(GPU4PySCFGDF):
         self._ensure_built()
         density, input_shape = _format_density(dm, nkpts=len(self.kpts))
         vj = _coulomb_matrices(self._dc_cderi_blocks, density) if with_j else None
-        vk = _exchange_matrices(self._dc_cderi_blocks, density) if with_k else None
+        exchange_metadata = {} if with_k else None
+        vk = (
+            _exchange_matrices(
+                self._dc_cderi_blocks,
+                density,
+                metadata=exchange_metadata,
+            )
+            if with_k
+            else None
+        )
+        self._dc_jk_contraction_metadata = exchange_metadata
         if vk is not None and exxdiv is not None:
             if exxdiv != "ewald":
                 raise NotImplementedError(
@@ -352,6 +370,7 @@ class GDF(GPU4PySCFGDF):
                 else "project-local CuPy"
             ),
             "silent_cpu_fallback": False,
+            "jk_contraction_metadata": self._dc_jk_contraction_metadata,
             "host_boundaries": self._host_boundaries(),
         }
 
@@ -378,6 +397,7 @@ class GDF(GPU4PySCFGDF):
         self._cpu_witness = None
         self._dc_cderi_blocks = None
         self._dc_build_signature = None
+        self._dc_jk_contraction_metadata = None
         self._clear_pp_cache()
 
     def _clear_pp_cache(self):
@@ -453,20 +473,166 @@ def _coulomb_matrices(blocks, density):
     return output
 
 
-def _exchange_matrices(blocks, density):
+def _exchange_matrices(blocks, density, *, metadata=None):
     nset, nkpts, nao, _ = density.shape
     output = cp.zeros((nset, nkpts, nao, nao), dtype=cp.complex128)
+    pair_metadata = []
     for set_id in range(nset):
         for ki in range(nkpts):
             for kj in range(nkpts):
-                output[set_id, ki] += cp.einsum(
-                    "pij,jk,pkl->il",
-                    _device_pair_block(blocks, ki, kj),
+                left = _device_pair_block(blocks, ki, kj)
+                right = _device_pair_block(blocks, kj, ki)
+                contribution, execution = _blocked_exchange_pair(
+                    left,
                     density[set_id, kj],
-                    _device_pair_block(blocks, kj, ki),
-                    optimize=True,
-                ) / nkpts
+                    right,
+                )
+                output[set_id, ki] += contribution / nkpts
+                execution.update(
+                    {
+                        "density_set": int(set_id),
+                        "ki": int(ki),
+                        "kj": int(kj),
+                    }
+                )
+                pair_metadata.append(execution)
+    if metadata is not None:
+        metadata.clear()
+        metadata.update(
+            {
+                "algorithm": "bounded_auxiliary_batched_matmul",
+                "pair_executions": pair_metadata,
+                "silent_cpu_fallback": False,
+            }
+        )
     return output
+
+
+def _blocked_exchange_pair(left, density, right):
+    """Contract one CDERI pair with bounded auxiliary-axis workspaces."""
+
+    naux, nao, nao_right = left.shape
+    if nao != nao_right or right.shape != (naux, nao, nao):
+        raise ValueError(
+            "exchange CDERI pair dimensions are inconsistent: "
+            f"left={left.shape}, right={right.shape}"
+        )
+    if density.shape != (nao, nao):
+        raise ValueError(
+            f"exchange density must have shape {(nao, nao)}, got {density.shape}"
+        )
+    plan = _plan_exchange_auxiliary_blocks(
+        naux,
+        nao,
+        np.result_type(left.dtype, density.dtype, right.dtype),
+        free_device_bytes=int(get_avail_mem(exclude_memory_pool=True)),
+    )
+    result = cp.zeros((nao, nao), dtype=cp.complex128)
+    start = 0
+    block_size = plan["initial_block_size"]
+    minimum_block_size = block_size
+    block_count = 0
+    rebatch_count = 0
+    while start < naux:
+        stop = min(naux, start + block_size)
+        try:
+            intermediate = cp.matmul(left[start:stop], density)
+            product = cp.matmul(intermediate, right[start:stop])
+            result += product.sum(axis=0)
+        except Exception as error:
+            if not _is_gpu_out_of_memory(error):
+                raise
+            intermediate = product = None
+            _release_unused_gpu_memory()
+            attempted = stop - start
+            if attempted <= 1:
+                raise MemoryError(
+                    "GPU memory is insufficient for one auxiliary exchange "
+                    "slice"
+                ) from error
+            block_size = max(1, attempted // 2)
+            minimum_block_size = min(minimum_block_size, block_size)
+            rebatch_count += 1
+            continue
+        intermediate = product = None
+        minimum_block_size = min(minimum_block_size, stop - start)
+        block_count += 1
+        start = stop
+    execution = {
+        **plan,
+        "final_block_size": int(block_size),
+        "minimum_block_size": int(minimum_block_size),
+        "block_count": int(block_count),
+        "rebatch_count": int(rebatch_count),
+        "completed_auxiliary_count": int(naux),
+    }
+    return result, execution
+
+
+def _plan_exchange_auxiliary_blocks(
+    naux,
+    nao,
+    dtype,
+    *,
+    free_device_bytes,
+    memory_fraction=_EXCHANGE_MEMORY_FRACTION,
+    minimum_reserve_bytes=_EXCHANGE_MINIMUM_RESERVE_BYTES,
+    maximum_block_size=_EXCHANGE_MAX_AUX_BLOCK,
+):
+    """Plan a conservative auxiliary block for two batched GEMM workspaces."""
+
+    naux = int(naux)
+    nao = int(nao)
+    free_device_bytes = int(free_device_bytes)
+    itemsize = int(np.dtype(dtype).itemsize)
+    if naux <= 0 or nao <= 0:
+        raise ValueError("exchange dimensions must be positive")
+    if not 0.0 < float(memory_fraction) <= 1.0:
+        raise ValueError("exchange memory_fraction must be in (0, 1]")
+    reserve = min(int(minimum_reserve_bytes), free_device_bytes // 2)
+    budget = min(
+        int(free_device_bytes * float(memory_fraction)),
+        max(0, free_device_bytes - reserve),
+    )
+    # Two explicit batched GEMM outputs are live.  Two additional planes
+    # conservatively cover contiguous copies selected by CuPy/cuBLAS.
+    bytes_per_auxiliary = 4 * nao * nao * itemsize
+    block_size = max(1, budget // max(1, bytes_per_auxiliary))
+    block_size = min(naux, int(maximum_block_size), int(block_size))
+    return {
+        "naux": naux,
+        "nao": nao,
+        "dtype": str(np.dtype(dtype)),
+        "free_device_bytes_at_plan": free_device_bytes,
+        "memory_fraction": float(memory_fraction),
+        "reserve_bytes": int(reserve),
+        "budget_bytes": int(budget),
+        "bytes_per_auxiliary": int(bytes_per_auxiliary),
+        "estimated_block_working_bytes": int(
+            block_size * bytes_per_auxiliary
+        ),
+        "initial_block_size": int(block_size),
+        "maximum_block_size": int(maximum_block_size),
+    }
+
+
+def _is_gpu_out_of_memory(error):
+    if isinstance(error, cp.cuda.memory.OutOfMemoryError):
+        return True
+    name = type(error).__name__.lower()
+    message = str(error).lower()
+    return (
+        "outofmemory" in name
+        or "memoryallocation" in message
+        or "out of memory" in message
+    )
+
+
+def _release_unused_gpu_memory():
+    cp.get_default_memory_pool().free_all_blocks()
+    pinned = cp.get_default_pinned_memory_pool()
+    if pinned is not None:
+        pinned.free_all_blocks()
 
 
 def _device_pair_block(blocks, ki, kj):

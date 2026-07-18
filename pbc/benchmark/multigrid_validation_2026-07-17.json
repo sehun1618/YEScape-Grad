@@ -1,0 +1,111 @@
+{
+  "schema": "pbc_dcdft_target_multigrid_validation_v1",
+  "date": "2026-07-17",
+  "environment": {
+    "pyscf": "2.13.1",
+    "gpu4pyscf": "1.7.4",
+    "python": "3.11",
+    "device": "gpu"
+  },
+  "route_status": {
+    "uniform": "production default",
+    "multigrid_xc": "validated explicit opt-in",
+    "multigrid_j_xc": "validated diagnostic opt-in with distinct target-J representation",
+    "multigrid_pp": "deferred by profile"
+  },
+  "correctness": {
+    "queue": "multigrid_correctness_gate.json",
+    "case_count": 10,
+    "failed_cases": 0,
+    "coverage": [
+      "GDF and RSDF source HF",
+      "PBE Gamma",
+      "r2SCAN 2x1x1 sampled k-points",
+      "uniform, multigrid_xc and multigrid_j_xc ownership",
+      "one selected central-FD component per case"
+    ],
+    "maximum_analytic_fd_error_ha_per_bohr": 3.491112428588572e-7,
+    "maximum_zvector_residual": 6.142881525252256e-13,
+    "same_process_rsdf_source_identity": {
+      "maximum_energy_difference_ha": 0.0,
+      "maximum_density_difference": 3.3306690738754696e-16,
+      "maximum_mo_energy_difference_ha": 6.661338147750939e-16
+    }
+  },
+  "water8_r2scan_three_run_medians_s": {
+    "gdf_uniform": {
+      "target_energy": 1.190514,
+      "analytic_gradient": 3.659038,
+      "target_explicit_gradient": 1.378824
+    },
+    "gdf_multigrid_xc": {
+      "target_energy": 0.751867,
+      "analytic_gradient": 2.656320,
+      "target_explicit_gradient": 0.399151
+    },
+    "rsdf_uniform": {
+      "target_energy": 1.090379,
+      "analytic_gradient": 4.054446,
+      "target_explicit_gradient": 1.397421
+    },
+    "rsdf_multigrid_xc": {
+      "target_energy": 0.637719,
+      "analytic_gradient": 3.062523,
+      "target_explicit_gradient": 0.404883
+    }
+  },
+  "water8_multigrid_xc_speedup": {
+    "gdf_end_to_end_gradient_fraction": 0.2740,
+    "rsdf_end_to_end_gradient_fraction": 0.2446,
+    "target_explicit_gradient_fraction": 0.711,
+    "host_peak_rss_reduction_fraction": 0.23,
+    "cupy_pool_tradeoff": "multigrid task cache increases process-local pool high-water"
+  },
+  "water8_rigid_phase_peak_to_peak_ha": {
+    "uniform": {
+      "x": 0.0001922204338,
+      "y": 0.0001922204339,
+      "z": 0.0002518130918
+    },
+    "multigrid_xc": {
+      "x": 0.0001915136692,
+      "y": 0.0001915136693,
+      "z": 0.0002520432519
+    }
+  },
+  "m2_representation_evidence": {
+    "water8_gdf_m1_energy_ha": -139.52776230044188,
+    "water8_gdf_m2_energy_ha": -136.4296750943973,
+    "interpretation": "M2 replaces finite-auxbasis target J by reciprocal multigrid J; it is not a same-model drop-in at fixed SZV-GTH auxbasis"
+  },
+  "regression_tests": {
+    "benchmark": {
+      "passed": 22,
+      "failed": 0
+    },
+    "cpu": {
+      "passed": 51,
+      "failed": 0,
+      "wall_time_s": 89.999
+    },
+    "gpu_gdf": {
+      "passed": 44,
+      "failed": 0,
+      "wall_time_s": 550.946
+    },
+    "gpu_rsdf": {
+      "passed": 25,
+      "failed": 0,
+      "wall_time_s": 434.714
+    },
+    "gpu_fftdf_mgga": {
+      "passed": 6,
+      "failed": 0,
+      "wall_time_s": 71.920
+    },
+    "gpu_fast_target_and_boundary": {
+      "passed": 13,
+      "failed": 0
+    }
+  }
+}

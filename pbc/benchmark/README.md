@@ -25,8 +25,11 @@ conda run -n gpu python run_benchmark_queue.py \
   --queue example_benchmark_queue.json
 ```
 
-완료된 `report.json`이 있으면 기본적으로 skip한다. 완료된 case까지 다시 계산할
-때만 `--overwrite`를 사용한다.
+완료된 `report.json`의 case fingerprint가 현재 effective input 및 source tree와
+일치할 때만 기본적으로 skip한다. Basis, pseudo, cutoff/mesh, k-point, XC, XYZ 내용
+또는 package source가 바뀌면 같은 output root와 job 이름이어도 기존 artifact를
+archive하고 새로 실행한다. 동일 fingerprint의 완료 case까지 다시 계산할 때만
+`--overwrite`를 사용한다.
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
@@ -38,6 +41,16 @@ conda run -n gpu python run_benchmark_queue.py \
 `report.json`에 같은 값이 기록된다. Queue runner는 현재 attempt와 identity가 다른
 report를 결과로 받아들이지 않는다. 같은 case를 다시 실행하면 기존 root artifact는
 삭제하지 않고 `attempts/<시각>_<attempt-id>/`로 함께 이동한다.
+
+각 case에는 다음 내용을 합친 SHA256 fingerprint도 기록된다.
+
+- defaults와 job을 합친 effective numerical configuration
+- XYZ 파일의 실제 byte content와 lattice 설정
+- Git commit, source-only dirty state 및 CPU/GPU/benchmark source-tree digest
+
+Fingerprint는 `run_input.json`, `attempt.json`, `progress.json`, `report.json` 및
+`queue_manifest.json`에서 확인할 수 있다. 동시에 실행된 두 queue가 같은 case를
+archive하거나 덮어쓰지 않도록 `.queue.lock`을 child process lifetime 전체에 유지한다.
 
 외부 종료로 `progress.json`만 `running`에 남더라도 다음 queue 실행에서 기록된 PID와
 Linux process start time을 확인한다. 같은 process가 더 이상 없으면 이전 attempt를
@@ -98,7 +111,8 @@ job 또는 defaults에 추가한다.
 ## 2. Queue 형식
 
 `defaults`는 모든 job에 공통으로 적용되고, 각 `jobs` 항목은 필요한 값만
-덮어쓴다. `devices`와 `df_backends`를 여러 개 주면 Cartesian product로 확장된다.
+덮어쓴다. `devices`, `df_backends`, `target_integrators`를 여러 개 주면 Cartesian
+product로 확장된다.
 
 ```json
 {
@@ -113,6 +127,7 @@ job 또는 defaults에 추가한다.
     "auxbasis": "gth-szv",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "reference",
+    "target_integrator": "uniform",
     "ke_cutoff_ha": 20.0,
     "kmesh": [1, 1, 1],
     "xc": "PBE",
@@ -134,7 +149,8 @@ job 또는 defaults에 추가한다.
       "run_fd": true,
       "fd_step_bohr": 0.0001,
       "fd_atoms": [0],
-      "fd_axes": ["z"]
+      "fd_axes": ["z"],
+      "fd_max_abs_tolerance_ha_per_bohr": 1e-5
     }
   ]
 }
@@ -161,6 +177,25 @@ GPU GDF에서 `gdf_setup_mode`는 다음 두 값을 받는다.
 
 성능 측정에는 `native`를 사용하고, equation-level debugging이나 과거 result 재현에만
 `reference`를 사용한다. CPU GDF에서는 이 option을 무시한다.
+
+### Target multigrid
+
+`df_backend`는 source HF의 J/K와 source response backend를 정한다. Target DFA의
+수치적분은 별도 `target_integrator`로 고른다.
+
+- `uniform` (default): selected DF target J + GPU uniform-grid XC
+- `multigrid_xc`: selected DF target J + GPU multigrid XC
+- `multigrid_j_xc`: GPU multigrid combined target J+XC
+
+Source HF density, exchange, Z-vector Hessian과 pseudopotential/hcore owner는 세 mode에서
+모두 선택한 GDF/RSDF로 유지된다. Multigrid mode에서만 optional
+`target_multigrid_mesh: [NX, NY, NZ]`를 지정할 수 있다. CPU는 현재 `uniform`만
+허용하며 요청을 조용히 다른 route로 바꾸지 않는다.
+
+Small-system analytic/FD gate는 `multigrid_correctness_gate.json`, Water8 3회 반복 및
+제한된 Water20 timing/memory 비교는 `multigrid_performance_gate.json`에 있다.
+`report.json`의 `gradient_metadata.target_integration`에는 J/XC/PP owner, mesh, task
+level, energy/gradient integration wall time 및 energy task-cache 재사용 여부가 저장된다.
 
 Native GPU GDF nuclear response에는 다음 bounded-memory controls를 선택적으로 사용할 수
 있다.
@@ -216,6 +251,8 @@ exclusive device phase이며, 합산 wall time과 host setup time은 별도로 �
 - `fd_atoms: "all"` 또는 atom index list
 - `fd_axes: "all"` 또는 `x`, `y`, `z`의 list
 - `fd_step_bohr`: nuclear displacement, 단위 `Bohr`
+- `fd_max_abs_tolerance_ha_per_bohr`: optional selected-FD pass/fail threshold
+- `net_gradient_tolerance_ha_per_bohr`: optional translation-sum norm threshold
 
 FD를 일부 component에만 수행하면 NPY array의 미계산 component는 `NaN`이며,
 `fd_mask.npy`가 실제 비교 component를 표시한다. error metric도 mask가 참인
@@ -223,6 +260,16 @@ component만 사용한다.
 
 전체 선택은 문자열 `"all"`을 권장하지만 기존 queue와의 호환성을 위해
 `["all"]`도 같은 의미로 허용한다.
+
+`run_fd=true`는 FD 숫자를 계산한다는 뜻이고, tolerance를 함께 지정해야 자동
+accuracy gate가 활성화된다. Report 상태는 다음처럼 분리된다.
+
+- `execution_status`: `complete`, `failed`, `interrupted`
+- `accuracy_status`: `not_requested`, `pass`, `fail`
+
+따라서 timing-only job은 `execution_status=complete`,
+`accuracy_status=not_requested`가 정상이다. Queue exit code는 execution failure뿐
+아니라 명시적으로 요청한 accuracy gate의 failure도 반영한다.
 
 ## 4. 결과
 
@@ -248,6 +295,46 @@ component만 사용한다.
 
 queue root의 `summary.csv`는 device/DF별 핵심 timing과 FD error를 한 표로 모은다.
 `queue_manifest.json`은 case 상태와 report 경로를 기록한다.
+
+`report.json`에는 다음 release evidence도 함께 저장된다.
+
+- `gradient_summary`: 원자별 analytic gradient의 합 vector와 norm
+- `evidence`: case fingerprint, XYZ digest, Git commit과 source-tree digest
+- `software_provenance`: Python, NumPy, PySCF, GPU4PySCF, CuPy 및 CUDA version
+- `accuracy_gate`: 요청된 threshold별 observed value와 pass/fail
+
+FD displacement energy helper는 energy와 timing만 반환한다. 이전 displacement의
+method/provider/CDERI object를 다음 displacement 동안 보존하지 않는다.
+
+### Translation-sum과 egg-box 진단
+
+원자별 gradient 합이 0이 아닐 때는 먼저 analytic 항 누락과 finite-grid egg-box를
+구분해야 한다. 다음 진단은 구조 전체를 uniform grid의 1/4 step만큼 옮긴 위치에서
+analytic translation sum과 total-energy rigid-translation central FD를 비교하고,
+one-electron, target J/XC, Pulay, nuclear 및 response channel별 합을 저장한다.
+
+```bash
+conda run -n gpu python diagnostics/diagnose_rigid_translation_eggbox.py \
+  --input results/my_queue/000_case/run_input.json \
+  --axis x \
+  --center-phase 0.25 \
+  --slope-step-bohr 1e-4 \
+  --ke-cutoff-ha 400 \
+  --target-integrator multigrid_xc \
+  --output results/diagnostics/my_translation_probe.json
+```
+
+- analytic sum과 rigid-energy FD가 맞으면 계산된 finite-grid energy 자체의 egg-box
+  derivative다.
+- 두 값이 맞지 않으면 analytic derivative 누락 또는 energy/gradient route 불일치를
+  먼저 조사해야 한다.
+- `component_translation_sums_ha_per_bohr`는 drift를 어느 항이 소유하는지 보여준다.
+- 한 phase에서 합이 우연히 0일 수 있으므로 `center-phase=0`만으로 판단하지 않는다.
+
+현재 Water8 r2SCAN 결과에서는 drift가 거의 전부 `target_xc`이고 GDF와 RSDF가 같은
+값을 보였다. 상세 수치와 production policy는
+`../TRANSLATION_SUM_DIAGNOSIS_2026-07-17.md`에 있다. Production gradient에서 원자별로
+평균 합력을 빼는 보정은 computed energy의 미분이 아니므로 사용하지 않는다.
 
 ### 실행 중 progress 확인
 

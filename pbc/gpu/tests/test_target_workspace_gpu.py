@@ -72,6 +72,31 @@ class TargetWorkspaceTest(unittest.TestCase):
         self.cell.coordinates[0, 2] += 0.1
         self.assertIsNone(compatible_target_workspace(self.method))
 
+    def test_target_integrator_change_invalidates_workspace(self):
+        self.method.target_integrator = "multigrid_xc"
+        self.method.target_multigrid_mesh = np.asarray([8, 8, 8])
+        self.assertIsNone(compatible_target_workspace(self.method))
+
+    def test_implicit_multigrid_mesh_keeps_workspace_compatible(self):
+        workspace = TargetEvaluationWorkspace.create(
+            source_mf=self.source,
+            target_ks=self.target,
+            with_df=self.provider,
+            xc="PBE",
+            kpts=np.zeros((1, 3)),
+            density=cp.eye(2),
+            hcore=self.hcore,
+            veff=self.veff,
+            target_integrator="multigrid_xc",
+            target_multigrid_mesh=None,
+        )
+        self.method.target_integrator = "multigrid_xc"
+        self.method.target_multigrid_mesh = None
+        self.method.target_evaluation = workspace
+
+        self.assertIs(compatible_target_workspace(self.method), workspace)
+        self.assertEqual(workspace.target_multigrid_mesh, tuple(self.cell.mesh))
+
 
 class _Cell:
     def __init__(self):

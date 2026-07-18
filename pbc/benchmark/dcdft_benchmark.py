@@ -9,6 +9,7 @@ central finite differences therefore exercise the same user-visible route.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import resource
@@ -24,6 +25,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+import evidence
+
 
 WORKSPACE = Path(__file__).resolve().parents[1]
 for source_dir in (
@@ -33,6 +36,12 @@ for source_dir in (
     source_text = str(source_dir)
     if source_text not in sys.path:
         sys.path.insert(0, source_text)
+
+from pyscf_pbc_dcdft.dft.target_integrator import (  # noqa: E402
+    SUPPORTED_TARGET_INTEGRATORS,
+    UNIFORM,
+    normalize_target_integrator,
+)
 
 
 AXIS_NAMES = ("x", "y", "z")
@@ -59,7 +68,6 @@ class EnergyRun:
     """One complete source-HF plus target-DFA energy evaluation."""
 
     energy_ha: float
-    method: Any
     setup_wall_time_s: float
     wall_time_s: float
 
@@ -82,6 +90,38 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "get") and value.__class__.__module__.startswith("cupy"):
         return _json_value(value.get())
     return str(value)
+
+
+def _array_identity(value: Any) -> dict[str, Any]:
+    """Return a compact byte-level identity for a source-HF array."""
+
+    if hasattr(value, "get"):
+        value = value.get()
+    array = np.ascontiguousarray(np.asarray(value))
+    rounded = np.ascontiguousarray(np.round(array, decimals=10))
+    return {
+        "shape": list(array.shape),
+        "dtype": array.dtype.str,
+        "sha256": hashlib.sha256(array.view(np.uint8)).hexdigest(),
+        "rounded_1e10_sha256": hashlib.sha256(
+            rounded.view(np.uint8)
+        ).hexdigest(),
+        "frobenius_norm": float(np.linalg.norm(array)),
+        "max_abs": float(np.max(np.abs(array), initial=0.0)),
+    }
+
+
+def _source_hf_identity(method: Any) -> dict[str, Any] | None:
+    source = getattr(method, "source_scf", None)
+    if source is None:
+        return None
+    return {
+        "energy_ha": float(source.e_tot),
+        "density": _array_identity(source.make_rdm1()),
+        "mo_coeff": _array_identity(source.mo_coeff),
+        "mo_occ": _array_identity(source.mo_occ),
+        "mo_energy": _array_identity(source.mo_energy),
+    }
 
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -298,12 +338,35 @@ def resolve_system(config: Mapping[str, Any], base_dir: Path) -> ResolvedSystem:
 def _validate_config(config: Mapping[str, Any]) -> tuple[str, str]:
     device = str(config.get("device", "cpu")).lower()
     backend = str(config.get("df_backend", "fftdf")).lower()
+    target_integrator = normalize_target_integrator(
+        config.get("target_integrator", UNIFORM)
+    )
     if device not in SUPPORTED_DEVICES:
         raise ValueError(f"device must be one of {sorted(SUPPORTED_DEVICES)}")
     if backend not in SUPPORTED_DF_BACKENDS:
         raise ValueError(
             f"df_backend must be one of {sorted(SUPPORTED_DF_BACKENDS)}"
         )
+    if target_integrator not in SUPPORTED_TARGET_INTEGRATORS:
+        raise ValueError(
+            "target_integrator must be one of "
+            f"{sorted(SUPPORTED_TARGET_INTEGRATORS)}"
+        )
+    if device == "cpu" and target_integrator != UNIFORM:
+        raise NotImplementedError(
+            "CPU benchmark supports target_integrator='uniform' only"
+        )
+    target_mesh = config.get("target_multigrid_mesh")
+    if target_mesh is not None:
+        values = np.asarray(target_mesh, dtype=int)
+        if values.shape != (3,) or np.any(values < 1):
+            raise ValueError(
+                "target_multigrid_mesh must contain three positive integers"
+            )
+        if target_integrator == UNIFORM:
+            raise ValueError(
+                "target_multigrid_mesh requires a multigrid target_integrator"
+            )
     if int(config.get("charge", 0)) != 0 or int(config.get("spin", 0)) != 0:
         raise NotImplementedError(
             "this benchmark follows the active restricted neutral-singlet scope: "
@@ -311,6 +374,21 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[str, str]:
         )
     if config.get("mesh") is not None and config.get("ke_cutoff_ha") is not None:
         raise ValueError("set either mesh or ke_cutoff_ha, not both")
+    fd_tolerance = config.get("fd_max_abs_tolerance_ha_per_bohr")
+    if fd_tolerance is not None:
+        if float(fd_tolerance) < 0.0:
+            raise ValueError(
+                "fd_max_abs_tolerance_ha_per_bohr must be non-negative"
+            )
+        if not bool(config.get("run_fd", False)):
+            raise ValueError(
+                "fd_max_abs_tolerance_ha_per_bohr requires run_fd=true"
+            )
+    net_tolerance = config.get("net_gradient_tolerance_ha_per_bohr")
+    if net_tolerance is not None and float(net_tolerance) < 0.0:
+        raise ValueError(
+            "net_gradient_tolerance_ha_per_bohr must be non-negative"
+        )
     return device, backend
 
 
@@ -411,6 +489,10 @@ def build_method(config: Mapping[str, Any], cell, device: str, backend: str):
     method.max_cycle = int(config.get("max_cycle", 80))
     method.exxdiv = str(config.get("exxdiv", "ewald"))
     method.verbose = int(config.get("verbose", 0))
+    method.set_target_integrator(
+        config.get("target_integrator", UNIFORM),
+        mesh=config.get("target_multigrid_mesh"),
+    )
     return method, kpts
 
 
@@ -799,7 +881,6 @@ def evaluate_energy(
     wall_time = perf_counter() - energy_start
     return EnergyRun(
         energy_ha=energy,
-        method=method,
         setup_wall_time_s=energy_start - start,
         wall_time_s=wall_time,
     )
@@ -993,6 +1074,72 @@ def _accuracy_report(
     }
 
 
+def _gradient_summary(gradient: np.ndarray) -> dict[str, Any]:
+    """Report translational drift without altering the gradient."""
+
+    values = np.asarray(gradient, dtype=float)
+    translation_sum = np.sum(values, axis=0)
+    return {
+        "translation_sum_vector_ha_per_bohr": translation_sum,
+        "translation_sum_norm_ha_per_bohr": float(
+            np.linalg.norm(translation_sum)
+        ),
+        "maximum_component_abs_ha_per_bohr": float(
+            np.max(np.abs(values))
+        ),
+        "rms_component_ha_per_bohr": float(
+            np.sqrt(np.mean(values**2))
+        ),
+    }
+
+
+def _accuracy_gate(
+    config: Mapping[str, Any],
+    accuracy: Mapping[str, Any] | None,
+    gradient_summary: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Evaluate optional FD and translation-sum release thresholds."""
+
+    checks: list[dict[str, Any]] = []
+    fd_tolerance = config.get("fd_max_abs_tolerance_ha_per_bohr")
+    if fd_tolerance is not None:
+        if accuracy is None:
+            raise RuntimeError("FD accuracy was requested but not evaluated")
+        observed = float(accuracy["max_abs_error_ha_per_bohr"])
+        tolerance = float(fd_tolerance)
+        checks.append(
+            {
+                "name": "fd_max_abs_error",
+                "observed_ha_per_bohr": observed,
+                "tolerance_ha_per_bohr": tolerance,
+                "passed": observed <= tolerance,
+            }
+        )
+
+    net_tolerance = config.get("net_gradient_tolerance_ha_per_bohr")
+    if net_tolerance is not None:
+        observed = float(
+            gradient_summary["translation_sum_norm_ha_per_bohr"]
+        )
+        tolerance = float(net_tolerance)
+        checks.append(
+            {
+                "name": "translation_sum_norm",
+                "observed_ha_per_bohr": observed,
+                "tolerance_ha_per_bohr": tolerance,
+                "passed": observed <= tolerance,
+            }
+        )
+
+    if not checks:
+        return "not_requested", {"requested": False, "checks": []}
+    passed = all(bool(check["passed"]) for check in checks)
+    return (
+        "pass" if passed else "fail",
+        {"requested": True, "passed": passed, "checks": checks},
+    )
+
+
 def _save_arrays(
     output_dir: Path,
     analytic: np.ndarray,
@@ -1120,11 +1267,19 @@ def run_benchmark(
         accuracy = _accuracy_report(analytic_gradient, fd_gradient, fd_mask)
         memory_samples.append(memory_snapshot(device, "after_fd"))
 
+    gradient_summary = _gradient_summary(analytic_gradient)
+    accuracy_status, accuracy_gate = _accuracy_gate(
+        config,
+        accuracy,
+        gradient_summary,
+    )
+
     if progress is not None:
         progress.update("final_reporting", force=True)
     array_paths = _save_arrays(output_dir, analytic_gradient, fd_gradient, fd_mask)
     method_metadata = method.metadata() if hasattr(method, "metadata") else None
     gradient_metadata = _gradient_metadata(gradient_object)
+    source_hf_identity = _source_hf_identity(method)
     timing = {
         "device_warmup_wall_s": warmup_wall_s,
         "setup_wall_s": setup_wall_s,
@@ -1143,12 +1298,19 @@ def run_benchmark(
     }
     return {
         "status": "complete",
-        "schema_version": 1,
+        "execution_status": "complete",
+        "accuracy_status": accuracy_status,
+        "accuracy_gate": accuracy_gate,
+        "schema_version": 2,
         "run_name": config.get("name"),
         "device": device,
         "df_backend": backend,
+        "target_integrator": str(
+            config.get("target_integrator", UNIFORM)
+        ).lower(),
         "xc": str(config.get("xc", "PBE")),
         "energy_ha": energy,
+        "source_hf": source_hf_identity,
         "units": {
             "energy": "Ha",
             "gradient": "Ha/Bohr",
@@ -1177,6 +1339,12 @@ def run_benchmark(
                 config.get("rsdf_central_setup", "reference")
                 if device == "gpu" and backend == "rsdf"
                 else None
+            ),
+            "target_integrator": str(
+                config.get("target_integrator", UNIFORM)
+            ).lower(),
+            "target_multigrid_mesh": config.get(
+                "target_multigrid_mesh"
             ),
             "kmesh": list(_normalize_kmesh(config)),
             "nkpts": len(kpts),
@@ -1228,11 +1396,14 @@ def run_benchmark(
             "components": fd_components,
         },
         "accuracy": accuracy,
+        "gradient_summary": gradient_summary,
         "timing_s": timing,
         "arrays": array_paths,
         "method_metadata": method_metadata,
         "gradient_metadata": gradient_metadata,
         "device_metadata": _device_metadata(device),
+        "evidence": config.get("evidence"),
+        "software_provenance": evidence.software_provenance(device),
         "memory": summarize_memory(memory_samples),
     }
 
@@ -1254,8 +1425,12 @@ def main() -> int:
             "run_name": config.get("name"),
             "device": config.get("device", "cpu"),
             "df_backend": config.get("df_backend", "fftdf"),
+            "target_integrator": config.get(
+                "target_integrator", UNIFORM
+            ),
             "xc": config.get("xc", "PBE"),
             "run_identity": config.get("run_identity"),
+            "evidence": config.get("evidence"),
         },
     )
     vram_tracker = VRAMPeakTracker(
@@ -1282,9 +1457,15 @@ def main() -> int:
         vram_report = vram_tracker.stop()
         failure = {
             "status": "failed",
-            "schema_version": 1,
+            "execution_status": "failed",
+            "accuracy_status": None,
+            "schema_version": 2,
             "run_name": config.get("name"),
             "run_identity": config.get("run_identity"),
+            "evidence": config.get("evidence"),
+            "software_provenance": evidence.software_provenance(
+                str(config.get("device", "cpu"))
+            ),
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),
@@ -1295,7 +1476,8 @@ def main() -> int:
         raise
 
     timing = report["timing_s"]
-    print(f"status: complete")
+    print("execution status: complete")
+    print(f"accuracy status: {report['accuracy_status']}")
     print(f"energy: {report['energy_ha']:.12f} Ha")
     print(f"analytic gradient: {timing['analytic_gradient_wall_s']:.6f} s")
     if report["accuracy"] is not None:
@@ -1304,7 +1486,7 @@ def main() -> int:
             f"{report['accuracy']['max_abs_error_ha_per_bohr']:.6e} Ha/Bohr"
         )
     print(f"report: {report_path}")
-    return 0
+    return 2 if report["accuracy_status"] == "fail" else 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,90 @@
+{
+  "schema": "pbc_dcdft_review_validation_v1",
+  "date": "2026-07-17",
+  "base_commit": "e8116bd6b855b92ef956eb78c77d4524288d4404",
+  "source_state": "working tree with review release-readiness changes",
+  "environment": {
+    "conda_environment": "gpu",
+    "python": "3.11.6",
+    "numpy": "2.4.4",
+    "pyscf": "2.13.1",
+    "package_version": "0.1.0a0"
+  },
+  "tests": [
+    {
+      "name": "benchmark lifecycle and evidence",
+      "command": "python -m unittest discover -s pbc/benchmark/tests -v",
+            "passed": 19,
+            "failed": 0,
+            "reported_wall_time_s": 0.078
+    },
+    {
+      "name": "complete CPU package suite",
+      "command": "python -m unittest discover -s pbc/cpu/tests -v",
+      "passed": 49,
+      "failed": 0,
+      "reported_wall_time_s": 112.518
+    },
+    {
+      "name": "GPU FFTDF and MGGA",
+      "command": "python -m unittest pbc.gpu.tests.test_fftdf_gpu pbc.gpu.tests.test_mgga_gpu -v",
+      "passed": 6,
+      "failed": 0,
+      "reported_wall_time_s": 82.862
+    },
+    {
+      "name": "GPU GDF and reciprocal-memory suites",
+      "command": "python -m unittest pbc.gpu.tests.test_gdf_gpu pbc.gpu.tests.test_gdf_one_electron_streaming pbc.gpu.tests.test_gdf_reciprocal_memory -v",
+      "passed": 44,
+      "failed": 0,
+      "reported_wall_time_s": 556.061
+    },
+    {
+      "name": "GPU RSDF suite",
+      "command": "python -m unittest pbc.gpu.tests.test_rsdf_gpu -v",
+      "passed": 25,
+      "failed": 0,
+      "reported_wall_time_s": 438.818
+    },
+    {
+      "name": "GPU target, nuclear-response and Z-vector helpers",
+      "command": "python -m unittest pbc.gpu.tests.test_target_workspace_gpu pbc.gpu.tests.test_nuclear_response_gpu pbc.gpu.tests.test_zvector_gpu -v",
+      "passed": 12,
+      "failed": 0,
+      "reported_wall_time_s": 0.295
+    },
+    {
+      "name": "GPU package boundary",
+      "command": "python -m unittest pbc.gpu.tests.test_package_boundary -v",
+      "passed": 4,
+      "failed": 0,
+      "reported_wall_time_s": 0.003
+    }
+  ],
+  "totals": {
+        "benchmark_tests_passed": 19,
+    "cpu_tests_passed": 49,
+    "gpu_tests_passed": 91,
+    "failures": 0
+  },
+  "static_checks": {
+    "compileall": "passed",
+    "git_diff_check": "passed"
+  },
+  "cpu_h2_evidence_smoke": {
+    "device": "cpu",
+    "df_backend": "fftdf",
+    "execution_status": "complete",
+    "accuracy_status": "not_requested",
+    "translation_sum_norm_ha_per_bohr": 1.3022190956751833e-14,
+    "matching_fingerprint_second_run": "skipped_complete",
+    "software_versions_recorded": true
+  },
+  "translation_sum_diagnosis": {
+    "evidence": "translation_sum_diagnosis_water8.json",
+    "analytic_term_missing": false,
+    "cause": "target-DFA uniform-grid egg-box error",
+    "analytic_minus_rigid_fd_ha_per_bohr": 3.299866162265186e-08,
+    "gdf_rsdf_backend_specific": false
+  }
+}

@@ -20,6 +20,21 @@ FFTDF는 기본 provider이며 GDF/RSDF는 각각 `density_fit()`과
 `rs_density_fit()`으로 선택할 수 있다. GPU route는 CPU DC-DFT 계산으로 조용히
 fallback하지 않는다.
 
+Source HF는 GDF/RSDF를 유지하면서 fixed-density target DFA의 XC만 multigrid로
+바꾸려면 다음 explicit opt-in을 사용한다.
+
+```python
+mf = dft.DCKRKS(cell, kpts=kpts, xc="R2SCAN").rs_density_fit("gth-szv")
+mf.set_target_integrator("multigrid_xc")
+```
+
+이 mode에서 source HF J/K, target J, hcore/PP와 source Z-vector response는 선택한
+GDF/RSDF가 계속 소유하고 target XC energy/Fock/gradient만 GPU
+`multigrid_v2`가 담당한다. `multigrid_j_xc`도 제공하지만 target J representation까지
+reciprocal multigrid로 바꾸므로 finite auxiliary GDF/RSDF와 같은 에너지를 보장하지
+않는 diagnostic opt-in이다. 두 mode 모두 Gamma/sampled-k PBE/r2SCAN analytic-FD로
+검증됐으며 CPU나 uniform NumInt로 silent fallback하지 않는다.
+
 GDF의 기본 `setup_mode="native"`는 GPU4PySCF CUDA builder로 central CDERI를 만들고,
 `get_j_e1`/`get_k_e1` 및 DC-DFT bilinear Z response를 source-contracted GPU derivative
 kernel로 계산한다. Bilinear Z response의 기본 `gdf_bilinear_mode="one_pass"`는 Gamma와
@@ -91,6 +106,7 @@ examples/05_gpu_timing_breakdown.py
 examples/06_device_and_fallback_report.py
 examples/07_mgga_scan_r2scan.py
 examples/08_rsdf_gpu_energy_gradient.py
+examples/09_gdf_target_multigrid.py
 ```
 
 자세한 ownership과 equation mapping은 workspace의 `docs/implementation`을 참조한다.

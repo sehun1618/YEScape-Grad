@@ -18,10 +18,13 @@ if str(BENCHMARK) not in sys.path:
     sys.path.insert(0, str(BENCHMARK))
 
 from dcdft_benchmark import (  # noqa: E402
+    _configure_gradient,
     _validate_config,
     build_cell,
+    build_method,
     evaluate_energy,
     resolve_system,
+    synchronize,
     write_json,
 )
 
@@ -29,12 +32,87 @@ from dcdft_benchmark import (  # noqa: E402
 DEFAULT_PHASES = (-0.125, 0.0, 0.125, 0.25, 0.5, 0.75, 0.875, 1.0)
 
 
-def diagnose(input_path: Path, axis: int) -> dict[str, object]:
+def _sum_vector(value):
+    if value is None:
+        return None
+    array = np.asarray(value, dtype=float)
+    return np.sum(array, axis=0)
+
+
+def _component_translation_sums(result):
+    contributions = result.contributions
+    fields = {
+        "one_electron": getattr(result, "one_electron", None),
+        "target_coulomb": getattr(result, "target_coulomb", None),
+        "target_xc": getattr(result, "target_xc", None),
+        "target_overlap_pulay": getattr(
+            result, "target_overlap_pulay", None
+        ),
+        "nuclear": getattr(result, "nuclear", None),
+        "fused_target_j_z_bilinear": getattr(
+            result, "fused_target_j_z_bilinear", None
+        ),
+        "explicit_channel": contributions.explicit,
+        "response_channel": contributions.response,
+        "coupled_channel": contributions.coupled,
+        "total": contributions.total,
+    }
+    return {name: _sum_vector(value) for name, value in fields.items()}
+
+
+def _analytic_gradient(config, system, coordinates, device, backend):
+    cell = build_cell(config, system, coordinates)
+    method, _kpts = build_method(config, cell, device, backend)
+    synchronize(device)
+    start = perf_counter()
+    energy = float(method.kernel())
+    gradient_object = method.nuc_grad_method()
+    _configure_gradient(config, gradient_object)
+    gradient = np.asarray(gradient_object.kernel(), dtype=float)
+    synchronize(device)
+    return {
+        "energy_ha": energy,
+        "gradient_ha_per_bohr": gradient,
+        "translation_sum_vector_ha_per_bohr": np.sum(gradient, axis=0),
+        "component_translation_sums_ha_per_bohr": (
+            _component_translation_sums(gradient_object.result)
+        ),
+        "wall_time_s": perf_counter() - start,
+    }
+
+
+def diagnose(
+    input_path: Path,
+    axis: int,
+    *,
+    slope_step_bohr: float = 1.0e-4,
+    center_phase: float = 0.0,
+    ke_cutoff_ha: float | None = None,
+    xc: str | None = None,
+    df_backend: str | None = None,
+    target_integrator: str | None = None,
+    target_multigrid_mesh: tuple[int, int, int] | None = None,
+) -> dict[str, object]:
     config = json.loads(input_path.read_text(encoding="utf-8"))
+    if ke_cutoff_ha is not None:
+        config.pop("mesh", None)
+        config["ke_cutoff_ha"] = float(ke_cutoff_ha)
+    if xc is not None:
+        config["xc"] = str(xc)
+    if df_backend is not None:
+        config["df_backend"] = str(df_backend)
+    if target_integrator is not None:
+        config["target_integrator"] = str(target_integrator)
+    if target_multigrid_mesh is not None:
+        config["target_multigrid_mesh"] = [
+            int(value) for value in target_multigrid_mesh
+        ]
     device, backend = _validate_config(config)
     system = resolve_system(config, input_path.parent)
     cell = build_cell(config, system)
     grid_step = np.asarray(system.lattice_bohr[axis]) / int(cell.mesh[axis])
+    grid_step_norm = float(np.linalg.norm(grid_step))
+    direction = grid_step / grid_step_norm
 
     records = []
     total_start = perf_counter()
@@ -73,16 +151,58 @@ def diagnose(input_path: Path, axis: int) -> dict[str, object]:
         energies[plus_index] - energies[minus_index]
     ) / translation_interval_bohr
 
+    slope_step_bohr = float(slope_step_bohr)
+    if slope_step_bohr <= 0.0:
+        raise ValueError("slope_step_bohr must be positive")
+    center_phase = float(center_phase)
+    center_coordinates = (
+        system.coordinates_bohr + center_phase * grid_step
+    )
+    displacement = slope_step_bohr * direction
+    small_minus = evaluate_energy(
+        config,
+        system,
+        center_coordinates - displacement,
+        device,
+        backend,
+    )
+    small_plus = evaluate_energy(
+        config,
+        system,
+        center_coordinates + displacement,
+        device,
+        backend,
+    )
+    small_step_slope = (
+        small_plus.energy_ha - small_minus.energy_ha
+    ) / (2.0 * slope_step_bohr)
+    analytic = _analytic_gradient(
+        config,
+        system,
+        center_coordinates,
+        device,
+        backend,
+    )
+    analytic_directional_sum = float(
+        np.dot(analytic["translation_sum_vector_ha_per_bohr"], direction)
+    )
+
     return {
-        "schema": "pbc_dcdft_rigid_translation_eggbox_v1",
+        "schema": "pbc_dcdft_rigid_translation_eggbox_v2",
         "input": str(input_path),
         "xc": str(config.get("xc", "PBE")),
         "device": device,
         "df_backend": backend,
+        "target_integrator": str(
+            config.get("target_integrator", "uniform")
+        ),
+        "target_multigrid_mesh": config.get("target_multigrid_mesh"),
         "axis": "xyz"[axis],
         "mesh": [int(value) for value in cell.mesh],
+        "ke_cutoff_ha": getattr(cell, "ke_cutoff", None),
         "grid_step_bohr": grid_step,
-        "grid_step_norm_bohr": float(np.linalg.norm(grid_step)),
+        "grid_step_norm_bohr": grid_step_norm,
+        "translation_direction": direction,
         "energy_peak_to_peak_ha": float(np.ptp(energies)),
         "one_grid_step_closure_error_ha": float(
             energies[one_index] - energies[zero_index]
@@ -92,6 +212,19 @@ def diagnose(input_path: Path, axis: int) -> dict[str, object]:
         ),
         "local_slope_half_width_phase": slope_half_width_phase,
         "local_rigid_translation_slope_ha_per_bohr": float(local_slope),
+        "small_step_bohr": slope_step_bohr,
+        "analytic_center_phase": center_phase,
+        "analytic_center_translation_bohr": center_phase * grid_step,
+        "small_step_rigid_translation_slope_ha_per_bohr": float(
+            small_step_slope
+        ),
+        "analytic_directional_translation_sum_ha_per_bohr": (
+            analytic_directional_sum
+        ),
+        "analytic_minus_small_step_fd_ha_per_bohr": float(
+            analytic_directional_sum - small_step_slope
+        ),
+        "analytic": analytic,
         "records": records,
         "wall_time_s": perf_counter() - total_start,
     }
@@ -102,11 +235,40 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--axis", choices=("x", "y", "z"), default="z")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--slope-step-bohr", type=float, default=1.0e-4)
+    parser.add_argument("--center-phase", type=float, default=0.0)
+    parser.add_argument("--ke-cutoff-ha", type=float)
+    parser.add_argument("--xc")
+    parser.add_argument("--df-backend", choices=("fftdf", "gdf", "rsdf"))
+    parser.add_argument(
+        "--target-integrator",
+        choices=("uniform", "multigrid_xc", "multigrid_j_xc"),
+    )
+    parser.add_argument(
+        "--target-multigrid-mesh",
+        nargs=3,
+        type=int,
+        metavar=("NX", "NY", "NZ"),
+    )
     args = parser.parse_args()
 
     input_path = args.input.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
-    result = diagnose(input_path, "xyz".index(args.axis))
+    result = diagnose(
+        input_path,
+        "xyz".index(args.axis),
+        slope_step_bohr=args.slope_step_bohr,
+        center_phase=args.center_phase,
+        ke_cutoff_ha=args.ke_cutoff_ha,
+        xc=args.xc,
+        df_backend=args.df_backend,
+        target_integrator=args.target_integrator,
+        target_multigrid_mesh=(
+            None
+            if args.target_multigrid_mesh is None
+            else tuple(args.target_multigrid_mesh)
+        ),
+    )
     write_json(output_path, result)
     print(f"peak-to-peak: {result['energy_peak_to_peak_ha']:.9e} Ha")
     print(
@@ -116,6 +278,12 @@ def main() -> int:
     print(
         "local rigid-translation slope: "
         f"{result['local_rigid_translation_slope_ha_per_bohr']:.9e} Ha/Bohr"
+    )
+    print(
+        "analytic / small-step FD: "
+        f"{result['analytic_directional_translation_sum_ha_per_bohr']:.9e} / "
+        f"{result['small_step_rigid_translation_slope_ha_per_bohr']:.9e} "
+        "Ha/Bohr"
     )
     print(f"output: {output_path}")
     return 0

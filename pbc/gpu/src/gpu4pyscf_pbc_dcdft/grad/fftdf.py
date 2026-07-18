@@ -8,6 +8,7 @@ from time import perf_counter
 import cupy as cp
 import numpy as np
 from pyscf.pbc.grad import krhf as cpu_krhf_grad
+from pyscf_pbc_dcdft.dft.target_integrator import target_owns_coulomb
 from pyscf_pbc_dcdft.grad.assembly import GradientContributions
 
 from ..df.fft import fft_jk_derivative
@@ -40,6 +41,8 @@ class FFTDFGradientResult:
     ke_cutoff_ha: float
     nkpts: int
     target_fock_workspace_reused: bool
+    target_integrator: str
+    target_integration_metadata: dict[str, object]
     timings_s: dict[str, float]
 
     @property
@@ -54,7 +57,13 @@ class FFTDFGradientResult:
             "nkpts": self.nkpts,
             "mesh": list(self.mesh),
             "ke_cutoff_ha": self.ke_cutoff_ha,
-            "target_numint_backend": "numint",
+            "target_integrator": self.target_integrator,
+            "target_integration": dict(self.target_integration_metadata),
+            "target_numint_backend": (
+                "numint"
+                if self.target_integrator == "uniform"
+                else "multigrid_v2"
+            ),
             "target_fock_workspace_reused": (
                 self.target_fock_workspace_reused
             ),
@@ -179,8 +188,10 @@ def fftdf_gpu_gradient(
         )
         progress_callback("gradient_target_explicit", state="started")
     start = perf_counter()
-    target_coulomb = contract_coulomb_full_derivative(
-        context, source_jk.coulomb
+    target_coulomb = (
+        cp.zeros((context.cell.natm, 3), dtype=cp.float64)
+        if target_owns_coulomb(context.target_evaluation.target_integrator)
+        else contract_coulomb_full_derivative(context, source_jk.coulomb)
     )
     target_xc = target_xc_atom_gradient(context)
     target_coulomb_xc = target_coulomb + target_xc
@@ -264,6 +275,10 @@ def fftdf_gpu_gradient(
         ke_cutoff_ha=float(context.cell.ke_cutoff),
         nkpts=context.nkpts,
         target_fock_workspace_reused=target_fock_workspace_reused,
+        target_integrator=context.target_evaluation.target_integrator,
+        target_integration_metadata=dict(
+            context.target_evaluation.ownership
+        ),
         timings_s=timings,
     )
     timings["final_host_reporting"] = perf_counter() - start

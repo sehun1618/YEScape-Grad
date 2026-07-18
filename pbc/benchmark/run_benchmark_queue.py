@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import contextmanager
 from datetime import datetime
+import fcntl
 import json
 import os
 import re
@@ -17,6 +19,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
+
+import evidence
 
 
 HERE = Path(__file__).resolve().parent
@@ -225,7 +229,7 @@ def _as_choices(job: Mapping[str, Any], plural: str, singular: str, default: str
 
 
 def expand_jobs(queue: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Expand each job's device/backend Cartesian product."""
+    """Expand each job's device/backend/target-integrator product."""
 
     defaults = dict(queue.get("defaults", {}))
     runs: list[dict[str, Any]] = []
@@ -235,16 +239,32 @@ def expand_jobs(queue: Mapping[str, Any]) -> list[dict[str, Any]]:
         merged = {**defaults, **raw_job}
         devices = _as_choices(merged, "devices", "device", "cpu")
         backends = _as_choices(merged, "df_backends", "df_backend", "fftdf")
+        integrators = _as_choices(
+            merged,
+            "target_integrators",
+            "target_integrator",
+            "uniform",
+        )
         base_name = _slug(str(merged.get("name", f"job_{job_index:03d}")))
         for device in devices:
             for backend in backends:
-                run = dict(merged)
-                for key in ("devices", "df_backends", "enabled"):
-                    run.pop(key, None)
-                run["device"] = device
-                run["df_backend"] = backend
-                run["name"] = f"{base_name}_{device}_{backend}"
-                runs.append(run)
+                for integrator in integrators:
+                    run = dict(merged)
+                    for key in (
+                        "devices",
+                        "df_backends",
+                        "target_integrators",
+                        "enabled",
+                    ):
+                        run.pop(key, None)
+                    run["device"] = device
+                    run["df_backend"] = backend
+                    run["target_integrator"] = integrator
+                    suffix = (
+                        f"_{integrator}" if integrator != "uniform" else ""
+                    )
+                    run["name"] = f"{base_name}_{device}_{backend}{suffix}"
+                    runs.append(run)
     return runs
 
 
@@ -257,13 +277,38 @@ def _resolve_atom_file(run: dict[str, Any], queue_dir: Path) -> None:
     run["atom_file"] = str(path)
 
 
-def _completed_report(path: Path) -> bool:
+def _completed_report(path: Path, expected_fingerprint: str) -> bool:
     if not path.is_file():
         return False
     try:
-        return _read_json(path).get("status") == "complete"
+        report = _read_json(path)
     except (OSError, json.JSONDecodeError):
         return False
+    execution_status = report.get("execution_status", report.get("status"))
+    report_evidence = report.get("evidence") or {}
+    return (
+        execution_status == "complete"
+        and report_evidence.get("fingerprint_sha256")
+        == str(expected_fingerprint)
+    )
+
+
+@contextmanager
+def _case_lock(case_dir: Path):
+    """Hold an exclusive case lock for the complete child lifetime."""
+
+    case_dir.mkdir(parents=True, exist_ok=True)
+    path = case_dir / ".queue.lock"
+    with path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _case_environment(run: Mapping[str, Any]) -> dict[str, str]:
@@ -323,6 +368,7 @@ def _run_case(
             "archived_previous_artifacts": (
                 str(archived) if archived is not None else None
             ),
+            "evidence": run.get("evidence"),
         }
         _write_json(attempt_path, attempt)
         try:
@@ -342,10 +388,22 @@ def _run_case(
     report_path = case_dir / "report.json"
     report = _read_optional_json(report_path) or {}
     report_identity_matches = report.get("run_identity") == run_identity
-    if not report_identity_matches:
+    expected_fingerprint = (run.get("evidence") or {}).get(
+        "fingerprint_sha256"
+    )
+    report_fingerprint = (report.get("evidence") or {}).get(
+        "fingerprint_sha256"
+    )
+    report_fingerprint_matches = (
+        expected_fingerprint is not None
+        and report_fingerprint == expected_fingerprint
+    )
+    if not (report_identity_matches and report_fingerprint_matches):
         report = {}
-    if report and returncode == 0:
-        status = str(report.get("status", "failed"))
+    if report:
+        status = str(
+            report.get("execution_status", report.get("status", "failed"))
+        )
     elif returncode < 0:
         status = "interrupted"
     else:
@@ -360,6 +418,9 @@ def _run_case(
     attempt["finished_at_kst"] = _now_kst()
     attempt["returncode"] = int(returncode)
     attempt["report_identity_matches"] = bool(report_identity_matches)
+    attempt["report_fingerprint_matches"] = bool(
+        report_fingerprint_matches
+    )
     _write_json(attempt_path, attempt)
     return {
         "returncode": returncode,
@@ -385,9 +446,14 @@ def _summary_row(
     return {
         "run_id": run_id,
         "status": report.get("status", queue_state),
+        "execution_status": report.get(
+            "execution_status", report.get("status", queue_state)
+        ),
+        "accuracy_status": report.get("accuracy_status", "not_requested"),
         "queue_state": queue_state,
         "device": report.get("device"),
         "df_backend": report.get("df_backend"),
+        "target_integrator": report.get("target_integrator", "uniform"),
         "xc": report.get("xc"),
         "natoms": system.get("natoms"),
         "nkpts": settings.get("nkpts"),
@@ -402,6 +468,19 @@ def _summary_row(
             "max_abs_error_ha_per_bohr"
         ),
         "rms_error_ha_per_bohr": accuracy.get("rms_error_ha_per_bohr"),
+        "net_gradient_norm_ha_per_bohr": (
+            (report.get("gradient_summary") or {}).get(
+                "translation_sum_norm_ha_per_bohr"
+            )
+        ),
+        "fingerprint_sha256": (
+            (report.get("evidence") or {}).get("fingerprint_sha256")
+        ),
+        "source_git_commit": (
+            ((report.get("evidence") or {}).get("source") or {}).get(
+                "git_commit"
+            )
+        ),
         "host_peak_rss_bytes": memory.get("host_peak_rss_bytes"),
         "peak_observed_cupy_pool_reserved_bytes": memory.get(
             "peak_observed_cupy_pool_reserved_bytes"
@@ -430,6 +509,55 @@ def _write_summary(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _run_or_reuse_case(
+    run: dict[str, Any],
+    case_dir: Path,
+    run_id: str,
+    *,
+    overwrite: bool,
+) -> dict[str, Any]:
+    expected_fingerprint = run["evidence"]["fingerprint_sha256"]
+    with _case_lock(case_dir) as acquired:
+        if not acquired:
+            print(f"[{run_id}] skip: case lock held by another queue")
+            return {
+                "report": {},
+                "state": "skipped_locked",
+                "run_identity": None,
+            }
+
+        report_path = case_dir / "report.json"
+        lifecycle = _reconcile_previous_attempt(case_dir)
+        if lifecycle == "running":
+            attempt = _read_optional_json(case_dir / "attempt.json") or {}
+            print(f"[{run_id}] skip: active attempt")
+            return {
+                "report": {},
+                "state": "skipped_running",
+                "run_identity": attempt.get("run_identity"),
+            }
+        if (
+            _completed_report(report_path, expected_fingerprint)
+            and not overwrite
+        ):
+            report = _read_json(report_path)
+            print(f"[{run_id}] skip: matching complete report")
+            return {
+                "report": report,
+                "state": "skipped_complete",
+                "run_identity": report.get("run_identity"),
+            }
+
+        print(f"[{run_id}] run")
+        outcome = _run_case(run, case_dir, run_id)
+        print(f"[{run_id}] {outcome['status']}")
+        return {
+            "report": outcome["report"],
+            "state": outcome["status"],
+            "run_identity": outcome["run_identity"],
+        }
 
 
 def main() -> int:
@@ -463,9 +591,14 @@ def main() -> int:
 
     manifest: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
+    source_record = evidence.source_provenance()
     runs = expand_jobs(queue)
     for index, run in enumerate(runs):
         _resolve_atom_file(run, queue_path.parent)
+        run["evidence"] = evidence.build_case_evidence(
+            run,
+            source=source_record,
+        )
         run_id = (
             f"{index:03d}_{_structure_slug(run)}_{_slug(run['name'])}"
         )
@@ -473,33 +606,29 @@ def main() -> int:
             continue
         case_dir = output_root / run_id
         report_path = case_dir / "report.json"
-        lifecycle = _reconcile_previous_attempt(case_dir)
-        run_identity = None
-        if lifecycle == "running":
-            report = {}
-            state = "skipped_running"
-            attempt = _read_optional_json(case_dir / "attempt.json") or {}
-            run_identity = attempt.get("run_identity")
-            print(f"[{run_id}] skip: active attempt")
-        elif _completed_report(report_path) and not args.overwrite:
-            report = _read_json(report_path)
-            state = "skipped_complete"
-            run_identity = report.get("run_identity")
-            print(f"[{run_id}] skip: complete")
-        else:
-            print(f"[{run_id}] run")
-            outcome = _run_case(run, case_dir, run_id)
-            report = outcome["report"]
-            state = outcome["status"]
-            run_identity = outcome["run_identity"]
-            print(f"[{run_id}] {state}")
+        outcome = _run_or_reuse_case(
+            run,
+            case_dir,
+            run_id,
+            overwrite=args.overwrite,
+        )
+        report = outcome["report"]
+        state = outcome["state"]
+        run_identity = outcome["run_identity"]
         manifest.append(
             {
                 "run_id": run_id,
                 "state": state,
                 "device": run.get("device"),
                 "df_backend": run.get("df_backend"),
+                "target_integrator": run.get(
+                    "target_integrator", "uniform"
+                ),
                 "run_identity": run_identity,
+                "fingerprint_sha256": run["evidence"][
+                    "fingerprint_sha256"
+                ],
+                "source_git_commit": source_record.get("git_commit"),
                 "report_path": str(report_path),
                 "progress_path": str(case_dir / "progress.json"),
             }
@@ -522,7 +651,11 @@ def main() -> int:
         )
         _write_summary(output_root / "summary.csv", summary_rows)
 
-    failures = sum(row.get("status") != "complete" for row in summary_rows)
+    failures = sum(
+        row.get("execution_status") != "complete"
+        or row.get("accuracy_status") == "fail"
+        for row in summary_rows
+    )
     print(f"output: {output_root}")
     print(f"cases: {len(summary_rows)}, failed: {failures}")
     return 1 if failures else 0

@@ -27,6 +27,10 @@ class TargetEvaluationWorkspace:
     hcore: cp.ndarray
     veff: cp.ndarray
     target_fock: cp.ndarray
+    target_integrator: str
+    target_numint: object | None
+    ownership: dict[str, object]
+    target_multigrid_mesh: tuple[int, int, int]
     input_signature: str
     source_state: tuple[int, int, int, float]
 
@@ -42,6 +46,10 @@ class TargetEvaluationWorkspace:
         density,
         hcore,
         veff,
+        target_integrator="uniform",
+        target_numint=None,
+        ownership=None,
+        target_multigrid_mesh=None,
     ):
         """Capture one internally consistent energy/Fock evaluation."""
 
@@ -57,8 +65,23 @@ class TargetEvaluationWorkspace:
             hcore=hcore_array,
             veff=veff_array,
             target_fock=hcore_array + veff_array,
+            target_integrator=str(target_integrator),
+            target_numint=target_numint,
+            ownership={} if ownership is None else dict(ownership),
+            target_multigrid_mesh=tuple(
+                int(value)
+                for value in (
+                    np.asarray(source_mf.cell.mesh).reshape(3)
+                    if target_multigrid_mesh is None
+                    else target_multigrid_mesh
+                )
+            ),
             input_signature=_input_signature(
-                source_mf.cell, kpts=kpts, xc=xc
+                source_mf.cell,
+                kpts=kpts,
+                xc=xc,
+                target_integrator=target_integrator,
+                target_multigrid_mesh=target_multigrid_mesh,
             ),
             source_state=_source_state(source_mf),
         )
@@ -74,12 +97,22 @@ class TargetEvaluationWorkspace:
             return False
         if self.xc != str(getattr(dc_mf, "xc", "")):
             return False
+        if self.target_integrator != str(
+            getattr(dc_mf, "target_integrator", "uniform")
+        ):
+            return False
         if self.source_state != _source_state(self.source_mf):
             return False
         return self.input_signature == _input_signature(
             dc_mf.cell,
             kpts=getattr(dc_mf, "kpts", self.kpts),
             xc=dc_mf.xc,
+            target_integrator=getattr(
+                dc_mf, "target_integrator", "uniform"
+            ),
+            target_multigrid_mesh=getattr(
+                dc_mf, "target_multigrid_mesh", None
+            ),
         )
 
 
@@ -102,7 +135,14 @@ def _source_state(source_mf) -> tuple[int, int, int, float]:
     )
 
 
-def _input_signature(cell, *, kpts, xc) -> str:
+def _input_signature(
+    cell,
+    *,
+    kpts,
+    xc,
+    target_integrator="uniform",
+    target_multigrid_mesh=None,
+) -> str:
     payload = (
         tuple(cell.atom_symbol(index) for index in range(cell.natm)),
         np.asarray(cell.atom_coords(unit="Bohr"), dtype=np.float64),
@@ -114,6 +154,15 @@ def _input_signature(cell, *, kpts, xc) -> str:
         float(cell.precision),
         float(cell.omega),
         str(xc),
+        str(target_integrator),
+        (
+            None
+            if target_multigrid_mesh is None
+            else tuple(
+                int(value)
+                for value in np.asarray(target_multigrid_mesh).reshape(3)
+            )
+        ),
     )
     return hashlib.sha256(repr(_freeze(payload)).encode("utf-8")).hexdigest()
 

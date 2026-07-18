@@ -1,5 +1,15 @@
 # Equation-to-code map
 
+## Target multigrid ownership
+
+| Equation term | CPU/shared policy | GPU implementation |
+| --- | --- | --- |
+| target integrator mode | `pyscf_pbc_dcdft.dft.target_integrator` | `gpu4pyscf_pbc_dcdft.dft.base` |
+| target J/XC energy and Fock | uniform reference | `gpu4pyscf_pbc_dcdft.dft.target_numint` |
+| target $dJ+dE_{xc}$ ownership | selected-DF or combined multigrid policy | `gpu4pyscf_pbc_dcdft.grad.target` |
+| source HF identity/workspace | `pyscf_pbc_dcdft.dft.state` | `gpu4pyscf_pbc_dcdft.dft.workspace` |
+| M2 selected-DF $dJ$ suppression | shared ownership predicate | `gpu4pyscf_pbc_dcdft.grad.gdf`, `grad.fftdf` |
+
 이 문서는 theory equation과 production source owner를 연결한다. 수식은
 `docs/theory/PBC_DC_DFT_Gradient_Theory.tex`의 label을 기준으로 하며, 경로는 각
 distribution의 `src` directory에 상대적이다. 표에 없는 experimental 또는 archived

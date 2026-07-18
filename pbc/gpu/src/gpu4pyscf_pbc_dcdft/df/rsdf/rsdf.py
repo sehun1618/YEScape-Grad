@@ -201,6 +201,7 @@ class RSDF(GDF):
                 "and fused target-J/Z-bilinear adjoint contraction"
             ),
             "response_mode": "native_source_native_metric_fused_adjoint",
+            "jk_contraction_metadata": self._dc_jk_contraction_metadata,
             "silent_cpu_fallback": False,
             "host_boundaries": [
                 self._central_host_boundary(),

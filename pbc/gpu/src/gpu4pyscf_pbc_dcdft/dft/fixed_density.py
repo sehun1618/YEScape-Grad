@@ -44,6 +44,8 @@ def evaluate_energy(
     kpts,
     kpoint_mode: bool,
     with_df,
+    target_integrator="uniform",
+    target_multigrid_mesh=None,
 ) -> tuple[DCEnergyResult, Any]:
     """Evaluate the target DFA energy using CuPy density and Fock arrays."""
 
@@ -56,12 +58,16 @@ def evaluate_energy(
         with_df=with_df,
     )
     hcore = cp.asarray(evaluate_target_hcore(target))
-    veff = evaluate_target_veff(
+    target_evaluation = evaluate_target_veff(
         target,
         density,
         with_df=with_df,
         kpts=kpts,
+        target_integrator=target_integrator,
+        target_multigrid_mesh=target_multigrid_mesh,
     )
+    veff = target_evaluation.veff
+    target._dcdft_target_numint_metadata = target_evaluation.metadata
     if kpoint_mode:
         nkpts = len(normalize_kpts(kpts))
         one_electron = cp.einsum("kij,kji->", hcore, density) / nkpts
@@ -95,6 +101,7 @@ def evaluate_energy(
             "kpoint_mode": bool(kpoint_mode),
             "formula": "E_DFA[n_HF]",
             "target_numint": target_numint_metadata(target),
+            "target_integrator": target_evaluation.metadata["mode"],
             "silent_cpu_fallback": False,
         },
     )
@@ -107,5 +114,12 @@ def evaluate_energy(
         density=density,
         hcore=hcore,
         veff=veff,
+        target_integrator=target_evaluation.metadata["mode"],
+        target_numint=target_evaluation.numerical_integrator,
+        ownership=target_evaluation.metadata,
+        # Fingerprint the user setting, not the mesh resolved internally by
+        # multigrid.  The workspace still records the resolved cell mesh when
+        # this value is None.
+        target_multigrid_mesh=target_multigrid_mesh,
     )
     return result, target

@@ -10,6 +10,19 @@ from .. import df
 from ..lib.kpoints import is_gamma, normalize_kpts
 from ..scf import build_reference
 from .fixed_density import evaluate_energy
+from .state import (
+    invalidate_computed_state,
+    mark_current_state,
+    require_current_state,
+    state_is_current,
+    validate_restricted_input,
+    validate_restricted_occupations,
+)
+from .target_integrator import (
+    UNIFORM,
+    normalize_target_integrator,
+    normalize_target_multigrid_mesh,
+)
 
 
 class DCRestrictedBase(lib.StreamObject):
@@ -28,6 +41,8 @@ class DCRestrictedBase(lib.StreamObject):
         "verbose",
         "stdout",
         "max_memory",
+        "target_integrator",
+        "target_multigrid_mesh",
     }
     kpoint_mode = False
 
@@ -46,6 +61,8 @@ class DCRestrictedBase(lib.StreamObject):
         self.verbose = getattr(cell, "verbose", 0)
         self.stdout = getattr(cell, "stdout", None)
         self.max_memory = getattr(cell, "max_memory", 4000)
+        self.target_integrator = UNIFORM
+        self.target_multigrid_mesh = None
 
         self.converged = False
         self.e_tot = None
@@ -56,17 +73,40 @@ class DCRestrictedBase(lib.StreamObject):
         self.source_scf = None
         self.target_ks = None
         self.dc_energy_result = None
+        self._dcdft_input_signature = None
+
+    def set_target_integrator(self, mode=UNIFORM, *, mesh=None):
+        """Select the target quadrature policy.
+
+        CPU multigrid MGGA/sampled-k analytic derivatives do not currently
+        satisfy this package's target-gradient contract.  The CPU driver is
+        therefore the uniform reference and rejects GPU-only modes explicitly.
+        """
+
+        mode = normalize_target_integrator(mode)
+        if mode != UNIFORM:
+            raise NotImplementedError(
+                "CPU periodic DC-DFT supports target_integrator='uniform' "
+                "only; multigrid target routes are GPU-only in "
+                "gpu4pyscf-pbc-dcdft"
+            )
+        self.target_integrator = mode
+        self.target_multigrid_mesh = normalize_target_multigrid_mesh(mesh)
+        invalidate_computed_state(self)
+        return self
 
     def density_fit(self, auxbasis=None):
         """Select a GDF provider and return ``self`` like PySCF modifiers."""
 
         self.with_df = df.GDF(self.cell, kpts=self.kpts, auxbasis=auxbasis)
+        invalidate_computed_state(self)
         return self
 
     def fft_density_fit(self, *, mesh=None):
         """Select FFTDF, optionally with an explicit mesh, and return ``self``."""
 
         self.with_df = df.FFTDF(self.cell, kpts=self.kpts, mesh=mesh)
+        invalidate_computed_state(self)
         return self
 
     def rs_density_fit(self, auxbasis=None):
@@ -80,6 +120,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.with_df = df.RSDF(
             self.cell, kpts=self.kpts, auxbasis=auxbasis
         )
+        invalidate_computed_state(self)
         return self
 
     def _build_reference(self):
@@ -99,11 +140,18 @@ class DCRestrictedBase(lib.StreamObject):
 
         if kwargs:
             self.set(**kwargs)
+        invalidate_computed_state(self)
+        validate_restricted_input(self)
         reference = self._build_reference()
         reference.verbose = self.verbose
         reference.kernel(dm0=dm0)
         if not reference.converged:
             raise RuntimeError("HF reference did not converge; DC-DFT energy is undefined")
+        validate_restricted_occupations(
+            reference.mo_occ,
+            nkpts=len(self.kpts),
+            nelectron=int(self.cell.nelectron),
+        )
 
         result, target = evaluate_energy(
             reference,
@@ -111,6 +159,8 @@ class DCRestrictedBase(lib.StreamObject):
             kpts=self.kpts,
             kpoint_mode=self.kpoint_mode,
             with_df=self.with_df,
+            target_integrator=self.target_integrator,
+            target_multigrid_mesh=self.target_multigrid_mesh,
         )
         self.source_scf = reference
         self.target_ks = target
@@ -121,13 +171,13 @@ class DCRestrictedBase(lib.StreamObject):
         self.mo_coeff = reference.mo_coeff
         self.mo_occ = reference.mo_occ
         self.mo_energy = reference.mo_energy
+        mark_current_state(self)
         return result.energy
 
     def make_rdm1(self, mo_coeff=None, mo_occ=None):
         """Return the converged HF density used by the target DFA."""
 
-        if self.source_scf is None:
-            raise RuntimeError("run kernel() before requesting the HF density")
+        require_current_state(self)
         return self.source_scf.make_rdm1(mo_coeff=mo_coeff, mo_occ=mo_occ)
 
     def nuc_grad_method(self):
@@ -135,6 +185,7 @@ class DCRestrictedBase(lib.StreamObject):
 
         from ..grad import DCKGradients, DCGradients
 
+        require_current_state(self)
         cls = DCKGradients if self.kpoint_mode else DCGradients
         return cls(self)
 
@@ -162,13 +213,19 @@ class DCRestrictedBase(lib.StreamObject):
             "xc": self.xc,
             "nkpts": len(self.kpts),
             "df": capability,
+            "target_integrator": self.target_integrator,
+            "target_multigrid_mesh": (
+                None
+                if self.target_multigrid_mesh is None
+                else [int(value) for value in self.target_multigrid_mesh]
+            ),
             "mesh": [int(value) for value in self.cell.mesh],
             "ke_cutoff_ha": (
                 None
                 if self.cell.ke_cutoff is None
                 else float(self.cell.ke_cutoff)
             ),
-            "energy_complete": True,
+            "energy_complete": state_is_current(self),
             "analytic_gradient_complete": bool(
                 capability.get("analytic_gradient", False)
             ),

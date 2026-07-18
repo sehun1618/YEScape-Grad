@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from time import perf_counter
+
 import cupy as cp
 import numpy as np
+from gpu4pyscf.pbc.dft import multigrid_v2
 from gpu4pyscf.pbc.dft import numint as gpu_numint
 from gpu4pyscf.pbc.grad.krks import (
     _d1_dot_,
@@ -11,6 +14,11 @@ from gpu4pyscf.pbc.grad.krks import (
     _tau_grad_dot_,
 )
 from ..dft.target_numint import evaluate_target_hcore, evaluate_target_veff
+from pyscf_pbc_dcdft.dft.target_integrator import (
+    MULTIGRID_J_XC,
+    MULTIGRID_XC,
+    UNIFORM,
+)
 
 
 def target_fock_kpts(context, *, return_reuse=False):
@@ -22,14 +30,15 @@ def target_fock_kpts(context, *, return_reuse=False):
         return (fock, True) if return_reuse else fock
 
     hcore = cp.asarray(evaluate_target_hcore(context.target_ks))
-    veff = cp.asarray(
-        evaluate_target_veff(
-            context.target_ks,
-            context.source_mf.make_rdm1(),
-            with_df=context.dc_mf.with_df,
-            kpts=context.kpts,
-        )
+    evaluation = evaluate_target_veff(
+        context.target_ks,
+        context.source_mf.make_rdm1(),
+        with_df=context.dc_mf.with_df,
+        kpts=context.kpts,
+        target_integrator=context.dc_mf.target_integrator,
+        target_multigrid_mesh=context.dc_mf.target_multigrid_mesh,
     )
+    veff = cp.asarray(evaluation.veff)
     fock = _with_kpoint_axis(hcore) + _with_kpoint_axis(veff)
     return (fock, False) if return_reuse else fock
 
@@ -172,8 +181,43 @@ def contract_xc_row_derivative(context, row_derivative):
 
 
 def target_xc_atom_gradient(context):
-    """Return the target XC nuclear gradient as ``(Natom,3)`` on device."""
+    """Return the target numerical-integration gradient on device.
 
+    ``multigrid_xc`` returns XC only.  ``multigrid_j_xc`` returns the
+    combined target Coulomb plus XC derivative; callers must therefore omit
+    the selected-DF target-J derivative in the latter mode.
+    """
+
+    workspace = context.target_evaluation
+    mode = (
+        UNIFORM if workspace is None else workspace.target_integrator
+    )
+    if mode in {MULTIGRID_XC, MULTIGRID_J_XC}:
+        if workspace is None or workspace.target_numint is None:
+            raise RuntimeError(
+                "multigrid target gradient requires the energy workspace"
+            )
+        cp.cuda.Stream.null.synchronize()
+        evaluation_start = perf_counter()
+        value = multigrid_v2.get_veff_ip1(
+            workspace.target_numint,
+            context.target_ks.xc,
+            context.density,
+            hermi=1,
+            kpts=context.kpts,
+            with_j=(mode == MULTIGRID_J_XC),
+            with_pseudo_vloc_orbital_derivative=False,
+            verbose=context.dc_mf.verbose,
+        )
+        cp.cuda.Stream.null.synchronize()
+        workspace.ownership["gradient_evaluation_wall_time_s"] = float(
+            perf_counter() - evaluation_start
+        )
+        workspace.ownership["gradient_reused_energy_multigrid_tasks"] = True
+        # Upstream currently returns the per-cell derivative multiplied by Nk.
+        return cp.asarray(value) / context.nkpts
+    if mode != UNIFORM:
+        raise ValueError(f"unsupported target integrator {mode!r}")
     return contract_xc_row_derivative(
         context, target_xc_row_derivative(context)
     )

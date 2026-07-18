@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import cupy as cp
 import numpy as np
 from pyscf_pbc_dcdft.lib.kpoints import normalize_kpts
+from pyscf_pbc_dcdft.dft.state import require_current_state
 from ..dft.workspace import compatible_target_workspace
 
 
@@ -35,6 +36,7 @@ class RestrictedGradientContext:
 
     @classmethod
     def from_dc_method(cls, dc_mf):
+        require_current_state(dc_mf)
         source = getattr(dc_mf, "source_scf", None)
         target = getattr(dc_mf, "target_ks", None)
         if source is None or target is None or not dc_mf.converged:

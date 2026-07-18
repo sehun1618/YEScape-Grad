@@ -1,0 +1,72 @@
+{
+  "output_root": "results/water64_gdf_rsdf_multigrid_DZ_repaired",
+  "defaults": {
+    "atom_file": "structures/water64.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [
+      [12.4139, 0.0, 0.0],
+      [0.0, 12.4139, 0.0],
+      [0.0, 0.0, 12.4139]
+    ],
+    "lattice_unit": "Angstrom",
+    "basis": "DZVP-GTH",
+    "pseudo": {
+      "H": "GTH-SCAN-q1",
+      "O": "GTH-SCAN-q6"
+    },
+    "auxbasis": "DZVP-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 500.0,
+    "precision": 1e-9,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-8,
+    "conv_tol_grad": 1e-8,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "vram_sample_interval_s": 0.05,
+    "device_warmup": true,
+    "z_solver": "matrix_free",
+    "z_tolerance": 1e-12,
+    "z_residual_tolerance": 1e-8,
+    "z_max_cycle": 80,
+    "gdf_bilinear_mode": "one_pass_fused",
+    "run_fd": false,
+    "fd_step_bohr": 0.0001,
+    "fd_atoms": "all",
+    "fd_axes": "all"
+  },
+  "jobs": [
+    {
+      "name": "gdf_only",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "uniform"
+    },
+    {
+      "name": "rsdf_only",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "uniform"
+    },
+    {
+      "name": "gdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc"
+    },
+    {
+      "name": "rsdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "multigrid_xc"
+    }
+  ]
+}

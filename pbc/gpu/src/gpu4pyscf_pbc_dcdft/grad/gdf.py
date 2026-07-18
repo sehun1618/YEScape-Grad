@@ -15,6 +15,7 @@ from time import perf_counter
 import cupy as cp
 import numpy as np
 from pyscf.pbc.grad import krhf as cpu_krhf_grad
+from pyscf_pbc_dcdft.dft.target_integrator import target_owns_coulomb
 from pyscf_pbc_dcdft.grad.assembly import GradientContributions
 
 from ..df.gdf.contracted_derivative import (
@@ -90,6 +91,8 @@ class GDFGradientResult:
     df_response_profile: dict[str, object] | None
     native_one_electron: bool
     target_fock_workspace_reused: bool
+    target_integrator: str
+    target_integration_metadata: dict[str, object]
     timings_s: dict[str, float]
 
     @property
@@ -220,7 +223,13 @@ class GDFGradientResult:
             "metric_mesh": (
                 None if self.metric_mesh is None else list(self.metric_mesh)
             ),
-            "target_numint_backend": "numint",
+            "target_integrator": self.target_integrator,
+            "target_integration": dict(self.target_integration_metadata),
+            "target_numint_backend": (
+                "numint"
+                if self.target_integrator == "uniform"
+                else "multigrid_v2"
+            ),
             "target_fock_workspace_reused": (
                 self.target_fock_workspace_reused
             ),
@@ -339,6 +348,15 @@ def _gaussian_df_gpu_gradient(
         progress_callback("gradient_target_fock_rhs", state="started")
     start = perf_counter()
     context = RestrictedGradientContext.from_dc_method(dc_mf)
+    multigrid_target_j = target_owns_coulomb(
+        context.target_evaluation.target_integrator
+    )
+    if multigrid_target_j and fused_two_electron:
+        # The fused kernel contains selected-DF target dJ in addition to the
+        # source-HF Z response.  M2 owns target dJ in multigrid, so retain only
+        # the source-HF one-pass contraction.
+        gdf_bilinear_mode = "one_pass"
+        fused_two_electron = False
     partitions = build_mo_partitions(context)
     target_fock, target_fock_workspace_reused = target_fock_kpts(
         context, return_reuse=True
@@ -432,7 +450,7 @@ def _gaussian_df_gpu_gradient(
         cderi_response = None
         jk_derivative = None
         target_coulomb = None
-        if not fused_two_electron:
+        if not fused_two_electron and not multigrid_target_j:
             if progress_callback is not None:
                 progress_callback("gdf_target_j_derivative", state="started")
             start = perf_counter()
@@ -464,14 +482,22 @@ def _gaussian_df_gpu_gradient(
                 dc_mf.with_df,
                 context.density,
                 transition_density,
-                observable_mode="fused",
+                observable_mode=(
+                    "resolved" if multigrid_target_j else "fused"
+                ),
                 validate_central_source=False,
             )
             fused_target_j_z_bilinear = (
-                cderi_response.coupled_target_j_bilinear
+                None
+                if multigrid_target_j
+                else cderi_response.coupled_target_j_bilinear
             )
             if fused_target_j_z_bilinear is None:
-                target_coulomb = cderi_response.target_coulomb
+                target_coulomb = (
+                    None
+                    if multigrid_target_j
+                    else cderi_response.target_coulomb
+                )
                 contracted_two_electron_response = (
                     cderi_response.restricted_hf_bilinear
                 )
@@ -542,8 +568,12 @@ def _gaussian_df_gpu_gradient(
                         f"{backend_name}_jk_device_contraction"
                     ],
                 )
-            target_coulomb = contract_coulomb_energy_derivative(
-                context.density, jk_derivative.coulomb
+            target_coulomb = (
+                None
+                if multigrid_target_j
+                else contract_coulomb_energy_derivative(
+                    context.density, jk_derivative.coulomb
+                )
             )
 
     if progress_callback is not None:
@@ -806,6 +836,10 @@ def _gaussian_df_gpu_gradient(
         df_response_profile=df_response_profile,
         native_one_electron=native_one_electron,
         target_fock_workspace_reused=target_fock_workspace_reused,
+        target_integrator=context.target_evaluation.target_integrator,
+        target_integration_metadata=dict(
+            context.target_evaluation.ownership
+        ),
         timings_s=timings,
     )
     timings["final_host_reporting"] = perf_counter() - start

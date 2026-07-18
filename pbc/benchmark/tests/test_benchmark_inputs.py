@@ -7,19 +7,111 @@ import socket
 import sys
 import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+
+import numpy as np
 
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_DIR))
+sys.path.insert(0, str(BENCHMARK_DIR / "diagnostics"))
 
 import dcdft_benchmark as benchmark  # noqa: E402
+import diagnose_rigid_translation_eggbox as translation  # noqa: E402
+import evidence  # noqa: E402
 import run_benchmark_queue as queue  # noqa: E402
 import show_progress  # noqa: E402
 
 
+def _case_evidence(value="fingerprint-1"):
+    return {
+        "schema": "pbc_dcdft_case_evidence_v1",
+        "fingerprint_sha256": value,
+    }
+
+
 class BenchmarkInputTest(unittest.TestCase):
+    def test_array_identity_is_compact_and_byte_sensitive(self):
+        first = benchmark._array_identity(np.asarray([[1.0, 2.0]]))
+        second = benchmark._array_identity(np.asarray([[1.0, 3.0]]))
+
+        self.assertEqual(first["shape"], [1, 2])
+        self.assertEqual(len(first["sha256"]), 64)
+        self.assertEqual(len(first["rounded_1e10_sha256"]), 64)
+        self.assertAlmostEqual(first["frobenius_norm"], np.sqrt(5.0))
+        self.assertNotEqual(first["sha256"], second["sha256"])
+
+    def test_queue_expands_target_integrators_without_renaming_uniform(self):
+        runs = queue.expand_jobs(
+            {
+                "defaults": {
+                    "device": "gpu",
+                    "df_backend": "gdf",
+                },
+                "jobs": [
+                    {
+                        "name": "target_modes",
+                        "target_integrators": [
+                            "uniform",
+                            "multigrid_xc",
+                            "multigrid_j_xc",
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            [run["name"] for run in runs],
+            [
+                "target_modes_gpu_gdf",
+                "target_modes_gpu_gdf_multigrid_xc",
+                "target_modes_gpu_gdf_multigrid_j_xc",
+            ],
+        )
+        self.assertEqual(
+            [run["target_integrator"] for run in runs],
+            ["uniform", "multigrid_xc", "multigrid_j_xc"],
+        )
+
+    def test_cpu_benchmark_rejects_multigrid_target(self):
+        with self.assertRaisesRegex(NotImplementedError, "CPU benchmark"):
+            benchmark._validate_config(
+                {
+                    "device": "cpu",
+                    "df_backend": "gdf",
+                    "target_integrator": "multigrid_xc",
+                }
+            )
+
+    def test_translation_diagnostic_decomposes_component_sums(self):
+        result = SimpleNamespace(
+            one_electron=np.asarray([[1.0, 2.0, 3.0], [-1.0, 0.0, 1.0]]),
+            target_coulomb=np.zeros((2, 3)),
+            target_xc=np.asarray([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]),
+            target_overlap_pulay=None,
+            nuclear=np.zeros((2, 3)),
+            fused_target_j_z_bilinear=None,
+            contributions=SimpleNamespace(
+                explicit=np.ones((2, 3)),
+                response=np.full((2, 3), 2.0),
+                coupled=np.full((2, 3), 3.0),
+                total=np.asarray([[1.5, 2.7, 4.3], [-0.6, 0.5, 1.6]]),
+            ),
+        )
+
+        sums = translation._component_translation_sums(result)
+
+        np.testing.assert_allclose(sums["one_electron"], [0.0, 2.0, 4.0])
+        np.testing.assert_allclose(sums["target_xc"], [0.5, 0.7, 0.9])
+        np.testing.assert_allclose(sums["explicit_channel"], [2.0, 2.0, 2.0])
+        np.testing.assert_allclose(sums["response_channel"], [4.0, 4.0, 4.0])
+        np.testing.assert_allclose(sums["coupled_channel"], [6.0, 6.0, 6.0])
+        np.testing.assert_allclose(sums["total"], [0.9, 3.2, 5.9])
+        self.assertIsNone(sums["target_overlap_pulay"])
+
     def test_zvector_controls_are_applied_to_public_gradient_object(self):
         class Gradient:
             z_solver = "auto"
@@ -234,15 +326,21 @@ class BenchmarkInputTest(unittest.TestCase):
                 "p.add_argument('--input')\n"
                 "p.add_argument('--output-dir')\n"
                 "a = p.parse_args()\n"
+                "config = json.loads(Path(a.input).read_text())\n"
                 "Path(a.output_dir, 'report.json').write_text(\n"
                 "    json.dumps({'status': 'complete', "
-                "'run_identity': {'attempt_id': 'stale'}}))\n",
+                "'run_identity': {'attempt_id': 'stale'}, "
+                "'evidence': config['evidence']}))\n",
                 encoding="utf-8",
             )
 
             with mock.patch.object(queue, "CASE_RUNNER", fake_runner):
                 outcome = queue._run_case(
-                    {"device": "cpu", "num_threads": 1},
+                    {
+                        "device": "cpu",
+                        "num_threads": 1,
+                        "evidence": _case_evidence(),
+                    },
                     case_dir,
                     "000_test",
                 )
@@ -268,13 +366,19 @@ class BenchmarkInputTest(unittest.TestCase):
                 "config = json.loads(Path(a.input).read_text())\n"
                 "Path(a.output_dir, 'report.json').write_text(\n"
                 "    json.dumps({'status': 'complete', "
-                "'run_identity': config['run_identity']}))\n",
+                "'execution_status': 'complete', "
+                "'run_identity': config['run_identity'], "
+                "'evidence': config['evidence']}))\n",
                 encoding="utf-8",
             )
 
             with mock.patch.object(queue, "CASE_RUNNER", fake_runner):
                 outcome = queue._run_case(
-                    {"device": "cpu", "num_threads": 1},
+                    {
+                        "device": "cpu",
+                        "num_threads": 1,
+                        "evidence": _case_evidence(),
+                    },
                     case_dir,
                     "000_test",
                 )
@@ -286,6 +390,150 @@ class BenchmarkInputTest(unittest.TestCase):
             attempt = queue._read_json(case_dir / "attempt.json")
             self.assertEqual(attempt["status"], "complete")
             self.assertTrue(attempt["report_identity_matches"])
+            self.assertTrue(attempt["report_fingerprint_matches"])
+
+    def test_accuracy_failure_does_not_relabel_execution_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = root / "case"
+            fake_runner = root / "fake_runner.py"
+            fake_runner.write_text(
+                "from pathlib import Path\n"
+                "import argparse, json, sys\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--input')\n"
+                "p.add_argument('--output-dir')\n"
+                "a = p.parse_args()\n"
+                "config = json.loads(Path(a.input).read_text())\n"
+                "Path(a.output_dir, 'report.json').write_text(\n"
+                "    json.dumps({'status': 'complete', "
+                "'execution_status': 'complete', "
+                "'accuracy_status': 'fail', "
+                "'run_identity': config['run_identity'], "
+                "'evidence': config['evidence']}))\n"
+                "sys.exit(2)\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(queue, "CASE_RUNNER", fake_runner):
+                outcome = queue._run_case(
+                    {
+                        "device": "cpu",
+                        "num_threads": 1,
+                        "evidence": _case_evidence(),
+                    },
+                    case_dir,
+                    "000_test",
+                )
+
+            self.assertEqual(outcome["returncode"], 2)
+            self.assertEqual(outcome["status"], "complete")
+            self.assertEqual(outcome["report"]["accuracy_status"], "fail")
+
+    def test_case_fingerprint_changes_with_input_and_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            atom_file = Path(directory) / "h2.xyz"
+            atom_file.write_text(
+                "2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8"
+            )
+            config = {
+                "atom_file": str(atom_file),
+                "basis": "gth-szv",
+                "lattice_vectors": [[6, 0, 0], [0, 6, 0], [0, 0, 6]],
+            }
+            source = {
+                "git_commit": "abc",
+                "source_tree_sha256": "tree-1",
+            }
+            first = evidence.build_case_evidence(config, source=source)
+            same = evidence.build_case_evidence(config, source=source)
+            self.assertEqual(
+                first["fingerprint_sha256"], same["fingerprint_sha256"]
+            )
+
+            changed_config = evidence.build_case_evidence(
+                {**config, "basis": "gth-dzvp"}, source=source
+            )
+            self.assertNotEqual(
+                first["fingerprint_sha256"],
+                changed_config["fingerprint_sha256"],
+            )
+            atom_file.write_text(
+                "2\nH2\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8"
+            )
+            changed_geometry = evidence.build_case_evidence(
+                config, source=source
+            )
+            self.assertNotEqual(
+                first["fingerprint_sha256"],
+                changed_geometry["fingerprint_sha256"],
+            )
+            changed_source = evidence.build_case_evidence(
+                config,
+                source={**source, "source_tree_sha256": "tree-2"},
+            )
+            self.assertNotEqual(
+                changed_geometry["fingerprint_sha256"],
+                changed_source["fingerprint_sha256"],
+            )
+
+    def test_completed_report_requires_matching_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            queue._write_json(
+                path,
+                {
+                    "status": "complete",
+                    "execution_status": "complete",
+                    "evidence": _case_evidence("expected"),
+                },
+            )
+            self.assertTrue(queue._completed_report(path, "expected"))
+            self.assertFalse(queue._completed_report(path, "different"))
+
+    def test_case_lock_rejects_a_second_queue_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            with queue._case_lock(case_dir) as first:
+                self.assertTrue(first)
+                with queue._case_lock(case_dir) as second:
+                    self.assertFalse(second)
+
+    def test_accuracy_gate_separates_execution_from_thresholds(self):
+        gradient = np.asarray([[1.0, 0.0, 0.0], [-0.9, 0.0, 0.0]])
+        summary = benchmark._gradient_summary(gradient)
+        self.assertAlmostEqual(
+            summary["translation_sum_norm_ha_per_bohr"], 0.1
+        )
+        status, gate = benchmark._accuracy_gate({}, None, summary)
+        self.assertEqual(status, "not_requested")
+        self.assertFalse(gate["requested"])
+
+        accuracy = {"max_abs_error_ha_per_bohr": 2.0e-6}
+        status, gate = benchmark._accuracy_gate(
+            {
+                "fd_max_abs_tolerance_ha_per_bohr": 1.0e-5,
+                "net_gradient_tolerance_ha_per_bohr": 0.2,
+            },
+            accuracy,
+            summary,
+        )
+        self.assertEqual(status, "pass")
+        self.assertTrue(gate["passed"])
+
+        status, gate = benchmark._accuracy_gate(
+            {"net_gradient_tolerance_ha_per_bohr": 0.01},
+            None,
+            summary,
+        )
+        self.assertEqual(status, "fail")
+        self.assertFalse(gate["passed"])
+
+    def test_fd_energy_result_does_not_retain_method(self):
+        self.assertEqual(
+            [field.name for field in fields(benchmark.EnergyRun)],
+            ["energy_ha", "setup_wall_time_s", "wall_time_s"],
+        )
 
     def test_memory_summary_keeps_stage_samples_and_high_water(self):
         report = benchmark.summarize_memory(

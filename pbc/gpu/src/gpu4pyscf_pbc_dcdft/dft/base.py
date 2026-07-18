@@ -7,6 +7,19 @@ from time import perf_counter
 import cupy as cp
 from pyscf import lib
 from pyscf_pbc_dcdft.lib.kpoints import is_gamma, normalize_kpts
+from pyscf_pbc_dcdft.dft.state import (
+    invalidate_computed_state,
+    mark_current_state,
+    require_current_state,
+    state_is_current,
+    validate_restricted_input,
+    validate_restricted_occupations,
+)
+from pyscf_pbc_dcdft.dft.target_integrator import (
+    UNIFORM,
+    normalize_target_integrator,
+    normalize_target_multigrid_mesh,
+)
 
 from .. import df
 from ..scf import build_reference
@@ -21,6 +34,7 @@ class DCRestrictedBase(lib.StreamObject):
         "conv_tol_grad", "max_cycle",
         "exxdiv", "verbose", "stdout", "max_memory",
         "progress_callback",
+        "target_integrator", "target_multigrid_mesh",
     }
     kpoint_mode = False
 
@@ -39,6 +53,8 @@ class DCRestrictedBase(lib.StreamObject):
         self.verbose = getattr(cell, "verbose", 0)
         self.stdout = getattr(cell, "stdout", None)
         self.max_memory = getattr(cell, "max_memory", 4000)
+        self.target_integrator = UNIFORM
+        self.target_multigrid_mesh = None
         self.converged = False
         self.e_tot = None
         self.e_hf = None
@@ -51,6 +67,22 @@ class DCRestrictedBase(lib.StreamObject):
         self.dc_energy_result = None
         self.timings_s = {}
         self.progress_callback = None
+        self._dcdft_input_signature = None
+
+    def set_target_integrator(self, mode=UNIFORM, *, mesh=None):
+        """Select uniform, XC-only multigrid, or J+XC multigrid target work."""
+
+        self.target_integrator = normalize_target_integrator(mode)
+        self.target_multigrid_mesh = normalize_target_multigrid_mesh(mesh)
+        if (
+            self.target_integrator == UNIFORM
+            and self.target_multigrid_mesh is not None
+        ):
+            raise ValueError(
+                "target_multigrid_mesh requires a multigrid target_integrator"
+            )
+        invalidate_computed_state(self)
+        return self
 
     def _progress(self, stage: str, **details) -> None:
         if self.progress_callback is not None:
@@ -58,6 +90,7 @@ class DCRestrictedBase(lib.StreamObject):
 
     def fft_density_fit(self, *, mesh=None):
         self.with_df = df.FFTDF(self.cell, kpts=self.kpts, mesh=mesh)
+        invalidate_computed_state(self)
         return self
 
     def density_fit(self, auxbasis=None, *, setup_mode="native"):
@@ -69,6 +102,7 @@ class DCRestrictedBase(lib.StreamObject):
             auxbasis=auxbasis,
             setup_mode=setup_mode,
         )
+        invalidate_computed_state(self)
         return self
 
     def rs_density_fit(self, auxbasis=None, *, central_setup="reference"):
@@ -80,6 +114,7 @@ class DCRestrictedBase(lib.StreamObject):
             auxbasis=auxbasis,
             central_setup=central_setup,
         )
+        invalidate_computed_state(self)
         return self
 
     def kernel(self, dm0=None, **kwargs) -> float:
@@ -87,7 +122,8 @@ class DCRestrictedBase(lib.StreamObject):
 
         if kwargs:
             self.set(**kwargs)
-        self.target_evaluation = None
+        invalidate_computed_state(self)
+        validate_restricted_input(self)
         reference = build_reference(
             self.cell,
             kpts=self.kpts,
@@ -112,6 +148,11 @@ class DCRestrictedBase(lib.StreamObject):
         )
         if not reference.converged:
             raise RuntimeError("GPU HF reference did not converge")
+        validate_restricted_occupations(
+            reference.mo_occ,
+            nkpts=len(self.kpts),
+            nelectron=int(self.cell.nelectron),
+        )
         self._progress("target_dfa_energy", state="started", xc=self.xc)
         start = perf_counter()
         result, target = evaluate_energy(
@@ -120,6 +161,8 @@ class DCRestrictedBase(lib.StreamObject):
             kpts=self.kpts,
             kpoint_mode=self.kpoint_mode,
             with_df=self.with_df,
+            target_integrator=self.target_integrator,
+            target_multigrid_mesh=self.target_multigrid_mesh,
         )
         cp.cuda.Stream.null.synchronize()
         self.timings_s["target_pbe_energy"] = perf_counter() - start
@@ -142,11 +185,11 @@ class DCRestrictedBase(lib.StreamObject):
         self.mo_coeff = reference.mo_coeff
         self.mo_occ = reference.mo_occ
         self.mo_energy = reference.mo_energy
+        mark_current_state(self)
         return result.energy
 
     def make_rdm1(self, mo_coeff=None, mo_occ=None):
-        if self.source_scf is None:
-            raise RuntimeError("run kernel() before requesting the HF density")
+        require_current_state(self)
         return self.source_scf.make_rdm1(mo_coeff=mo_coeff, mo_occ=mo_occ)
 
     def nuc_grad_method(self):
@@ -154,6 +197,7 @@ class DCRestrictedBase(lib.StreamObject):
 
         from ..grad import DCKGradients, DCGradients
 
+        require_current_state(self)
         cls = DCKGradients if self.kpoint_mode else DCGradients
         return cls(self)
 
@@ -162,6 +206,10 @@ class DCRestrictedBase(lib.StreamObject):
     def to_cpu(self):
         """Create the corresponding CPU input object without reusing GPU arrays."""
 
+        if self.target_integrator != UNIFORM:
+            raise NotImplementedError(
+                "CPU conversion cannot preserve a GPU multigrid target integrator"
+            )
         from pyscf_pbc_dcdft import df as cpu_df
         from pyscf_pbc_dcdft.dft import DCKRKS as CPUDCKRKS
         from pyscf_pbc_dcdft.dft import DCRKS as CPUDCRKS
@@ -198,7 +246,17 @@ class DCRestrictedBase(lib.StreamObject):
             "xc": self.xc,
             "nkpts": len(self.kpts),
             "df": self.with_df.capability(),
-            "target_numint_backend": "numint",
+            "target_integrator": self.target_integrator,
+            "target_numint_backend": (
+                "numint"
+                if self.target_integrator == UNIFORM
+                else "multigrid_v2"
+            ),
+            "target_multigrid_mesh": (
+                None
+                if self.target_multigrid_mesh is None
+                else [int(value) for value in self.target_multigrid_mesh]
+            ),
             "target_evaluation_workspace": (
                 self.target_evaluation is not None
             ),
@@ -208,7 +266,7 @@ class DCRestrictedBase(lib.StreamObject):
                 if self.cell.ke_cutoff is None
                 else float(self.cell.ke_cutoff)
             ),
-            "energy_complete": True,
+            "energy_complete": state_is_current(self),
             "analytic_gradient_complete": bool(
                 self.with_df.capability().get("analytic_gradient", False)
             ),

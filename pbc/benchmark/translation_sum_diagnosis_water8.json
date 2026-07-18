@@ -1,0 +1,86 @@
+{
+  "schema": "pbc_dcdft_translation_sum_diagnosis_v1",
+  "date": "2026-07-17",
+  "system": "Water8",
+  "basis": "SZV-GTH",
+  "sampling": "Gamma",
+  "translation_axis": "x",
+  "analytic_center_phase": 0.25,
+  "small_step_bohr": 0.0001,
+  "records": [
+    {
+      "df_backend": "gdf",
+      "xc": "r2SCAN",
+      "ke_cutoff_ha": 200.0,
+      "mesh": [123, 123, 123],
+      "eggbox_peak_to_peak_ha": 0.0001662160423450132,
+      "analytic_translation_sum_ha_per_bohr": 0.003998136972283621,
+      "rigid_energy_fd_ha_per_bohr": 0.003998116682168984,
+      "analytic_minus_fd_ha_per_bohr": 2.029011463705599e-8,
+      "target_xc_translation_sum_ha_per_bohr": 0.003998136972269353
+    },
+    {
+      "df_backend": "gdf",
+      "xc": "r2SCAN",
+      "ke_cutoff_ha": 400.0,
+      "mesh": [173, 173, 173],
+      "eggbox_peak_to_peak_ha": 0.00019222043388822385,
+      "analytic_translation_sum_ha_per_bohr": 0.005601245647914907,
+      "rigid_energy_fd_ha_per_bohr": 0.005601212649253284,
+      "analytic_minus_fd_ha_per_bohr": 3.299866162265186e-8,
+      "target_xc_translation_sum_ha_per_bohr": 0.005601245647818668
+    },
+    {
+      "df_backend": "gdf",
+      "xc": "r2SCAN",
+      "ke_cutoff_ha": 600.0,
+      "mesh": [211, 211, 211],
+      "eggbox_peak_to_peak_ha": 0.0001226419336148865,
+      "analytic_translation_sum_ha_per_bohr": 0.004293069807570105,
+      "rigid_energy_fd_ha_per_bohr": 0.004293035260616307,
+      "analytic_minus_fd_ha_per_bohr": 3.454695379767614e-8,
+      "target_xc_translation_sum_ha_per_bohr": 0.0042930698075790575
+    },
+    {
+      "df_backend": "gdf",
+      "xc": "r2SCAN",
+      "ke_cutoff_ha": 1000.0,
+      "mesh": [271, 271, 271],
+      "eggbox_peak_to_peak_ha": 0.00001938096281151047,
+      "analytic_translation_sum_ha_per_bohr": -0.0008726214691633996,
+      "rigid_energy_fd_ha_per_bohr": -0.0008726097178168857,
+      "analytic_minus_fd_ha_per_bohr": -1.1751346513932948e-8,
+      "target_xc_translation_sum_ha_per_bohr": -0.000872621468973522
+    },
+    {
+      "df_backend": "gdf",
+      "xc": "PBE",
+      "ke_cutoff_ha": 400.0,
+      "mesh": [173, 173, 173],
+      "eggbox_peak_to_peak_ha": 0.00001582589649729016,
+      "analytic_translation_sum_ha_per_bohr": -0.00045424902615846807,
+      "rigid_energy_fd_ha_per_bohr": -0.00045424670247484755,
+      "analytic_minus_fd_ha_per_bohr": -2.323683620519823e-9,
+      "target_xc_translation_sum_ha_per_bohr": -0.0004542490262452962
+    },
+    {
+      "df_backend": "rsdf",
+      "xc": "r2SCAN",
+      "ke_cutoff_ha": 400.0,
+      "mesh": [173, 173, 173],
+      "eggbox_peak_to_peak_ha": 0.0001922206908204771,
+      "analytic_translation_sum_ha_per_bohr": 0.00560125399615885,
+      "rigid_energy_fd_ha_per_bohr": 0.0056012211757661134,
+      "analytic_minus_fd_ha_per_bohr": 3.282039273688753e-8,
+      "target_xc_translation_sum_ha_per_bohr": 0.005601253996063541
+    }
+  ],
+  "conclusion": {
+    "analytic_term_missing": false,
+    "cause": "target-DFA uniform-grid egg-box error",
+    "df_backend_specific": false,
+    "r2scan_more_sensitive_than_pbe": true,
+    "force_projection_recommended": false,
+    "required_policy": "converge or phase-average the same XC quadrature in energy and gradient"
+  }
+}

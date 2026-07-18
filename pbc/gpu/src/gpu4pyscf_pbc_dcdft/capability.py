@@ -9,6 +9,9 @@ one-electron response on the GPU.  Local-part-2 and the reference GDF/RSDF
 primitive builders remain explicit host setup boundaries.
 """
 
+import gpu4pyscf
+import pyscf
+
 
 def capability() -> dict[str, object]:
     return {
@@ -25,9 +28,33 @@ def capability() -> dict[str, object]:
         "r2scan_analytic_gradient": True,
         "validated_target_functionals": ["PBE", "SCAN", "R2SCAN"],
         "validated_df_backends": ["FFTDF", "GDF", "RSDF"],
+        "target_integrators": {
+            "uniform": {
+                "energy": True,
+                "analytic_gradient": True,
+                "target_j_owner": "selected_df_backend",
+                "target_xc_owner": "gpu_numint",
+            },
+            "multigrid_xc": {
+                "energy": True,
+                "analytic_gradient": True,
+                "target_j_owner": "selected_df_backend",
+                "target_xc_owner": "gpu_multigrid_v2",
+            },
+            "multigrid_j_xc": {
+                "energy": True,
+                "analytic_gradient": True,
+                "target_j_owner": "gpu_multigrid_v2",
+                "target_xc_owner": "gpu_multigrid_v2",
+            },
+        },
+        "dependency_versions": {
+            "pyscf": pyscf.__version__,
+            "gpu4pyscf": gpu4pyscf.__version__,
+        },
         "gamma": True,
         "sampled_kpoints": True,
-        "status": "stage_6_mgga_rsdf_energy_gradient_complete",
+        "status": "stage_7_target_multigrid_opt_in_validated",
         "silent_cpu_fallback": False,
         "host_boundaries": [
             "PySCF Cell metadata and reciprocal-grid setup",
@@ -44,6 +71,12 @@ def capability() -> dict[str, object]:
             "hf_scf": "GPU4PySCF RHF/KRHF with project-local GPU FFTDF/GDF/RSDF J/K",
             "target_pbe": "GPU4PySCF RKS/KRKS + GPU KNumInt + GPU FFTDF/GDF/RSDF J/K",
             "target_dfa": "GPU4PySCF RKS/KRKS + GPU KNumInt + GPU FFTDF/GDF/RSDF J/K",
+            "target_multigrid_xc": (
+                "GPU4PySCF multigrid_v2 XC + selected FFTDF/GDF/RSDF J"
+            ),
+            "target_multigrid_j_xc": (
+                "GPU4PySCF multigrid_v2 combined target J+XC"
+            ),
             "fftdf_full_jk_derivative": "gpu4pyscf_pbc_dcdft.df.fft",
             "gdf_full_jk_derivative": "gpu4pyscf_pbc_dcdft.df.gdf",
             "gdf_native_cderi_and_jk_response": (

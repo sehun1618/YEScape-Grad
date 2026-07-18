@@ -230,8 +230,13 @@ def _weighted_energy_derivative(
     timeline.mark("start")
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
-    reference = states[0].original_density
-    nao = int(reference.shape[0])
+    # GPU4PySCF evaluates SR/LR tensors in SortedCell's Cartesian AO basis.
+    # Spherical-to-Cartesian expansion makes this basis larger when l >= 2
+    # (Water64/DZVP has 1472 spherical AOs but 1536 sorted Cartesian AOs).
+    # The transformed state, pair addresses, and FT evaluator all share this
+    # internal dimension; the original density is retained only for the Ewald
+    # correction in the physical AO basis.
+    nao = _state_ao_count(states)
     pair_addresses = int3c2e_opt.pair_and_diag_indices(
         cart=True, original_ao_order=False
     )[0]
@@ -333,6 +338,18 @@ def _weighted_energy_derivative(
             }
         )
     return host_result
+
+
+def _state_ao_count(states):
+    """Return and validate the common sorted-AO dimension of signed states."""
+
+    shapes = {tuple(state.density.shape) for state in states}
+    if len(shapes) != 1:
+        raise ValueError(f"Gamma signed states have inconsistent shapes: {shapes}")
+    shape = shapes.pop()
+    if len(shape) != 2 or shape[0] != shape[1]:
+        raise ValueError(f"Gamma sorted density must be square, got {shape}")
+    return int(shape[0])
 
 
 def _prepare_state(
