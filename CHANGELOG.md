@@ -72,10 +72,14 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   integration.  On the recorded test, XC-only multigrid reduced end-to-end
   time from about 2363 s to 1227 s while changing energy by `9.1e-8 Ha` and the
   largest gradient component by `4.7e-8 Ha/Bohr`.
-- Water64/DZVP RSDF still exceeds available VRAM in the source-adjoint stage:
-  one dense complex `(naux, nao, nao)` array at `naux = nao = 1472` requires
-  about 47.5 GiB, and the current path needs more than one such array.  A
-  streamed or fused AO-pair adjoint is required before this case is complete.
+- The first Water64/DZVP RSDF run exceeded available VRAM in the
+  source-adjoint stage because each complex `(naux, nao, nao)` array at
+  `naux = nao = 1472` required 47.5 GiB.  The follow-up Gamma candidate builds
+  the production observable directly as one real 23.8 GiB adjoint, performs
+  source/metric reverse contractions from that shared array, and consumes
+  obsolete basis-transform generations instead of stacking them.  Small
+  Gamma, sampled-k, DZVP-transform, and full-response parity gates pass; the
+  Water64/DZVP rerun is still required before declaring this case complete.
 - `multigrid_j_xc` changes the numerical representation of target Coulomb J;
   it is an explicit experimental route, not a drop-in accuracy-equivalent
   replacement for finite-auxiliary GDF/RSDF J.

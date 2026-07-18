@@ -33,6 +33,7 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import rsdf as rsdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     source_reciprocal as source_reciprocal_module,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf import source_native as source_native_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import pp_value as pp_value_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     build_rsdf_contracted_response,
@@ -40,6 +41,8 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import (
     build_exact_cderi,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
+    build_pair_cderi_adjoints,
+    build_pair_fused_cderi_adjoint,
     build_pair_source_adjoints,
     contract_source_derivative,
 )
@@ -96,6 +99,19 @@ def _water_cell():
     ).build()
 
 
+def _water_dzvp_cell():
+    return gto.Cell(
+        atom="O 0 0 0; H 0 1.4 0; H 0 -1.4 0",
+        a=np.eye(3) * 8.0,
+        unit="Bohr",
+        basis="DZVP-GTH",
+        pseudo="GTH-PBE",
+        ke_cutoff=15.0,
+        precision=1.0e-8,
+        verbose=0,
+    ).build()
+
+
 def _method(cell, kmesh, *, device, central_setup=None):
     kpts = cell.make_kpts(kmesh, wrap_around=True)
     dft_module = gpu_dft if device == "gpu" else cpu_dft
@@ -118,6 +134,113 @@ def _method(cell, kmesh, *, device, central_setup=None):
 
 
 class RSDFGPUParityTest(unittest.TestCase):
+    def test_fused_gamma_adjoint_matches_resolved_and_stays_real(self):
+        rng = np.random.default_rng(31)
+        naux, nao = 3, 4
+        central = {(0, 0): cp.asarray(rng.normal(size=(naux, nao, nao)))}
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response = cp.asarray(rng.normal(size=(1, nao, nao)))
+        auxiliary_reference = cp.asarray(
+            rng.normal(size=naux), dtype=cp.complex128
+        )
+        auxiliary_response = cp.asarray(
+            rng.normal(size=naux), dtype=cp.complex128
+        )
+
+        target, bilinear = build_pair_cderi_adjoints(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+        )
+        fused = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+        )
+
+        self.assertEqual(fused.dtype, cp.float64)
+        np.testing.assert_allclose(
+            cp.asnumpy(fused),
+            cp.asnumpy(target + bilinear),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+
+    def test_single_gamma_source_consumes_owner_without_stack_copy(self):
+        class IdentityTransform:
+            def __init__(self, count):
+                self.cell = SimpleNamespace(nao_nr=lambda: count)
+
+            def apply_C_mat_CT(self, value):
+                return value.copy()
+
+            def apply_C_dot(self, value, axis=0):
+                self.assert_axis = axis
+                return value.copy()
+
+        optimizer = SimpleNamespace(
+            cell=IdentityTransform(2),
+            auxcell=IdentityTransform(3),
+        )
+        owner = [cp.arange(12, dtype=cp.float64).reshape(4, 3)]
+        with mock.patch.object(
+            source_native_module.cp,
+            "stack",
+            side_effect=AssertionError("single source must not be stacked"),
+        ):
+            transformed = source_native_module._gamma_source_batch(
+                optimizer,
+                owner,
+                consume=True,
+            )
+
+        self.assertEqual(owner, [])
+        self.assertEqual(transformed.shape, (1, 2, 2, 3))
+
+    def test_dzvp_consumed_source_transform_matches_reference(self):
+        cell = _water_dzvp_cell()
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=np.zeros((1, 3)),
+            auxbasis="DZVP-GTH",
+        )
+        witness = provider._build_parameter_witness(np.zeros((1, 3)))
+        parameters = parameters_from_provider(witness)
+        optimizer = build_source_optimizer(
+            cell,
+            witness.auxcell,
+            parameters,
+            bvk_kmesh=parameters.bvk_kmesh,
+        )
+        rng = np.random.default_rng(33)
+        source = cp.asarray(
+            rng.normal(size=(cell.nao**2, witness.auxcell.nao_nr()))
+        )
+        expected = source_native_module._sorted_gamma_source(
+            optimizer,
+            source,
+        )
+        owner = [source.copy()]
+        actual = source_native_module._gamma_source_batch(
+            optimizer,
+            owner,
+            consume=True,
+        )[0]
+
+        self.assertEqual(owner, [])
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+
     def test_exact_central_source_builder_memory_is_bounded(self):
         reported, plan = _source_builder_memory_plan(
             100 * 1024**3,

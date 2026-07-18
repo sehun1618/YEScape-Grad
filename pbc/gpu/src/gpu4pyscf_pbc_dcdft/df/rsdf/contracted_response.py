@@ -31,6 +31,7 @@ from .metric_adjoint import push_cderi_adjoint_through_metric
 from .metric_native import build_metric_contraction_context
 from .source_adjoint import (
     build_pair_cderi_adjoints,
+    build_pair_fused_cderi_adjoint,
     push_cderi_adjoint_through_source,
 )
 from .source_native import (
@@ -229,6 +230,7 @@ def build_rsdf_contracted_response(
                 strict=True,
             ):
                 group[pair] = adjoint
+        del pair_response
 
     if source_optimizer is not None:
         source_result = _contract_native_sources(
@@ -693,19 +695,26 @@ def _build_native_pair_adjoints(
 ):
     if not native_source and not native_metric:
         return None, None
-    target, bilinear = build_pair_cderi_adjoints(
-        central,
-        pair,
-        reference,
-        response,
-        auxiliary_reference,
-        auxiliary_response,
-    )
-    cderi_adjoints = (
-        (target + bilinear,)
-        if observable_mode == "fused"
-        else (target, bilinear)
-    )
+    if observable_mode == "fused":
+        cderi_adjoints = (
+            build_pair_fused_cderi_adjoint(
+                central,
+                pair,
+                reference,
+                response,
+                auxiliary_reference,
+                auxiliary_response,
+            ),
+        )
+    else:
+        cderi_adjoints = build_pair_cderi_adjoints(
+            central,
+            pair,
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+        )
     source_adjoints = None
     if native_source:
         source_adjoints = tuple(
@@ -823,7 +832,8 @@ def _contract_native_sources(
         pair = next(iter(groups[0]))
         return contract_gamma_sources_profiled(
             optimizer,
-            tuple(group[pair] for group in groups),
+            [group.pop(pair) for group in groups],
+            consume=True,
         )
     return contract_kpoint_sources_profiled(
         optimizer,

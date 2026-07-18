@@ -114,12 +114,13 @@ def build_pair_cderi_adjoints(
 
     first, second = pair
     central = pair_block(cderi, first, second)
-    dtype = cp.result_type(
-        central.dtype,
-        reference.dtype,
-        response.dtype,
-        auxiliary_reference.dtype,
-        auxiliary_response.dtype,
+    auxiliary_reference, auxiliary_response, dtype = _adjoint_dtype(
+        pair,
+        central,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
     )
     target = cp.zeros(central.shape, dtype=dtype)
     bilinear = cp.zeros_like(target)
@@ -181,6 +182,173 @@ def build_pair_cderi_adjoints(
         )
     bilinear -= 0.5 * exchange / normalization
     return target, bilinear
+
+
+def build_pair_fused_cderi_adjoint(
+    cderi,
+    pair,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+):
+    """Build the production target-J plus HF-response adjoint in one array.
+
+    The resolved route keeps the two observables separate for diagnostics.
+    Production gradients consume only their sum, so allocating both dense
+    ``(naux,nao,nao)`` arrays needlessly doubles the larger-basis peak.  This
+    routine accumulates every Coulomb and exchange contribution directly into
+    one output while retaining the established plain-product convention.
+    """
+
+    first, second = (int(pair[0]), int(pair[1]))
+    canonical = (first, second)
+    central = pair_block(cderi, first, second)
+    auxiliary_reference, auxiliary_response, dtype = _adjoint_dtype(
+        canonical,
+        central,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+    )
+    fused = cp.zeros(central.shape, dtype=dtype)
+    normalization = float(len(reference) ** 2)
+
+    if first == second:
+        _assign_outer_product(
+            fused,
+            auxiliary_reference,
+            reference[first],
+            scale=1.0 / normalization,
+        )
+        _accumulate_outer_product(
+            fused,
+            auxiliary_reference,
+            response[first],
+            scale=2.0 / normalization,
+        )
+        _accumulate_outer_product(
+            fused,
+            auxiliary_response,
+            reference[first],
+            scale=2.0 / normalization,
+        )
+
+    exchange_scale = -0.5 / normalization
+    ordered_pairs = (
+        (canonical,)
+        if first == second
+        else (canonical, (second, first))
+    )
+    for ki, kj in ordered_pairs:
+        factor_ij = pair_block(cderi, ki, kj)
+        factor_ji = pair_block(cderi, kj, ki)
+        _accumulate_exchange(
+            fused,
+            _exchange_adjoint_for_first_factor(
+                reference[ki], response[kj], factor_ji
+            ),
+            canonical,
+            ki,
+            kj,
+            scale=exchange_scale,
+        )
+        _accumulate_exchange(
+            fused,
+            _exchange_adjoint_for_first_factor(
+                response[ki], reference[kj], factor_ji
+            ),
+            canonical,
+            ki,
+            kj,
+            scale=exchange_scale,
+        )
+        _accumulate_exchange(
+            fused,
+            _exchange_adjoint_for_second_factor(
+                reference[ki], factor_ij, response[kj]
+            ),
+            canonical,
+            kj,
+            ki,
+            scale=exchange_scale,
+        )
+        _accumulate_exchange(
+            fused,
+            _exchange_adjoint_for_second_factor(
+                response[ki], factor_ij, reference[kj]
+            ),
+            canonical,
+            kj,
+            ki,
+            scale=exchange_scale,
+        )
+    return fused
+
+
+def _adjoint_dtype(
+    pair,
+    central,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+):
+    """Return exact-real Gamma auxiliaries without complex container growth."""
+
+    auxiliary_reference = cp.asarray(auxiliary_reference)
+    auxiliary_response = cp.asarray(auxiliary_response)
+    core_arrays = (central, reference, response)
+    exact_real_gamma = (
+        int(pair[0]) == int(pair[1])
+        and all(cp.asarray(value).dtype.kind != "c" for value in core_arrays)
+    )
+    if exact_real_gamma:
+        auxiliary_reference = auxiliary_reference.real
+        auxiliary_response = auxiliary_response.real
+    dtype = cp.result_type(
+        central.dtype,
+        reference.dtype,
+        response.dtype,
+        auxiliary_reference.dtype,
+        auxiliary_response.dtype,
+    )
+    return auxiliary_reference, auxiliary_response, dtype
+
+
+def _assign_outer_product(output, auxiliary, density, *, scale):
+    cp.multiply(
+        auxiliary[:, None, None],
+        density.T[None],
+        out=output,
+    )
+    output *= float(scale)
+
+
+def _accumulate_outer_product(output, auxiliary, density, *, scale):
+    term = cp.multiply(auxiliary[:, None, None], density.T[None])
+    term *= float(scale)
+    output += term
+    del term
+
+
+def _accumulate_exchange(
+    output,
+    contribution,
+    canonical,
+    first,
+    second,
+    *,
+    scale,
+):
+    contribution *= float(scale)
+    output += _return_to_canonical_orientation(
+        contribution,
+        canonical,
+        first,
+        second,
+    )
 
 
 def _exchange_adjoint_for_first_factor(left, right, second_factor):

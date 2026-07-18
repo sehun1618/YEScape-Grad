@@ -59,13 +59,22 @@ def contract_gamma_sources(optimizer, source_adjoints):
     ).values
 
 
-def contract_gamma_sources_profiled(optimizer, source_adjoints):
+def contract_gamma_sources_profiled(
+    optimizer,
+    source_adjoints,
+    *,
+    consume=False,
+):
     """Contract Gamma sources and return exclusive CUDA phase timings."""
 
     _require_gamma_optimizer(optimizer)
     events = _phase_events()
     events[0].record()
-    sources = _gamma_source_batch(optimizer, source_adjoints)
+    sources = _gamma_source_batch(
+        optimizer,
+        source_adjoints,
+        consume=consume,
+    )
     pair_addresses = optimizer.pair_and_diag_indices(
         cart=True,
         original_ao_order=False,
@@ -261,13 +270,32 @@ def _sorted_gamma_source(optimizer, source_adjoint):
     return _sorted_source(optimizer, source.real)
 
 
-def _gamma_source_batch(optimizer, source_adjoints):
-    adjoints = tuple(source_adjoints)
+def _gamma_source_batch(optimizer, source_adjoints, *, consume=False):
+    adjoints = source_adjoints if consume else list(source_adjoints)
     if not adjoints:
         raise ValueError("at least one Gamma source adjoint is required")
+    if len(adjoints) == 1:
+        if consume:
+            return _sorted_gamma_source_owned(optimizer, adjoints)[None]
+        return _sorted_gamma_source(optimizer, adjoints[0])[None]
     return cp.stack(
         [_sorted_gamma_source(optimizer, adjoint) for adjoint in adjoints]
     )
+
+
+def _sorted_gamma_source_owned(optimizer, owner):
+    """Transform one Gamma adjoint while releasing each input generation."""
+
+    source = cp.asarray(owner.pop())
+    imaginary = float(cp.max(cp.abs(source.imag)).get())
+    if imaginary > 1.0e-10:
+        raise ValueError(
+            "Gamma source adjoint must be real; maximum imaginary "
+            f"component is {imaginary:.3e}"
+        )
+    real_owner = [source.real]
+    del source
+    return _sorted_source_owned(optimizer, real_owner)
 
 
 def _sorted_source(optimizer, source_adjoint):
@@ -283,6 +311,25 @@ def _sorted_source(optimizer, source_adjoint):
     source = optimizer.cell.apply_C_mat_CT(source)
     source = optimizer.auxcell.apply_C_dot(source, axis=0)
     return cp.asarray(source.transpose(1, 2, 0), order="C")
+
+
+def _sorted_source_owned(optimizer, owner):
+    """Sorted-basis transform that consumes obsolete dense generations."""
+
+    nao = int(optimizer.cell.cell.nao_nr())
+    naux = int(optimizer.auxcell.cell.nao_nr())
+    source = cp.asarray(owner.pop())
+    if source.shape != (nao**2, naux):
+        raise ValueError(
+            "source adjoint must have shape "
+            f"({nao**2}, {naux}), got {source.shape}"
+        )
+    source = source.reshape(nao, nao, naux).transpose(2, 0, 1)
+    ao_sorted = optimizer.cell.apply_C_mat_CT(source)
+    del source
+    fully_sorted = optimizer.auxcell.apply_C_dot(ao_sorted, axis=0)
+    del ao_sorted
+    return cp.asarray(fully_sorted.transpose(1, 2, 0), order="C")
 
 
 def _kpoint_inputs(optimizer, kpts, source_adjoints):

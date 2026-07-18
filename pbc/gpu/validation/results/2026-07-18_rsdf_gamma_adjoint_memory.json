@@ -1,0 +1,48 @@
+{
+  "schema": "gpu4pyscf_pbc_dcdft_rsdf_gamma_adjoint_memory_v1",
+  "date": "2026-07-18",
+  "baseline_commit": "6a9717a",
+  "overall_status": "candidate_small_system_pass",
+  "water64_dzvp_rerun_completed": false,
+  "incident": {
+    "system": "Water64 DZVP-GTH Gamma",
+    "failed_stage": "gdf_response_tensors",
+    "failed_operation": "bilinear = cp.zeros_like(target)",
+    "naux": 1472,
+    "nao": 1472,
+    "complex_adjoint_gib": 47.52734375,
+    "cause": "exact-real Gamma auxiliary contractions retained a complex container and production allocated resolved target and bilinear adjoints"
+  },
+  "implementation": {
+    "production_cderi_adjoint": "direct fused target-J plus HF-bilinear",
+    "gamma_dtype": "float64 when central CDERI and both densities are exact-real",
+    "real_adjoint_gib": 23.763671875,
+    "exchange_temporaries": "one dense contribution at a time",
+    "source_reverse_solve": "shared fused adjoint",
+    "single_observable_stack_copy": false,
+    "basis_transform_lifetime": "consume obsolete physical and intermediate sorted generations",
+    "sampled_k_complex_path_changed": false,
+    "silent_cpu_fallback": false
+  },
+  "water64_dzvp_memory_model_gib": {
+    "physical_real_source_adjoint": 23.763671875,
+    "cartesian_ao_sorted_intermediate": 25.875,
+    "fully_sorted_real_source": 27.0
+  },
+  "validation": {
+    "fused_vs_resolved_gamma_algebra": "pass",
+    "single_source_ownership_consumption": "pass",
+    "h2o_dzvp_sorted_transform_parity": "pass",
+    "full_tensor_contracted_response_witness": "pass",
+    "exact_gpu_source_gamma_full_gradient": "pass",
+    "exact_gpu_source_sampled_k_full_gradient": "pass",
+    "full_rsdf_gpu_suite": {
+      "passed": 28,
+      "failed": 0,
+      "wall_time_s": 434.786
+    },
+    "compileall": "pass",
+    "git_diff_check": "pass"
+  },
+  "next_gate": "rerun the existing Water64 DZVP RSDF queue on the user-controlled large-system benchmark; if it still fails, implement true AO-pair reverse-solve/source-contraction streaming"
+}

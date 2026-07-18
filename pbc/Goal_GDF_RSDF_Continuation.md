@@ -342,3 +342,34 @@ Water64와 같은 large-system 결과는 최종 scaling evidence이지 개발 �
   차이는 $3.40\times10^{-7}$ Ha, gradient 최대 차이는
   $5.01\times10^{-7}$ Ha/Bohr였다.
 - Water64/DZVP 최종 completion은 사용자가 수정 후 queue를 재실행해 확인한다.
+
+## 15. 2026-07-18 Gamma RSDF source-adjoint memory candidate
+
+- 수정된 Water64/DZVP report에서 RSDF uniform과 `multigrid_xc`가 모두
+  `gdf_response_tensors` 단계의 `build_pair_cderi_adjoints()`에서 실패했다. 첫 번째
+  `target` allocation 뒤 `bilinear = cp.zeros_like(target)`가 실패했으며, 이는 source HF,
+  target DFA 또는 Z-vector 수렴 문제가 아니다.
+- Gamma 중앙 CDERI, reference density와 response density는 `float64`였지만
+  `auxiliary_density_contraction()` 결과 container가 `complex128`이라 adjoint 전체가
+  불필요하게 복소화됐다. $n_\mathrm{aux}=n_\mathrm{AO}=1472$에서 한 장은
+  47.527 GiB이며, 같은 shape의 target, bilinear와 exchange temporary를 동시에 만들 수
+  없었다.
+- Production gradient는 target-J와 restricted-HF bilinear의 합만 사용한다. 새 경로는
+  두 adjoint를 따로 만든 뒤 더하지 않고 Coulomb/exchange 항을 하나의 fused output에
+  순차 누적한다. Exact-real Gamma 입력은 `float64`를 유지하므로 fused adjoint 한 장은
+  23.764 GiB다. Exchange temporary도 한 번에 한 장만 존재한다.
+- Cholesky reverse solve와 metric adjoint는 같은 fused array를 공유한다. Native source
+  basis transform 직전 pair execution과 source-adjoint map의 이전 참조를 제거하고,
+  observable 하나를 `cp.stack`으로 복사하지 않는다. Physical source 23.764 GiB,
+  Cartesian AO transform 25.875 GiB와 fully sorted transform 27.000 GiB가 세대별로
+  소비되도록 바뀌었다.
+- 이 변경은 sampled-k complex algebra를 실수로 cast하지 않는다. Gamma에서 core input이
+  모두 exact-real일 때만 real dtype을 선택하고, sampled-k와 complex central block은 기존
+  complex path를 유지한다.
+- Fused-vs-resolved algebra, single-source ownership consumption, H2O/DZVP 실제 RSDF
+  sorted transform, full-tensor contracted-response witness 및 Gamma/sampled-k exact-source
+  end-to-end gradient test가 모두 통과했다.
+- 상태는 `candidate; Water64/DZVP rerun required`다. 이 수리 후에도 fragmentation 또는
+  다른 provider-owned allocation 때문에 실패하면 다음 단계는 AO-pair reverse solve와
+  native source contraction의 진짜 streaming/fusion이며, silent CPU fallback은 사용하지
+  않는다.
