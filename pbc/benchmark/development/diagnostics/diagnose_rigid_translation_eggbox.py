@@ -12,8 +12,7 @@ from time import perf_counter
 import numpy as np
 
 
-WORKSPACE = Path(__file__).resolve().parents[2]
-BENCHMARK = WORKSPACE / "benchmark"
+BENCHMARK = Path(__file__).resolve().parents[2]
 if str(BENCHMARK) not in sys.path:
     sys.path.insert(0, str(BENCHMARK))
 

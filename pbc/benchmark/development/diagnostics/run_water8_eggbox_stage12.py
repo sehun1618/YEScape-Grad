@@ -13,10 +13,17 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-BENCHMARK = Path(__file__).resolve().parents[1]
-DIAGNOSTIC = BENCHMARK / "diagnostics" / "diagnose_rigid_translation_eggbox.py"
-DEFAULT_QUEUE = BENCHMARK / "queues" / "current_correctness.json"
-DEFAULT_OUTPUT = BENCHMARK / "results" / "current_water8_eggbox_stage12"
+BENCHMARK = Path(__file__).resolve().parents[2]
+DIAGNOSTIC = (
+    BENCHMARK
+    / "development"
+    / "diagnostics"
+    / "diagnose_rigid_translation_eggbox.py"
+)
+DEFAULT_QUEUE = BENCHMARK / "user" / "queues" / "current_correctness.json"
+DEFAULT_OUTPUT = (
+    BENCHMARK / "development" / "results" / "current_water8_eggbox_stage12"
+)
 R2SCAN_MESHES = (123, 173, 211, 240, 271)
 AXES = ("x", "y", "z")
 

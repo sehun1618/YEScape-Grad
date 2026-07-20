@@ -48,5 +48,7 @@ docs/**/*.toc
 
 # Benchmark output is machine- and run-specific
 **/benchmark/results/
+**/benchmark/user/results/
+**/benchmark/development/results/
 **/benchmark/backup/results/
 **/benchmarks/results/

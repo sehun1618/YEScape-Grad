@@ -12,8 +12,10 @@ from statistics import median, pstdev
 import numpy as np
 
 
+BENCHMARK = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = (
-    Path(__file__).resolve().parent
+    BENCHMARK
+    / "development"
     / "results"
     / "current_gdf_rsdf_optimization_baseline"
 )

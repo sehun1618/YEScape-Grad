@@ -17,7 +17,11 @@ import numpy as np
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_DIR))
-sys.path.insert(0, str(BENCHMARK_DIR / "diagnostics"))
+sys.path.insert(0, str(BENCHMARK_DIR / "development"))
+sys.path.insert(
+    0,
+    str(BENCHMARK_DIR / "development" / "diagnostics"),
+)
 
 import dcdft_benchmark as benchmark  # noqa: E402
 import diagnose_rigid_translation_eggbox as translation  # noqa: E402
@@ -37,29 +41,55 @@ def _case_evidence(value="fingerprint-1"):
 
 class BenchmarkInputTest(unittest.TestCase):
     def test_repository_json_layout_and_queue_paths(self):
-        queues_dir = BENCHMARK_DIR / "queues"
+        user_queues_dir = BENCHMARK_DIR / "user" / "queues"
+        development_queues_dir = (
+            BENCHMARK_DIR / "development" / "queues"
+        )
         backup_dir = BENCHMARK_DIR / "backup"
         backup_queues_dir = backup_dir / "queues"
         backup_evidence_dir = backup_dir / "evidence"
-        results_dir = (BENCHMARK_DIR / "results").resolve()
+        user_results_dir = (
+            BENCHMARK_DIR / "user" / "results"
+        ).resolve()
+        development_results_dir = (
+            BENCHMARK_DIR / "development" / "results"
+        ).resolve()
         backup_results_dir = (backup_dir / "results").resolve()
         structures_dir = (BENCHMARK_DIR / "structures").resolve()
 
         self.assertEqual(list(BENCHMARK_DIR.glob("*.json")), [])
-        queue_paths = sorted(queues_dir.glob("*.json"))
+        self.assertFalse((BENCHMARK_DIR / "queues").exists())
+        user_queue_paths = sorted(user_queues_dir.glob("*.json"))
+        development_queue_paths = sorted(
+            development_queues_dir.glob("*.json")
+        )
         backup_queue_paths = sorted(backup_queues_dir.glob("*.json"))
         evidence_paths = sorted(backup_evidence_dir.glob("*.json"))
-        self.assertGreater(len(queue_paths), 0)
+        self.assertGreater(len(user_queue_paths), 0)
+        self.assertGreater(len(development_queue_paths), 0)
         self.assertGreater(len(backup_queue_paths), 0)
         self.assertGreater(len(evidence_paths), 0)
 
-        for path, expected_results_dir in [
-            *((path, results_dir) for path in queue_paths),
-            *((path, backup_results_dir) for path in backup_queue_paths),
+        for path, expected_results_dir, expected_scope in [
+            *((path, user_results_dir, "user") for path in user_queue_paths),
+            *(
+                (path, development_results_dir, "development")
+                for path in development_queue_paths
+            ),
+            *(
+                (path, backup_results_dir, None)
+                for path in backup_queue_paths
+            ),
         ]:
             payload = json.loads(path.read_text())
             self.assertIn("defaults", payload, path.name)
             self.assertIn("jobs", payload, path.name)
+            if expected_scope is not None:
+                self.assertEqual(
+                    payload.get("benchmark_scope"),
+                    expected_scope,
+                    path.name,
+                )
             runs = queue.expand_jobs(payload)
             self.assertGreater(len(runs), 0, path.name)
 
@@ -68,6 +98,9 @@ class BenchmarkInputTest(unittest.TestCase):
                 output_root.is_relative_to(expected_results_dir), path.name
             )
             for run in runs:
+                if run.get("atom_file") is None:
+                    self.assertIsNotNone(run.get("atom"), path.name)
+                    continue
                 queue._resolve_atom_file(run, path.parent)
                 atom_path = Path(run["atom_file"])
                 self.assertTrue(atom_path.is_file(), path.name)
@@ -79,6 +112,31 @@ class BenchmarkInputTest(unittest.TestCase):
             payload = json.loads(path.read_text())
             self.assertIn("schema", payload, path.name)
             self.assertNotIn("jobs", payload, path.name)
+
+    def test_managed_queue_scope_rejects_cross_scope_output(self):
+        queue_path = (
+            BENCHMARK_DIR / "user" / "queues" / "current_correctness.json"
+        )
+        payload = json.loads(queue_path.read_text(encoding="utf-8"))
+        user_output = BENCHMARK_DIR / "user" / "results" / "correctness"
+        development_output = (
+            BENCHMARK_DIR / "development" / "results" / "correctness"
+        )
+
+        self.assertEqual(
+            queue._validate_managed_queue(
+                queue_path,
+                payload,
+                user_output,
+            ),
+            "user",
+        )
+        with self.assertRaisesRegex(ValueError, "output must stay"):
+            queue._validate_managed_queue(
+                queue_path,
+                payload,
+                development_output,
+            )
 
     def test_array_identity_is_compact_and_byte_sensitive(self):
         first = benchmark._array_identity(np.asarray([[1.0, 2.0]]))

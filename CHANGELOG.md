@@ -8,6 +8,10 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### Packaging and scope
 
+- Separate stable user-run benchmarks (`pbc/benchmark/user`) from Codex
+  implementation and profiling benchmarks (`pbc/benchmark/development`).
+  Managed queues declare their scope, and the runner rejects cross-scope
+  output paths before starting a calculation.
 - Curate molecular CPU/GPU and periodic CPU/GPU DC-DFT gradient packages with
   reproducible examples, validation scripts, and benchmark inputs.
 - Align the repository and all four wheel distributions with the Apache-2.0

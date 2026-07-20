@@ -26,6 +26,7 @@ import evidence
 HERE = Path(__file__).resolve().parent
 CASE_RUNNER = HERE / "dcdft_benchmark.py"
 KST = ZoneInfo("Asia/Seoul")
+MANAGED_QUEUE_SCOPES = ("user", "development")
 CASE_ARTIFACTS = (
     "run_input.json",
     "command.txt",
@@ -36,6 +37,48 @@ CASE_ARTIFACTS = (
     "attempt.json",
     "arrays",
 )
+
+
+def _managed_queue_scope(queue_path: Path) -> str | None:
+    """Return the repository-managed scope for a queue path."""
+
+    try:
+        relative = queue_path.resolve().relative_to(HERE)
+    except ValueError:
+        return None
+    parts = relative.parts
+    if (
+        len(parts) >= 3
+        and parts[0] in MANAGED_QUEUE_SCOPES
+        and parts[1] == "queues"
+    ):
+        return parts[0]
+    return None
+
+
+def _validate_managed_queue(
+    queue_path: Path,
+    payload: Mapping[str, Any],
+    output_root: Path,
+) -> str | None:
+    """Keep user and development queues and outputs physically separate."""
+
+    scope = _managed_queue_scope(queue_path)
+    if scope is None:
+        return None
+    declared = str(payload.get("benchmark_scope", "")).strip().lower()
+    if declared != scope:
+        raise ValueError(
+            f"{queue_path} must declare benchmark_scope={scope!r}, "
+            f"got {declared!r}"
+        )
+    expected_root = (HERE / scope / "results").resolve()
+    if not output_root.resolve().is_relative_to(expected_root):
+        raise ValueError(
+            f"{scope} queue output must stay under {expected_root}, "
+            f"got {output_root}"
+        )
+    return scope
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -451,6 +494,7 @@ def _summary_row(
         ),
         "accuracy_status": report.get("accuracy_status", "not_requested"),
         "queue_state": queue_state,
+        "benchmark_scope": report.get("benchmark_scope"),
         "device": report.get("device"),
         "df_backend": report.get("df_backend"),
         "target_integrator": report.get("target_integrator", "uniform"),
@@ -587,6 +631,11 @@ def main() -> int:
     output_root = Path(output_value).expanduser()
     if not output_root.is_absolute():
         output_root = (queue_path.parent / output_root).resolve()
+    benchmark_scope = _validate_managed_queue(
+        queue_path,
+        queue,
+        output_root,
+    )
     output_root.mkdir(parents=True, exist_ok=True)
 
     manifest: list[dict[str, Any]] = []
@@ -594,6 +643,8 @@ def main() -> int:
     source_record = evidence.source_provenance()
     runs = expand_jobs(queue)
     for index, run in enumerate(runs):
+        if benchmark_scope is not None:
+            run["benchmark_scope"] = benchmark_scope
         _resolve_atom_file(run, queue_path.parent)
         run["evidence"] = evidence.build_case_evidence(
             run,
@@ -645,6 +696,7 @@ def main() -> int:
             output_root / "queue_manifest.json",
             {
                 "queue": str(queue_path),
+                "benchmark_scope": benchmark_scope,
                 "output_root": str(output_root),
                 "runs": manifest,
             },

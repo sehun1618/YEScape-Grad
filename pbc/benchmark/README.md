@@ -19,17 +19,17 @@ Directory 역할은 다음과 같다.
 
 ```text
 benchmark/
-  queues/       현재 source tree용 queue와 짧은 index
+  user/         사용자가 직접 실행하는 안정 queue와 전용 results
+  development/  Codex 구현/profiling queue, diagnostics와 전용 results
   structures/   XYZ 입력
-  results/      지금부터 생성하는 실행 결과
+  results/      분리 이전 legacy 결과; 새 계산은 쓰지 않음
   backup/       2026-07-20 이전 queue, evidence 및 raw result
-  diagnostics/  별도 진단 script
   tests/        benchmark runner unit tests
 ```
 
-새 실행 입력은 `queues/`에 두고, 계산이 끝난 `report.json`이나 `progress.json`을
-queue와 섞지 않는다. 현재 queue의 용도별 목록은 `queues/README.md`, 과거 artifact의
-구조는 `backup/README.md`에서 관리한다.
+사용자 실행은 `user/queues/`, 구현 작업은 `development/queues/`에 둔다. 각 queue는
+동일 scope의 `results/` 밖에 쓸 수 없으며 runner가 계산 전에 검사한다. 자세한 규칙은
+`BENCHMARK_POLICY.md`, 과거 artifact 구조는 `backup/README.md`에서 관리한다.
 
 ## 1. Queue 실행
 
@@ -38,7 +38,7 @@ queue와 섞지 않는다. 현재 queue의 용도별 목록은 `queues/README.md
 ```bash
 cd pbc/benchmark
 conda run -n gpu python run_benchmark_queue.py \
-  --queue queues/current_correctness.json
+  --queue user/queues/current_correctness.json
 ```
 
 완료된 `report.json`의 case fingerprint가 현재 effective input 및 source tree와
@@ -49,7 +49,7 @@ archive하고 새로 실행한다. 동일 fingerprint의 완료 case까지 다�
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue queues/current_correctness.json \
+  --queue user/queues/current_correctness.json \
   --overwrite
 ```
 
@@ -77,7 +77,7 @@ Linux process start time을 확인한다. 같은 process가 더 이상 없으면
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue queues/current_water64_sz.json \
+  --queue user/queues/current_water64_sz.json \
   --only rsdf_multigrid
 ```
 
@@ -88,7 +88,7 @@ conda run -n gpu python run_benchmark_queue.py \
 ```bash
 cd pbc/benchmark
 conda run -n gpu python run_benchmark_queue.py \
-  --queue queues/current_correctness.json \
+  --queue user/queues/current_correctness.json \
   --only rsdf
 ```
 
@@ -98,7 +98,7 @@ analytic gradient를 atom 0의 z component central FD로 검증한다. 반복 ti
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue queues/current_correctness.json \
+  --queue user/queues/current_correctness.json \
   --only rsdf \
   --output-root ../results/my_rsdf_benchmark
 ```
@@ -218,7 +218,7 @@ water-ethanol 500 Ha 입력의 `cell.mesh=[311,311,311]`은 GPU4PySCF multigrid�
 따라서 큰 cell에서는 target mesh를 명시하고 별도의 mesh 수렴 시험으로 정확도를
 확인해야 한다.
 
-현재 small-system analytic/FD gate는 `queues/current_correctness.json`에 있다. 과거
+현재 small-system analytic/FD gate는 `user/queues/current_correctness.json`에 있다. 과거
 multigrid correctness/performance gate는 `backup/queues/`와 `backup/results/`에
 함께 보존한다.
 `report.json`의 `gradient_metadata.target_integration`에는 J/XC/PP owner, mesh, task
@@ -343,7 +343,7 @@ one-electron, target J/XC, Pulay, nuclear 및 response channel별 합을 저장�
 
 ```bash
 conda run -n gpu python diagnostics/diagnose_rigid_translation_eggbox.py \
-  --input results/my_queue/000_case/run_input.json \
+  --input user/results/my_queue/000_case/run_input.json \
   --axis x \
   --center-phase 0.25 \
   --slope-step-bohr 1e-4 \
@@ -370,10 +370,10 @@ Water8에서 mesh/축별 Stage 1·2 진단을 다시 실행하려면 다음 comm
 간격을 1/8-step으로 표본화해 energy peak-to-peak와 worst sampled slope를 저장한다.
 
 ```bash
-conda run -n gpu python diagnostics/run_water8_eggbox_stage12.py
+conda run -n gpu python development/diagnostics/run_water8_eggbox_stage12.py
 ```
 
-결과는 `results/current_water8_eggbox_stage12/`의 개별 JSON, `cases.csv`,
+결과는 `development/results/current_water8_eggbox_stage12/`의 개별 JSON, `cases.csv`,
 `mesh_convergence.csv` 및 `summary.json`에 저장된다. 기존 case JSON은 기본적으로
 재사용하며 전부 다시 계산할 때만 `--overwrite`를 사용한다.
 
@@ -386,13 +386,13 @@ conda run -n gpu python diagnostics/run_water8_eggbox_stage12.py
 
 ```bash
 python show_progress.py \
-  results/my_queue/000_water_gpu_gdf
+  user/results/my_queue/000_water_gpu_gdf
 ```
 
 queue 아래의 모든 case를 5초마다 추적하려면 다음 명령을 사용한다.
 
 ```bash
-python show_progress.py results/my_queue --watch 5
+python show_progress.py user/results/my_queue --watch 5
 ```
 
 대표 stage는 `source_hf_scf`, `target_dfa_energy`, `zvector_matrix`,

@@ -9,8 +9,10 @@ semilocal control.  Each x/y/z scan samples eight equally spaced phases over
 one uniform-grid interval.
 
 The reusable runner is
-`benchmark/diagnostics/run_water8_eggbox_stage12.py`.  Machine-readable results
-are under `benchmark/results/current_water8_eggbox_stage12/`.
+`benchmark/development/diagnostics/run_water8_eggbox_stage12.py`.  The recorded
+machine-readable results remain under the legacy path
+`benchmark/results/current_water8_eggbox_stage12/`; future runs use
+`benchmark/development/results/`.
 
 ## Stage 1: Phase Scan
 

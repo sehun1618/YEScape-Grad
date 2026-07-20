@@ -1,22 +1,45 @@
 {
   "output_root": "../results/current_water64_prepost_optimized_omega1",
   "defaults": {
-    "atom_file": "../structures/water64.xyz",
+    "atom_file": "../../structures/water64.xyz",
     "atom_unit": "Angstrom",
-    "lattice_vectors": [[12.4139, 0.0, 0.0], [0.0, 12.4139, 0.0], [0.0, 0.0, 12.4139]],
+    "lattice_vectors": [
+      [
+        12.4139,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        12.4139,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        12.4139
+      ]
+    ],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
-    "pseudo": {"H": "GTH-SCAN-q1", "O": "GTH-SCAN-q6"},
+    "pseudo": {
+      "H": "GTH-SCAN-q1",
+      "O": "GTH-SCAN-q6"
+    },
     "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
     "rsdf_compressed_device_cache": "host",
     "ke_cutoff_ha": 500.0,
-    "precision": 1e-9,
-    "kmesh": [1, 1, 1],
+    "precision": 1e-09,
+    "kmesh": [
+      1,
+      1,
+      1
+    ],
     "xc": "r2SCAN",
-    "conv_tol": 1e-8,
-    "conv_tol_grad": 1e-8,
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
     "max_cycle": 80,
     "num_threads": 64,
     "gpu_id": 0,
@@ -25,18 +48,30 @@
     "device_warmup": true,
     "z_solver": "matrix_free",
     "z_tolerance": 1e-12,
-    "z_residual_tolerance": 1e-8,
+    "z_residual_tolerance": 1e-08,
     "z_max_cycle": 80,
     "z_nuclear_batch_memory_fraction": 0.05,
     "target_integrator": "multigrid_xc",
-    "target_multigrid_mesh": [240, 240, 240],
+    "target_multigrid_mesh": [
+      240,
+      240,
+      240
+    ],
     "device": "gpu",
     "gdf_derivative_omega_scale": 1.0,
     "rsdf_derivative_omega_scale": 1.0,
     "run_fd": false
   },
   "jobs": [
-    {"name": "water64_gdf_optimized_omega1", "df_backend": "gdf", "gdf_bilinear_mode": "optimized_fused"},
-    {"name": "water64_rsdf_optimized_omega1", "df_backend": "rsdf"}
-  ]
+    {
+      "name": "water64_gdf_optimized_omega1",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "optimized_fused"
+    },
+    {
+      "name": "water64_rsdf_optimized_omega1",
+      "df_backend": "rsdf"
+    }
+  ],
+  "benchmark_scope": "development"
 }

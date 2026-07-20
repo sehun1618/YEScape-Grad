@@ -1,12 +1,24 @@
 {
   "output_root": "../results/current_water_ethanol_sz_uniform_vs_multigrid",
   "defaults": {
-    "atom_file": "../structures/water_ethanol.xyz",
+    "atom_file": "../../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
-      [16.2, 0.0, 0.0],
-      [0.0, 16.2, 0.0],
-      [0.0, 0.0, 16.2]
+      [
+        16.2,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        16.2,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        16.2
+      ]
     ],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
@@ -18,12 +30,20 @@
     "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
-    "mesh": [240, 240, 240],
-    "precision": 1e-9,
-    "kmesh": [1, 1, 1],
+    "mesh": [
+      240,
+      240,
+      240
+    ],
+    "precision": 1e-09,
+    "kmesh": [
+      1,
+      1,
+      1
+    ],
     "xc": "r2SCAN",
-    "conv_tol": 1e-8,
-    "conv_tol_grad": 1e-8,
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
     "max_cycle": 80,
     "num_threads": 64,
     "gpu_id": 0,
@@ -32,7 +52,7 @@
     "device_warmup": true,
     "z_solver": "matrix_free",
     "z_tolerance": 1e-12,
-    "z_residual_tolerance": 1e-8,
+    "z_residual_tolerance": 1e-08,
     "z_max_cycle": 80,
     "z_nuclear_batch_memory_fraction": 0.05,
     "run_fd": false
@@ -50,7 +70,11 @@
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": [240, 240, 240],
+      "target_multigrid_mesh": [
+        240,
+        240,
+        240
+      ],
       "gdf_bilinear_mode": "one_pass_fused"
     },
     {
@@ -64,7 +88,12 @@
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": [240, 240, 240]
+      "target_multigrid_mesh": [
+        240,
+        240,
+        240
+      ]
     }
-  ]
+  ],
+  "benchmark_scope": "user"
 }

@@ -15,7 +15,7 @@
   "after": {
     "git_commit": "a112d2c6cb7cf0295494dab836d07d48fb460c9d",
     "source_tree_sha256": "131a854c0f53e9fdfea14fb7d17e35e828921e463702bc64ef5c04199c8d27cf",
-    "queue": "benchmark/queues/current_water64_prepost_optimized_omega1.json",
+    "queue": "benchmark/development/queues/current_water64_prepost_optimized_omega1.json",
     "result_root": "benchmark/results/current_water64_prepost_optimized_omega1"
   },
   "gdf": {

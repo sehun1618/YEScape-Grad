@@ -1,0 +1,339 @@
+{
+  "output_root": "../results/current_gdf_rsdf_optimization_baseline",
+  "defaults": {
+    "atom_unit": "Angstrom",
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {
+      "H": "GTH-SCAN-q1",
+      "O": "GTH-SCAN-q6"
+    },
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "precision": 1e-09,
+    "kmesh": [
+      1,
+      1,
+      1
+    ],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "vram_sample_interval_s": 0.05,
+    "device_warmup": true,
+    "z_solver": "matrix_free",
+    "z_tolerance": 1e-12,
+    "z_residual_tolerance": 1e-08,
+    "z_max_cycle": 80,
+    "z_nuclear_batch_memory_fraction": 0.05,
+    "target_integrator": "multigrid_xc",
+    "target_multigrid_mesh": [
+      240,
+      240,
+      240
+    ],
+    "run_fd": false
+  },
+  "jobs": [
+    {
+      "name": "water8_gdf_repeat_01",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water8_rsdf_repeat_01",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    },
+    {
+      "name": "water8_gdf_repeat_02",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water8_rsdf_repeat_02",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    },
+    {
+      "name": "water8_gdf_repeat_03",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water8_rsdf_repeat_03",
+      "atom_file": "../../structures/water8.xyz",
+      "lattice_vectors": [
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          10.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          10.0
+        ]
+      ],
+      "ke_cutoff_ha": 400.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    },
+    {
+      "name": "water20_gdf_repeat_01",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water20_rsdf_repeat_01",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    },
+    {
+      "name": "water20_gdf_repeat_02",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water20_rsdf_repeat_02",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    },
+    {
+      "name": "water20_gdf_repeat_03",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "water20_rsdf_repeat_03",
+      "atom_file": "../../structures/water20.xyz",
+      "lattice_vectors": [
+        [
+          12.4139,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.4139,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          12.4139
+        ]
+      ],
+      "ke_cutoff_ha": 500.0,
+      "device": "gpu",
+      "df_backend": "rsdf"
+    }
+  ],
+  "benchmark_scope": "development"
+}

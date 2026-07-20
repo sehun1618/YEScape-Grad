@@ -1308,6 +1308,7 @@ def run_benchmark(
         "accuracy_gate": accuracy_gate,
         "schema_version": 2,
         "run_name": config.get("name"),
+        "benchmark_scope": config.get("benchmark_scope"),
         "device": device,
         "df_backend": backend,
         "target_integrator": str(
@@ -1405,6 +1406,7 @@ def run_benchmark(
                 "rsdf_derivative_omega_scale",
                 None,
             ),
+            "benchmark_scope": config.get("benchmark_scope"),
         },
         "fd": {
             "enabled": bool(config.get("run_fd", False)),
@@ -1443,6 +1445,7 @@ def main() -> int:
         output_dir / "progress.json",
         context={
             "run_name": config.get("name"),
+            "benchmark_scope": config.get("benchmark_scope"),
             "device": config.get("device", "cpu"),
             "df_backend": config.get("df_backend", "fftdf"),
             "target_integrator": config.get(
@@ -1481,6 +1484,7 @@ def main() -> int:
             "accuracy_status": None,
             "schema_version": 2,
             "run_name": config.get("name"),
+            "benchmark_scope": config.get("benchmark_scope"),
             "run_identity": config.get("run_identity"),
             "evidence": config.get("evidence"),
             "software_provenance": evidence.software_provenance(
