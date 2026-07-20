@@ -2,8 +2,9 @@
 
 `PBC_DC_DFT_Gradient_Theory.tex`는 active 범위인 restricted closed-shell PBC
 DC-DFT nuclear analytic gradient를 설명하는 연속형 교재 원본이다. 포함 범위는
-FFTDF, GDF, RSDF, PBE, SCAN/r2SCAN, Gamma-point와 일반 k-point, CPU/GPU
-algorithm mapping이다.
+FFTDF, GDF, RSDF, PBE, SCAN/r2SCAN, Gamma-point와 일반 k-point, target
+multigrid ownership, matrix-free Z-vector와 bounded-memory CPU/GPU algorithm
+mapping이다.
 
 동일한 수식 label과 chapter 구조를 사용하는 English edition은 다음 파일로 제공한다.
 
@@ -48,5 +49,5 @@ xelatex -interaction=nonstopmode -halt-on-error PBC_DC_DFT_Gradient_Theory_EN.te
 - `undefined references`, `Overfull`, `Underfull` warning이 없어야 한다.
 - Korean text, equation, table, equation number와 hyperlink가 정상 렌더링되어야 한다.
 - 구현 함수 연결은 `../implementation/Equation_Code_Map.md`와 함께 확인한다.
-- active 범위 밖의 multigrid, stress/cell derivative, larger-basis 확장 및
+- active 범위 밖의 multigrid PP, stress/cell derivative, larger-basis 확장 및
   open-shell/UHF는 구현 대상으로 기술하지 않는다.

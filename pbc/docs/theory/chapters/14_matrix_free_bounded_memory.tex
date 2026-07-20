@@ -1,0 +1,195 @@
+\section{Matrix-free Z-vector와 bounded-memory response}
+\label{sec:matrix-free-bounded-memory}
+
+\subsection{Response dimension과 dense matrix 비용}
+
+k-point $\vk$에서 occupied--virtual rotation의 complex dimension은
+$n_o^{\vk}n_v^{\vk}$다. 식~\eqref{eq:realified-coordinate}의 realification을 적용하면 전체
+real dimension은
+\begin{equation}
+  m=2\sum_{\vk}n_o^{\vk}n_v^{\vk}.
+  \label{eq:response-real-dimension}
+\end{equation}
+Dense real Hessian은 $m\times m$이고 float64 저장량만
+\begin{equation}
+  M_{\mathrm{dense}}=8m^2\ \text{bytes}
+  \label{eq:dense-hessian-storage}
+\end{equation}
+다. Factorization과 condition-number diagnostic은 matrix copy와 workspace를 추가로
+요구한다. 따라서 dense route는 작은 reference problem에서 equation-level parity를
+확인하는 데 적합하지만 production scaling에는 적합하지 않다.
+
+Dense matrix의 각 column을 얻으려면 basis vector $e_j$마다 AX를 한 번 호출해야 한다.
+이는 ``$m^2$개의 equation을 푼다''는 뜻이 아니라, $m$개의 basis direction에 대한
+operator action을 모아 $m^2$ element를 만든다는 뜻이다.
+
+\subsection{Matrix-free Hessian action}
+
+Matrix-free route는 $A$를 저장하지 않고 trial vector $u$가 들어올 때
+\begin{equation}
+  u\longmapsto D^{(1)}(u)
+  \longmapsto \delta J[D^{(1)}]-\tfrac12\delta K[D^{(1)}]
+  \longmapsto Au
+  \label{eq:matrix-free-action}
+\end{equation}
+을 계산한다. 첫 화살표는 VO rotation을 Hermitian transition density로 만들고, 두 번째는
+선택한 FFTDF/GDF/RSDF central J/K provider를 적용하며, 마지막은 AO 결과를 VO block으로
+project하고 orbital-energy gap을 더한다.
+
+따라서 Krylov iteration이 21회라면 전체 $m$-component vector를 21개만 선택해 푸는 것이
+아니다. 매 iteration에서 길이 $m$인 trial vector 전체에 AX를 적용하며, 21개의 Krylov
+direction이 solution을 표현하기에 충분했다는 뜻이다.
+
+\subsection{MINRES와 energy-gap preconditioner}
+
+Realified HF Hessian은 이상적으로 real symmetric이지만 반드시 positive definite일
+필요는 없다. MINRES는 symmetric indefinite linear system에서 residual norm을 줄이는
+Lanczos/Krylov method이므로 이 구조에 맞는다. $z_0=0$에서 시작한 $p$번째 subspace는
+\begin{equation}
+  \mathcal K_p(A,b)
+  =\operatorname{span}\{b,Ab,A^2b,\ldots,A^{p-1}b\}.
+  \label{eq:minres-krylov}
+\end{equation}
+
+가장 간단한 preconditioner는 independent-particle energy gap이다.
+\begin{equation}
+  P_{ai\vk,ai\vk}=\varepsilon_a^{\vk}-\varepsilon_i^{\vk},
+  \qquad P^{-1}r\approx A^{-1}r.
+  \label{eq:gap-preconditioner}
+\end{equation}
+이는 two-electron coupling을 버려 solution을 근사하는 것이 아니다. MINRES가 푸는
+operator는 여전히 full $A$이고, $P^{-1}$은 잘못된 scaling을 줄여 subspace convergence를
+빠르게 하는 coordinate transformation이다. Positive VO gap, dtype와 k-point ordering을
+solver 시작 전에 검사한다.
+
+Convergence는 solver의 internal flag만으로 승인하지 않고 실제 equation residual
+\begin{equation}
+  \eta_z
+  =\frac{\|A_R^Tz_R+g_R\|_\infty}
+         {\max(1,\|g_R\|_\infty)}
+  \label{eq:scaled-z-residual}
+\end{equation}
+을 다시 계산한다. 필요한 경우 residual equation
+\begin{equation}
+  A_R^T\delta z_R=-\left(A_R^Tz_R+g_R\right),
+  \qquad z_R\leftarrow z_R+\delta z_R
+  \label{eq:iterative-refinement}
+\end{equation}
+을 같은 matrix-free solver로 풀어 iterative refinement를 수행한다.
+
+\subsection{대칭성, complex k-point와 solver 선택}
+
+MINRES는 realified operator가 numerical tolerance 안에서 symmetric이라는 가정에
+의존한다. Reverse k-pair conjugation, $1/N_k$, occupation factor 또는 J/K transpose가
+틀리면 dense test에서 $\|A_R-A_R^T\|$가 커지고 matrix-free convergence도 불안정해질 수
+있다. 작은 Gamma/sampled-k case에서 dense와 matrix-free solution, gradient와 residual을
+먼저 비교해야 한다.
+
+Automatic policy는 작은 $m$에서 dense reference, 큰 $m$에서 matrix-free를 선택할 수
+있다. 그러나 exact condition number를 얻으려고 큰 dense matrix를 다시 만들면 matrix-free
+목적을 잃는다. Production report에서는 condition number를 ``not evaluated''로 명시하고
+iteration count, residual과 minimum gap을 보존하는 편이 정직하다.
+
+\subsection{Nuclear source batching}
+
+Z-vector는 한 번 풀지만 $B^{Ax}$는 $3N_A$ perturbation을 갖는다. 모든 component의
+AO/VO response tensor를 동시에 만들면 대략
+\begin{equation}
+  M_B\sim 3N_A N_kN_{\mathrm{AO}}^2\,s_{\mathrm{dtype}}
+  \label{eq:nuclear-batch}
+\end{equation}
+로 증가한다. Component batch $\mathcal C$를 사용해
+\begin{equation}
+  g_{Ax}^{\mathrm{resp}}=z^TB^{Ax},\qquad (A,x)\in\mathcal C
+\end{equation}
+를 계산한 뒤 scalar gradient만 보존하면 결과는 변하지 않는다. Batch size는 free memory,
+dtype, AO dimension과 temporary count로 정하고, OOM에는 같은 component부터 더 작은
+batch로 재시도해야 한다. 이미 완료한 component를 중복 합산해서는 안 된다.
+
+\subsection{Full derivative tensor 대신 adjoint contraction}
+
+GDF/RSDF에서 whitened three-center factor를 $C=L^{-1}B$라 하자. Nuclear derivative는
+\begin{equation}
+  C^{Ax}=L^{-1}\left(B^{Ax}-L^{Ax}C\right)
+  \label{eq:bounded-cderi-derivative}
+\end{equation}
+지만, 최종 gradient가 요구하는 것은 대개 어떤 adjoint source $W_C$와의 scalar
+contraction
+\begin{equation}
+  \mathcal G^{Ax}=\operatorname{Re}\langle W_C,C^{Ax}\rangle
+  \label{eq:reverse-contraction}
+\end{equation}
+뿐이다. $W_B=L^{-\dagger}W_C$를 먼저 만들면
+\begin{equation}
+  \mathcal G^{Ax}
+  =\operatorname{Re}\langle W_B,B^{Ax}\rangle
+   -\operatorname{Re}\langle W_B,L^{Ax}C\rangle.
+  \label{eq:reverse-cderi-response}
+\end{equation}
+따라서 $(3N_A,N_{\mathrm{aux}},N_{\mathrm{AO}}^2)$ full $C^{Ax}$를 저장하지 않고 source와
+metric derivative를 block별로 scalar에 누적할 수 있다. 이는 reverse-mode/adjoint
+algebra이며 작은 항을 무시하는 screening approximation과 다르다.
+
+\subsection{Signed two-density polarization}
+
+Restricted-HF two-electron fixed-density derivative를 quadratic form
+\begin{equation}
+  Q^{Ax}(X)
+  =\frac{1}{2N_k}\sum_{\vk}\operatorname{Re}
+   \Tr\left[X^{\vk}L^{Ax}[X]^{\vk}\right]
+  \label{eq:quadratic-derivative}
+\end{equation}
+로 쓴다. $L^{Ax}$가 density에 선형이면 reference density $D$와 Z transition density
+$T$의 bilinear response는 exact polarization identity
+\begin{equation}
+  R_{2e}^{Z,Ax}=Q^{Ax}(D+T)-Q^{Ax}(D-T)
+  \label{eq:polarization-identity}
+\end{equation}
+로 얻어진다. 동치인 direct form은
+\begin{equation}
+  R_{2e}^{Z,Ax}
+  =\frac1{N_k}\sum_{\vk}\operatorname{Re}\left\{
+    \Tr[D^{\vk}L^{Ax}[T]^{\vk}]
+   +\Tr[T^{\vk}L^{Ax}[D]^{\vk}]
+  \right\}.
+  \label{eq:bilinear-response}
+\end{equation}
+
+두 개의 independent quadratic traversal 대신 signed state를 같은 SR/LR/metric traversal에
+태우면 grid와 integral을 한 번 읽을 수 있다. 단, Coulomb과 exchange의 두 orientation,
+auxiliary metric response, Ewald exchange correction, k-pair conjugation을 모두 보존해야
+한다. 단순히 $D+T$ 한 density만 계산하면 self term이 섞여 식
+\eqref{eq:bilinear-response}가 되지 않는다.
+
+\subsection{Streaming, block size와 object lifetime}
+
+Reciprocal source derivative가 $N_G$ vectors와 $N_{AO}^2$ AO pair를 동시에 만들면 주요
+working set은 대략
+\begin{equation}
+  M_{\mathrm{block}}
+  \sim b_GN_kN_{AO}^2s_{\mathrm{complex}}\,n_{\mathrm{temporary}}
+  \label{eq:block-working-set}
+\end{equation}
+다. $b_G$를 줄이면 모든 $G$ vector를 그대로 처리하면서 peak memory를 낮출 수 있다.
+작은 block은 kernel launch 수를 늘려 조금 느릴 수 있으므로, free-memory fraction과 hard
+cap을 함께 사용하고 resolved block size/count를 report한다.
+
+또한 마지막 consumer가 끝난 CDERI, multigrid task와 response temporary를 즉시 release하면
+서로 다른 stage의 peak가 겹치지 않는다. 다음 distinction이 중요하다.
+\begin{equation}
+  \underbrace{\text{batching, streaming, adjoint, lifetime}}_{\text{same finite representation}}
+  \neq
+  \underbrace{\text{looser screening, smaller mesh, smaller basis}}_{\text{changed representation}}.
+  \label{eq:algebra-vs-approx}
+\end{equation}
+첫 그룹은 roundoff 안에서 같은 결과를 내야 하고 parity test로 검증한다. 두 번째 그룹은
+계산량과 정확도를 함께 바꾸므로 convergence study가 필요하다.
+
+\subsection{알고리즘 참고 문헌}
+
+MINRES의 원 논문은 C.~C. Paige와 M.~A. Saunders,
+\href{https://doi.org/10.1137/0712047}{SIAM J. Numer. Anal. 12, 617--629
+(1975)}다. 이 project의 matrix-free 사용은 해당 일반 알고리즘에 HF Hessian action과
+orbital-gap preconditioner를 결합한 것이다. PySCF의 설계 철학과 periodic Gaussian
+framework는 \href{https://doi.org/10.1002/wcms.1340}{Sun et al., WIREs Comput.
+Mol. Sci. 8, e1340 (2018)}를 참고한다.

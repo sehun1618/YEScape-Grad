@@ -1,0 +1,61 @@
+{
+  "output_root": "../results/water_ethanol_gdf_rsdf_multigrid_SZ_mesh240_recheck",
+  "defaults": {
+    "atom_file": "../../structures/water_ethanol.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [
+      [16.2, 0.0, 0.0],
+      [0.0, 16.2, 0.0],
+      [0.0, 0.0, 16.2]
+    ],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {
+      "H": "GTH-SCAN-q1",
+      "C": "GTH-SCAN-q4",
+      "O": "GTH-SCAN-q6"
+    },
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 500.0,
+    "precision": 1e-9,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-8,
+    "conv_tol_grad": 1e-8,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "vram_sample_interval_s": 0.05,
+    "device_warmup": true,
+    "z_solver": "matrix_free",
+    "z_tolerance": 1e-12,
+    "z_residual_tolerance": 1e-8,
+    "z_max_cycle": 80,
+    "gdf_bilinear_mode": "one_pass_fused",
+    "run_fd": false,
+    "fd_step_bohr": 0.0001,
+    "fd_atoms": "all",
+    "fd_axes": "all"
+  },
+  "jobs": [
+    {
+      "name": "gdf_plus_multigrid_xc_mesh240",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": [240, 240, 240]
+    },
+    {
+      "name": "rsdf_plus_multigrid_xc_mesh240",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": [240, 240, 240]
+    }
+  ]
+}

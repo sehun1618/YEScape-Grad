@@ -154,6 +154,8 @@ MGGA만 net translation이 큼 & $\tau$ factor, second AO derivative, grid alias
 RSDF value parity 실패 & source/metric $\omega$ 또는 mesh 혼용 \\
 Z residual은 작고 전체 FD만 틀림 & explicit hcore/J/XC/Pulay derivative \\
 CPU/GPU total만 같고 component가 다름 & silent fallback 또는 서로 다른 ownership \\
+Multigrid energy와 gradient가 각각은 안정적이나 FD 불일치 & 서로 다른 target mesh/task 또는 J owner 이중 계산 \\
+큰 target mesh에서 OOM 없이 잘못된 주소 접근 & 앞선 비동기 custom kernel의 배열 범위 초과 \\
 \bottomrule
 \end{longtable}
 \end{center}

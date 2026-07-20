@@ -1,0 +1,181 @@
+\section{Worked computational workflow and result interpretation}
+\label{sec:worked-workflow}
+
+This chapter connects the preceding equations to the order of operations in
+a restricted closed-shell Gamma calculation.  It is not a molecule-specific
+input tutorial; it follows which object is built at each step and which
+numerical representation owns it.
+
+\subsection{Step 0: define the numerical problem}
+
+Consider an RSDF source backend, the \texttt{multigrid\_xc} target integrator,
+and r2SCAN.  Before the calculation, fix
+\begin{itemize}
+  \item coordinates, lattice, units, charge, and spin;
+  \item primary basis, GTH pseudopotential, and auxiliary basis;
+  \item Gamma or an explicit k-point list and weights;
+  \item source cutoff/mesh and RSDF source/metric $\omega$ and meshes;
+  \item target multigrid mesh; and
+  \item HF, gradient, and Z-vector tolerances.
+\end{itemize}
+Recording both source and target meshes defines a reproducible problem more
+completely than saying only that the cutoff was 500 Ha.
+
+\subsection{Step 1: source HF}
+
+RSDF builds $J[D]$ and $K[D]$ in the iteration
+\begin{equation}
+  F_{\mathrm{HF}}=h+J[D]-\tfrac12K[D].
+\end{equation}
+After convergence, retain $D^{\mathrm{HF}}$, MO coefficients, occupations,
+orbital energies, and the source DF provider.  There is no r2SCAN target
+optimization in this step.  If switching the target integrator from uniform
+to multigrid changes this source state, the ownership implementation is
+incorrect.
+
+\subsection{Step 2: fixed-density target energy}
+
+Evaluate the target functional at the same $D^{\mathrm{HF}}$.  In M1,
+\begin{equation}
+  E_{\mathrm{target}}
+  =\Tr[D^{\mathrm{HF}}h]+E_J^{\mathrm{RSDF}}[D^{\mathrm{HF}}]
+   +E_{\mathrm{xc}}^{\mathrm{MG}}[D^{\mathrm{HF}}]+E_{NN},
+\end{equation}
+and
+\begin{equation}
+  F_{\mathrm{target}}
+  =h+J_{\mathrm{RSDF}}[D^{\mathrm{HF}}]
+    +V_{\mathrm{xc}}^{\mathrm{MG}}[D^{\mathrm{HF}}].
+\end{equation}
+No SCF is run with this Fock matrix.  The energy workspace retains the target
+Fock and multigrid tasks for reuse by the gradient.
+
+\subsection{Step 3: nonstationary right-hand side}
+
+Project the target Fock into the source HF VO block,
+\begin{equation}
+  g_{ai}=2(C_v^\dagger F_{\mathrm{target}}C_o)_{ai}.
+\end{equation}
+If $g=0$, the target energy happens to be stationary in the HF orbitals and
+there is no orbital-response contribution.  In a general DC-DFT calculation,
+$g\ne0$ and becomes the Z-vector right-hand side.
+
+\subsection{Step 4: source HF Z-vector}
+
+For small real dimension $m$, a dense $A_R$ provides a reference solution.
+Large calculations use matrix-free AX with RSDF transition-density J/K and
+MINRES.  The report should contain
+\begin{itemize}
+  \item dense or matrix-free solver selection;
+  \item real response dimension and iteration count;
+  \item minimum orbital gap and preconditioner;
+  \item final scaled residual $\eta_z$; and
+  \item total and mean-iteration solver wall times.
+\end{itemize}
+A small iteration count alone is not an accuracy certificate.  The explicit
+residual and small-system dense parity are the completion evidence.
+
+\subsection{Step 5: explicit target gradient}
+
+At fixed target density, evaluate
+\begin{itemize}
+  \item selected one-electron $h^{Ax}$ and GTH PP derivatives;
+  \item the RSDF target $dJ/dR$;
+  \item the multigrid target $dE_{\mathrm{xc}}/dR$;
+  \item the target energy-weighted-density contraction with $dS/dR$; and
+  \item the nuclear--nuclear derivative.
+\end{itemize}
+Because this is M1, RSDF owns target $dJ/dR$ and multigrid contributes XC
+only.  In M2, combined multigrid $dJ+dE_{\mathrm{xc}}$ is used and the RSDF
+target-$dJ$ route is disabled.
+
+\subsection{Step 6: source response gradient}
+
+For each $Ax$, build the one-electron, overlap, and source-RSDF two-electron
+nuclear source $B^{Ax}$ and accumulate $z^TB^{Ax}$.  Neither full $B$ nor full
+$C^{Ax}$ needs to remain resident.  Nuclear-component batches, source/metric
+adjoint contractions, and reciprocal streaming leave only an $(N_A,3)$
+scalar array.
+
+\subsection{Step 7: final assembly}
+
+Equation~\eqref{eq:final-gradient-assembly} gives
+\begin{equation}
+  \mathbf g
+  =\mathbf g_{\mathrm{explicit,target}}
+   +\mathbf g_{\mathrm{Pulay}}
+   +\mathbf g_{\mathrm{source,response}}
+   +\mathbf g_{NN}.
+\end{equation}
+The public output is a gradient, not a force, and is reported in Ha/Bohr.
+
+\subsection{Shape and ownership trace}
+
+\begin{center}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\textwidth}
+                  >{\raggedright\arraybackslash}p{0.25\textwidth}
+                  >{\raggedright\arraybackslash}p{0.20\textwidth}
+                  >{\raggedright\arraybackslash}p{0.22\textwidth}}
+\toprule
+Object & Representative shape & Owner & Next consumer \\
+\midrule
+$D^{\mathrm{HF}}$ & $(N_k,N_{AO},N_{AO})$ & source HF & target energy, AX \\
+$F_{\mathrm{target}}$ & same & target integrator + DF & VO right-hand side \\
+$g_{vo}$ & per-k $(N_v,N_o)$ & common orbital layer & Z solver \\
+$z_{vo}$ & per-k $(N_v,N_o)$ & source HF Hessian & nuclear response \\
+Target XC gradient & $(N_A,3)$ & multigrid & final assembly \\
+RSDF response & $(N_A,3)$ & RSDF adjoint & final assembly \\
+Final gradient & $(N_A,3)$ & common assembly & report/FD \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Validation order}
+
+A completed large calculation is not sufficient validation.  A useful order
+is
+\begin{enumerate}
+  \item primitive matrix/response parity on a small distorted geometry;
+  \item Gamma versus explicit one-k-point shape parity;
+  \item sampled-k conjugation and $1/N_k$ checks;
+  \item selected Cartesian full-energy finite differences;
+  \item a complete $3N_A$ small-system FD gate;
+  \item separate convergence of source mesh, target mesh, auxiliary basis,
+        and k-mesh; and
+  \item larger-system timing and memory measurements.
+\end{enumerate}
+
+Analytic--FD agreement establishes that a chosen finite representation was
+differentiated correctly.  Mesh convergence separately establishes that the
+finite representation is close enough to the desired physical limit.
+
+\subsection{Reading timing and memory reports}
+
+Decompose end-to-end time into source HF, target energy, target explicit
+gradient, Z-vector, one-electron/PP, DF response, and final reporting.  High
+CPU use in a GPU calculation may reflect host integral generation, task
+construction, or packing and does not by itself imply a final CPU fallback.
+Use ownership metadata together with stage timing.
+
+Peak VRAM must also be assigned to a stage.  OOM is an allocation failure,
+whereas \texttt{CUDA\_ERROR\_ILLEGAL\_ADDRESS} is an invalid access by a
+launched kernel.  CUDA is asynchronous, so the next CuPy operation in a
+traceback may not be the first failing operation.  A large-grid error should
+be localized with blocking diagnostics before it is hidden by lowering a
+cutoff; the physical representation and a kernel limitation are separate
+issues.
+
+\subsection{Further reading}
+
+The periodic Gaussian software framework is described in
+\href{https://doi.org/10.1002/wcms.1340}{the PySCF framework paper}.  The
+range-separated three-center construction used by RSDF is described by Ye
+and Berkelbach,
+\href{https://doi.org/10.1063/5.0046617}{J. Chem. Phys. 154, 131104 (2021)}.
+The SCAN and r2SCAN definitions are given in
+\href{https://doi.org/10.1103/PhysRevLett.115.036402}{Phys. Rev. Lett. 115,
+036402 (2015)} and
+\href{https://doi.org/10.1021/acs.jpclett.0c02405}{J. Phys. Chem. Lett. 11,
+8208--8215 (2020)}, respectively.  Implementation-specific ownership and
+validation mappings are maintained in
+\texttt{docs/implementation/Equation\_Code\_Map.md}.

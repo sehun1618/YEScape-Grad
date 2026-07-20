@@ -21,6 +21,8 @@ sys.path.insert(0, str(BENCHMARK_DIR / "diagnostics"))
 
 import dcdft_benchmark as benchmark  # noqa: E402
 import diagnose_rigid_translation_eggbox as translation  # noqa: E402
+import run_water8_eggbox_stage12 as eggbox_stage12  # noqa: E402
+import summarize_optimization_baseline as optimization_baseline  # noqa: E402
 import evidence  # noqa: E402
 import run_benchmark_queue as queue  # noqa: E402
 import show_progress  # noqa: E402
@@ -34,6 +36,50 @@ def _case_evidence(value="fingerprint-1"):
 
 
 class BenchmarkInputTest(unittest.TestCase):
+    def test_repository_json_layout_and_queue_paths(self):
+        queues_dir = BENCHMARK_DIR / "queues"
+        backup_dir = BENCHMARK_DIR / "backup"
+        backup_queues_dir = backup_dir / "queues"
+        backup_evidence_dir = backup_dir / "evidence"
+        results_dir = (BENCHMARK_DIR / "results").resolve()
+        backup_results_dir = (backup_dir / "results").resolve()
+        structures_dir = (BENCHMARK_DIR / "structures").resolve()
+
+        self.assertEqual(list(BENCHMARK_DIR.glob("*.json")), [])
+        queue_paths = sorted(queues_dir.glob("*.json"))
+        backup_queue_paths = sorted(backup_queues_dir.glob("*.json"))
+        evidence_paths = sorted(backup_evidence_dir.glob("*.json"))
+        self.assertGreater(len(queue_paths), 0)
+        self.assertGreater(len(backup_queue_paths), 0)
+        self.assertGreater(len(evidence_paths), 0)
+
+        for path, expected_results_dir in [
+            *((path, results_dir) for path in queue_paths),
+            *((path, backup_results_dir) for path in backup_queue_paths),
+        ]:
+            payload = json.loads(path.read_text())
+            self.assertIn("defaults", payload, path.name)
+            self.assertIn("jobs", payload, path.name)
+            runs = queue.expand_jobs(payload)
+            self.assertGreater(len(runs), 0, path.name)
+
+            output_root = (path.parent / payload["output_root"]).resolve()
+            self.assertTrue(
+                output_root.is_relative_to(expected_results_dir), path.name
+            )
+            for run in runs:
+                queue._resolve_atom_file(run, path.parent)
+                atom_path = Path(run["atom_file"])
+                self.assertTrue(atom_path.is_file(), path.name)
+                self.assertTrue(
+                    atom_path.is_relative_to(structures_dir), path.name
+                )
+
+        for path in evidence_paths:
+            payload = json.loads(path.read_text())
+            self.assertIn("schema", payload, path.name)
+            self.assertNotIn("jobs", payload, path.name)
+
     def test_array_identity_is_compact_and_byte_sensitive(self):
         first = benchmark._array_identity(np.asarray([[1.0, 2.0]]))
         second = benchmark._array_identity(np.asarray([[1.0, 3.0]]))
@@ -112,6 +158,46 @@ class BenchmarkInputTest(unittest.TestCase):
         np.testing.assert_allclose(sums["total"], [0.9, 3.2, 5.9])
         self.assertIsNone(sums["target_overlap_pulay"])
 
+    def test_translation_diagnostic_samples_eight_periodic_slopes(self):
+        records = [
+            {
+                "phase": phase,
+                "energy_ha": np.sin(2.0 * np.pi * phase),
+            }
+            for phase in translation.DEFAULT_PHASES
+        ]
+
+        slopes = translation._sampled_periodic_slopes(records, 1.0)
+
+        self.assertEqual(len(slopes), 8)
+        self.assertAlmostEqual(slopes[0]["phase"], 0.0)
+        self.assertAlmostEqual(slopes[-1]["phase"], 0.875)
+        self.assertAlmostEqual(
+            max(abs(value["slope_ha_per_bohr"]) for value in slopes),
+            4.0 * np.sqrt(2.0),
+        )
+
+    def test_water8_eggbox_stage12_case_matrix(self):
+        cases = eggbox_stage12.build_study_cases()
+
+        self.assertEqual(len(cases), 18)
+        self.assertEqual(
+            sorted({case["mesh"] for case in cases if case["xc"] == "r2SCAN"}),
+            [123, 173, 211, 240, 271],
+        )
+        self.assertEqual(
+            [case["axis"] for case in cases if case["xc"] == "PBE"],
+            ["x", "y", "z"],
+        )
+
+    def test_optimization_baseline_statistics_report_spread(self):
+        result = optimization_baseline._stats([10.0, 11.0, 12.0])
+
+        self.assertEqual(result["median"], 11.0)
+        self.assertEqual(result["minimum"], 10.0)
+        self.assertEqual(result["maximum"], 12.0)
+        self.assertAlmostEqual(result["relative_spread"], 2.0 / 11.0)
+
     def test_zvector_controls_are_applied_to_public_gradient_object(self):
         class Gradient:
             z_solver = "auto"
@@ -122,6 +208,8 @@ class BenchmarkInputTest(unittest.TestCase):
             z_nuclear_batch_memory_fraction = 0.05
             z_nuclear_batch_max_components = None
             gdf_bilinear_mode = "two_pass"
+            gdf_derivative_omega_scale = 1.5
+            rsdf_derivative_omega_scale = 1.0
 
         gradient = Gradient()
         benchmark._configure_gradient(
@@ -134,6 +222,8 @@ class BenchmarkInputTest(unittest.TestCase):
                 "z_nuclear_batch_memory_fraction": "0.025",
                 "z_nuclear_batch_max_components": "4",
                 "gdf_bilinear_mode": "one_pass",
+                "gdf_derivative_omega_scale": "2.0",
+                "rsdf_derivative_omega_scale": "1.2",
             },
             gradient,
         )
@@ -146,6 +236,8 @@ class BenchmarkInputTest(unittest.TestCase):
         self.assertEqual(gradient.z_nuclear_batch_memory_fraction, 0.025)
         self.assertEqual(gradient.z_nuclear_batch_max_components, 4)
         self.assertEqual(gradient.gdf_bilinear_mode, "one_pass")
+        self.assertEqual(gradient.gdf_derivative_omega_scale, 2.0)
+        self.assertEqual(gradient.rsdf_derivative_omega_scale, 1.2)
 
         benchmark._configure_gradient(
             {"z_nuclear_batch_max_components": None}, gradient

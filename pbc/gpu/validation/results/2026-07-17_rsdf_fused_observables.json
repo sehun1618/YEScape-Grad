@@ -56,8 +56,8 @@
     "fused_device_peak_explicit_working_bytes": 288561632
   },
   "source_result_directories": [
-    "pbc/benchmark/results/rsdf_n3_native_metric_2026-07-17",
-    "pbc/benchmark/results/rsdf_n4_source_phase_profile_2026-07-17",
-    "pbc/benchmark/results/rsdf_n4_fused_observable_2026-07-17"
+    "pbc/benchmark/backup/results/rsdf_n3_native_metric_2026-07-17",
+    "pbc/benchmark/backup/results/rsdf_n4_source_phase_profile_2026-07-17",
+    "pbc/benchmark/backup/results/rsdf_n4_fused_observable_2026-07-17"
   ]
 }

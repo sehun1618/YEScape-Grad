@@ -23,7 +23,7 @@
 
 \title{Periodic Density-Corrected DFT Analytic Gradients}
 \author{PBC DC-DFT Package Project}
-\date{Active scope: FFTDF/GDF/RSDF, PBE/SCAN/r2SCAN}
+\date{Active scope: FFTDF/GDF/RSDF, target multigrid, PBE/SCAN/r2SCAN}
 
 \begin{document}
 \maketitle
@@ -34,8 +34,9 @@ gradient를 유도한다. 핵심은 target energy가 HF orbital에 대해 statio
 점이며, 이로 인해 HF CPHF orbital Hessian과 adjoint Z-vector가 필요하다. FFTDF,
 Gaussian density fitting(GDF), range-separated density fitting(RSDF), GTH
 pseudopotential, Gamma 및 sampled k-point, PBE와 SCAN/r2SCAN의 수식과 구현 convention을
-한 흐름으로 정리한다. Stress, cell derivative, target-only multigrid와 open-shell
-response는 이 판의 active 범위가 아니다.
+한 흐름으로 정리한다. Source GDF/RSDF와 독립적으로 선택하는 target multigrid,
+matrix-free MINRES Z-vector 및 bounded-memory response algebra도 포함한다. Stress, cell
+derivative, multigrid PP와 open-shell response는 이 판의 active 범위가 아니다.
 \end{abstract}
 \tableofcontents
 
@@ -51,6 +52,9 @@ response는 이 판의 active 범위가 아니다.
 \input{chapters/09_mgga_scan_r2scan}
 \input{chapters/10_rsdf}
 \input{chapters/11_validation_units}
+\input{chapters/13_target_multigrid}
+\input{chapters/14_matrix_free_bounded_memory}
+\input{chapters/15_worked_workflow}
 \input{chapters/12_appendices}
 
 \end{document}

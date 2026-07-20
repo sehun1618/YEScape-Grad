@@ -57,7 +57,7 @@
     "cpu_rsdf_public_example": "pass",
     "gpu_rsdf_public_example": "pass"
   },
-  "selected_fd_result": "pbc/benchmark/results/rsdf_n5_release_2026-07-17/003_water8_water8_selected_fd_gpu_rsdf/report.json",
+  "selected_fd_result": "pbc/benchmark/backup/results/rsdf_n5_release_2026-07-17/003_water8_water8_selected_fd_gpu_rsdf/report.json",
   "supporting_validation": [
     "pbc/gpu/validation/results/2026-07-17_rsdf_native_metric.json",
     "pbc/gpu/validation/results/2026-07-17_rsdf_fused_observables.json"

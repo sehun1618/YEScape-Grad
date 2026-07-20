@@ -15,6 +15,22 @@ energy와 analytic gradient의 계산 시간 및 정확성을 비교한다.
 구조에서 source RHF/KRHF와 target-DFA energy를 처음부터 다시 계산하므로, analytic
 gradient와 같은 device 및 DF backend의 전체 energy derivative를 검증한다.
 
+Directory 역할은 다음과 같다.
+
+```text
+benchmark/
+  queues/       현재 source tree용 queue와 짧은 index
+  structures/   XYZ 입력
+  results/      지금부터 생성하는 실행 결과
+  backup/       2026-07-20 이전 queue, evidence 및 raw result
+  diagnostics/  별도 진단 script
+  tests/        benchmark runner unit tests
+```
+
+새 실행 입력은 `queues/`에 두고, 계산이 끝난 `report.json`이나 `progress.json`을
+queue와 섞지 않는다. 현재 queue의 용도별 목록은 `queues/README.md`, 과거 artifact의
+구조는 `backup/README.md`에서 관리한다.
+
 ## 1. Queue 실행
 
 `gpu` conda environment에서 다음과 같이 실행한다.
@@ -22,7 +38,7 @@ gradient와 같은 device 및 DF backend의 전체 energy derivative를 검증�
 ```bash
 cd pbc/benchmark
 conda run -n gpu python run_benchmark_queue.py \
-  --queue example_benchmark_queue.json
+  --queue queues/current_correctness.json
 ```
 
 완료된 `report.json`의 case fingerprint가 현재 effective input 및 source tree와
@@ -33,7 +49,7 @@ archive하고 새로 실행한다. 동일 fingerprint의 완료 case까지 다�
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue example_benchmark_queue.json \
+  --queue queues/current_correctness.json \
   --overwrite
 ```
 
@@ -61,31 +77,34 @@ Linux process start time을 확인한다. 같은 process가 더 이상 없으면
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue example_benchmark_queue.json \
-  --only cpu_fftdf
+  --queue queues/current_water64_sz.json \
+  --only rsdf_multigrid
 ```
 
-### RSDF release benchmark
+### 현재 RSDF correctness benchmark
 
-현재 RSDF production 경로의 반복 timing과 선택 FD 검증은 다음 queue로 실행한다.
+현재 RSDF production 경로의 선택 FD 검증은 다음 queue의 RSDF case만 실행한다.
 
 ```bash
 cd pbc/benchmark
 conda run -n gpu python run_benchmark_queue.py \
-  --queue rsdf_r1_release_gate.json \
-  --output-root results/rsdf_user_run
+  --queue queues/current_correctness.json \
+  --only rsdf
 ```
 
-이 queue는 Water8/Gamma/r2SCAN/SZV-GTH 조건에서 GPU RSDF analytic gradient를 독립
-process로 세 번 측정하고, 마지막 job에서 atom 0의 z component만 central FD로
-검증한다. `--output-root`를 생략하면 queue에 고정된 기존 release evidence directory를
-사용하므로 완료된 case는 skip된다. 새 측정에는 위 예시처럼 별도 output root를 지정한다.
+이 queue는 Water8/Gamma/r2SCAN/SZV-GTH 조건에서 uniform 및 multigrid-XC RSDF
+analytic gradient를 atom 0의 z component central FD로 검증한다. 반복 timing이 필요하면
+별도 output root로 같은 queue를 실행한다.
 
 ```bash
 conda run -n gpu python run_benchmark_queue.py \
-  --queue rsdf_r1_release_gate.json \
-  --output-root results/my_rsdf_benchmark
+  --queue queues/current_correctness.json \
+  --only rsdf \
+  --output-root ../results/my_rsdf_benchmark
 ```
+
+과거 `rsdf_r1_release_gate.json`과 해당 raw result는
+`backup/queues/` 및 `backup/results/`에 보존한다.
 
 다른 구조를 사용하려면 queue를 복사해 `atom_file`, `lattice_vectors`, `basis`,
 `pseudo`, `auxbasis`, `ke_cutoff_ha`, `kmesh`, `xc`를 바꾼다. 핵심 route 선택은
@@ -116,9 +135,9 @@ product로 확장된다.
 
 ```json
 {
-  "output_root": "results/my_benchmark",
+  "output_root": "../results/my_benchmark",
   "defaults": {
-    "atom_file": "structures/h2.xyz",
+    "atom_file": "../structures/h2.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [[6, 0, 0], [0, 6, 0], [0, 0, 6]],
     "lattice_unit": "Bohr",
@@ -192,8 +211,16 @@ Source HF density, exchange, Z-vector Hessian과 pseudopotential/hcore owner는 
 `target_multigrid_mesh: [NX, NY, NZ]`를 지정할 수 있다. CPU는 현재 `uniform`만
 허용하며 요청을 조용히 다른 route로 바꾸지 않는다.
 
-Small-system analytic/FD gate는 `multigrid_correctness_gate.json`, Water8 3회 반복 및
-제한된 Water20 timing/memory 비교는 `multigrid_performance_gate.json`에 있다.
+`target_multigrid_mesh`를 생략하거나 `null`로 두면 target multigrid도 source
+`cell.mesh`를 그대로 사용한다. 이는 자동 memory cap이 아니다. 예를 들어 현재
+water-ethanol 500 Ha 입력의 `cell.mesh=[311,311,311]`은 GPU4PySCF multigrid에서
+`CUDA_ERROR_ILLEGAL_ADDRESS`를 재현하지만, 명시적 `[240,240,240]` gate는 완료된다.
+따라서 큰 cell에서는 target mesh를 명시하고 별도의 mesh 수렴 시험으로 정확도를
+확인해야 한다.
+
+현재 small-system analytic/FD gate는 `queues/current_correctness.json`에 있다. 과거
+multigrid correctness/performance gate는 `backup/queues/`와 `backup/results/`에
+함께 보존한다.
 `report.json`의 `gradient_metadata.target_integration`에는 J/XC/PP owner, mesh, task
 level, energy/gradient integration wall time 및 energy task-cache 재사용 여부가 저장된다.
 
@@ -273,8 +300,9 @@ accuracy gate가 활성화된다. Report 상태는 다음처럼 분리된다.
 
 ## 4. 결과
 
-기본 출력 위치는 queue 파일 아래 `results/<queue-name>/`이다. 각 case에는 다음
-파일이 생성된다.
+현재 queue는 출력 위치를 `benchmark/results/<queue-name>/`으로 명시한다. 명시하지
+않은 queue의 runner default는 queue 파일과 같은 directory 아래 `results/`이다. 각
+case에는 다음 파일이 생성된다.
 
 ```text
 000_h2_timing_matrix_cpu_fftdf/
@@ -335,6 +363,19 @@ conda run -n gpu python diagnostics/diagnose_rigid_translation_eggbox.py \
 값을 보였다. 상세 수치와 production policy는
 `../TRANSLATION_SUM_DIAGNOSIS_2026-07-17.md`에 있다. Production gradient에서 원자별로
 평균 합력을 빼는 보정은 computed energy의 미분이 아니므로 사용하지 않는다.
+
+Water8에서 mesh/축별 Stage 1·2 진단을 다시 실행하려면 다음 command를 사용한다.
+이 study는 GDF/r2SCAN의 `123^3`, `173^3`, `211^3`, `240^3`, `271^3` mesh와 x/y/z
+축을 모두 검사하고, GDF/PBE `173^3`을 대조군으로 추가한다. 각 축에서 한 grid
+간격을 1/8-step으로 표본화해 energy peak-to-peak와 worst sampled slope를 저장한다.
+
+```bash
+conda run -n gpu python diagnostics/run_water8_eggbox_stage12.py
+```
+
+결과는 `results/current_water8_eggbox_stage12/`의 개별 JSON, `cases.csv`,
+`mesh_convergence.csv` 및 `summary.json`에 저장된다. 기존 case JSON은 기본적으로
+재사용하며 전부 다시 계산할 때만 `--overwrite`를 사용한다.
 
 ### 실행 중 progress 확인
 

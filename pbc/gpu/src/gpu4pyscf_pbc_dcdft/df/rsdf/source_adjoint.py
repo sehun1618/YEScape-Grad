@@ -25,6 +25,10 @@ from ..gdf.jk_derivative import (
     auxiliary_density_contraction,
     pair_block,
 )
+from .packed_gamma import (
+    PackedGammaSourceAdjoint,
+    pack_gamma_cderi_adjoint,
+)
 
 
 DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION = 0.20
@@ -633,6 +637,22 @@ def push_cderi_adjoint_through_source(
         check_finite=False,
     )
     return solved.T
+
+
+def push_packed_gamma_adjoint_through_source(
+    factor,
+    cderi_adjoint,
+) -> PackedGammaSourceAdjoint:
+    """Pack a Gamma adjoint, then solve only unique AO-pair right sides."""
+
+    packed = pack_gamma_cderi_adjoint(cderi_adjoint)
+    rhs = cp.ascontiguousarray(packed.values.T)
+    solved = push_cderi_adjoint_through_source(
+        factor,
+        rhs,
+        overwrite=True,
+    )
+    return PackedGammaSourceAdjoint(values=solved, nao=packed.nao)
 
 
 def _right_triangular_source_solve(factor, adjoint):

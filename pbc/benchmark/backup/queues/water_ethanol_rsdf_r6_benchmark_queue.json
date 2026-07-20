@@ -1,20 +1,21 @@
 {
-  "output_root": "results/water64_gdf_rsdf_multigrid_DZ_repaired",
+  "output_root": "../results/water_ethanol_rsdf_r6_mesh240",
   "defaults": {
-    "atom_file": "structures/water64.xyz",
+    "atom_file": "../../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
-      [12.4139, 0.0, 0.0],
-      [0.0, 12.4139, 0.0],
-      [0.0, 0.0, 12.4139]
+      [16.2, 0.0, 0.0],
+      [0.0, 16.2, 0.0],
+      [0.0, 0.0, 16.2]
     ],
     "lattice_unit": "Angstrom",
-    "basis": "DZVP-GTH",
+    "basis": "SZV-GTH",
     "pseudo": {
       "H": "GTH-SCAN-q1",
+      "C": "GTH-SCAN-q4",
       "O": "GTH-SCAN-q6"
     },
-    "auxbasis": "DZVP-GTH",
+    "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
     "ke_cutoff_ha": 500.0,
@@ -41,32 +42,12 @@
   },
   "jobs": [
     {
-      "name": "gdf_only",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "gdf",
-      "target_integrator": "uniform"
-    },
-    {
-      "name": "rsdf_only",
+      "name": "rsdf_r6_mesh240",
       "enabled": true,
       "device": "gpu",
       "df_backend": "rsdf",
-      "target_integrator": "uniform"
-    },
-    {
-      "name": "gdf_plus_multigrid_xc",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "gdf",
-      "target_integrator": "multigrid_xc"
-    },
-    {
-      "name": "rsdf_plus_multigrid_xc",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "rsdf",
-      "target_integrator": "multigrid_xc"
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": [240, 240, 240]
     }
   ]
 }

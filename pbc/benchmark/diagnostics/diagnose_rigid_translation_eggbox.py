@@ -29,7 +29,19 @@ from dcdft_benchmark import (  # noqa: E402
 )
 
 
-DEFAULT_PHASES = (-0.125, 0.0, 0.125, 0.25, 0.5, 0.75, 0.875, 1.0)
+PHASE_STEP = 0.125
+DEFAULT_PHASES = (
+    -0.125,
+    0.0,
+    0.125,
+    0.25,
+    0.375,
+    0.5,
+    0.625,
+    0.75,
+    0.875,
+    1.0,
+)
 
 
 def _sum_vector(value):
@@ -60,6 +72,32 @@ def _component_translation_sums(result):
     return {name: _sum_vector(value) for name, value in fields.items()}
 
 
+def _sampled_periodic_slopes(records, grid_step_norm):
+    """Central energy slopes at eight equally spaced grid phases."""
+
+    energies = {
+        round(float(record["phase"]), 3): float(record["energy_ha"])
+        for record in records
+    }
+    denominator = 2.0 * PHASE_STEP * float(grid_step_norm)
+    slopes = []
+    for index in range(8):
+        phase = index * PHASE_STEP
+        minus = phase - PHASE_STEP
+        plus = phase + PHASE_STEP
+        slopes.append(
+            {
+                "phase": phase,
+                "slope_ha_per_bohr": (
+                    energies[round(plus, 3)]
+                    - energies[round(minus, 3)]
+                )
+                / denominator,
+            }
+        )
+    return slopes
+
+
 def _analytic_gradient(config, system, coordinates, device, backend):
     cell = build_cell(config, system, coordinates)
     method, _kpts = build_method(config, cell, device, backend)
@@ -88,15 +126,23 @@ def diagnose(
     slope_step_bohr: float = 1.0e-4,
     center_phase: float = 0.0,
     ke_cutoff_ha: float | None = None,
+    mesh: tuple[int, int, int] | None = None,
     xc: str | None = None,
     df_backend: str | None = None,
     target_integrator: str | None = None,
     target_multigrid_mesh: tuple[int, int, int] | None = None,
 ) -> dict[str, object]:
     config = json.loads(input_path.read_text(encoding="utf-8"))
+    if ke_cutoff_ha is not None and mesh is not None:
+        raise ValueError("ke_cutoff_ha and mesh are mutually exclusive")
     if ke_cutoff_ha is not None:
         config.pop("mesh", None)
         config["ke_cutoff_ha"] = float(ke_cutoff_ha)
+    if mesh is not None:
+        if len(mesh) != 3 or any(int(value) <= 0 for value in mesh):
+            raise ValueError("mesh must contain three positive integers")
+        config.pop("ke_cutoff_ha", None)
+        config["mesh"] = [int(value) for value in mesh]
     if xc is not None:
         config["xc"] = str(xc)
     if df_backend is not None:
@@ -186,6 +232,10 @@ def diagnose(
     analytic_directional_sum = float(
         np.dot(analytic["translation_sum_vector_ha_per_bohr"], direction)
     )
+    sampled_slopes = _sampled_periodic_slopes(records, grid_step_norm)
+    sampled_slope_values = np.asarray(
+        [record["slope_ha_per_bohr"] for record in sampled_slopes]
+    )
 
     return {
         "schema": "pbc_dcdft_rigid_translation_eggbox_v2",
@@ -204,6 +254,13 @@ def diagnose(
         "grid_step_norm_bohr": grid_step_norm,
         "translation_direction": direction,
         "energy_peak_to_peak_ha": float(np.ptp(energies)),
+        "sampled_periodic_slopes": sampled_slopes,
+        "worst_sampled_rigid_translation_slope_ha_per_bohr": float(
+            np.max(np.abs(sampled_slope_values))
+        ),
+        "rms_sampled_rigid_translation_slope_ha_per_bohr": float(
+            np.sqrt(np.mean(sampled_slope_values**2))
+        ),
         "one_grid_step_closure_error_ha": float(
             energies[one_index] - energies[zero_index]
         ),
@@ -238,6 +295,12 @@ def main() -> int:
     parser.add_argument("--slope-step-bohr", type=float, default=1.0e-4)
     parser.add_argument("--center-phase", type=float, default=0.0)
     parser.add_argument("--ke-cutoff-ha", type=float)
+    parser.add_argument(
+        "--mesh",
+        nargs=3,
+        type=int,
+        metavar=("NX", "NY", "NZ"),
+    )
     parser.add_argument("--xc")
     parser.add_argument("--df-backend", choices=("fftdf", "gdf", "rsdf"))
     parser.add_argument(
@@ -260,6 +323,7 @@ def main() -> int:
         slope_step_bohr=args.slope_step_bohr,
         center_phase=args.center_phase,
         ke_cutoff_ha=args.ke_cutoff_ha,
+        mesh=None if args.mesh is None else tuple(args.mesh),
         xc=args.xc,
         df_backend=args.df_backend,
         target_integrator=args.target_integrator,

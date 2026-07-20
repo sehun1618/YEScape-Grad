@@ -74,5 +74,5 @@
     "water20_z_vector_residual_max_abs": 5.71881951516584e-14,
     "water20_max_gap_vs_pre_omega_gradient_ha_per_bohr": 1.650131420394274e-11
   },
-  "source_queue": "pbc/benchmark/gdf_post_memory_repair_timing.json"
+  "source_queue": "pbc/benchmark/backup/queues/gdf_post_memory_repair_timing.json"
 }

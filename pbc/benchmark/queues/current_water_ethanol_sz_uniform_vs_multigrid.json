@@ -1,23 +1,24 @@
 {
-  "output_root": "results/water64_gdf_rsdf_multigrid_SZ",
+  "output_root": "../results/current_water_ethanol_sz_uniform_vs_multigrid",
   "defaults": {
-    "atom_file": "structures/water64.xyz",
+    "atom_file": "../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
-      [12.4139, 0.0, 0.0],
-      [0.0, 12.4139, 0.0],
-      [0.0, 0.0, 12.4139]
+      [16.2, 0.0, 0.0],
+      [0.0, 16.2, 0.0],
+      [0.0, 0.0, 16.2]
     ],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
     "pseudo": {
       "H": "GTH-SCAN-q1",
+      "C": "GTH-SCAN-q4",
       "O": "GTH-SCAN-q6"
     },
     "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
-    "ke_cutoff_ha": 500.0,
+    "mesh": [240, 240, 240],
     "precision": 1e-9,
     "kmesh": [1, 1, 1],
     "xc": "r2SCAN",
@@ -33,40 +34,37 @@
     "z_tolerance": 1e-12,
     "z_residual_tolerance": 1e-8,
     "z_max_cycle": 80,
-    "gdf_bilinear_mode": "one_pass_fused",
-    "run_fd": false,
-    "fd_step_bohr": 0.0001,
-    "fd_atoms": "all",
-    "fd_axes": "all"
+    "z_nuclear_batch_memory_fraction": 0.05,
+    "run_fd": false
   },
   "jobs": [
     {
-      "name": "gdf_only",
-      "enabled": true,
+      "name": "gdf_uniform_mesh240",
       "device": "gpu",
       "df_backend": "gdf",
-      "target_integrator": "uniform"
+      "target_integrator": "uniform",
+      "gdf_bilinear_mode": "one_pass_fused"
     },
     {
-      "name": "rsdf_only",
-      "enabled": true,
+      "name": "gdf_multigrid_xc_mesh240",
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": [240, 240, 240],
+      "gdf_bilinear_mode": "one_pass_fused"
+    },
+    {
+      "name": "rsdf_uniform_mesh240",
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "uniform"
     },
     {
-      "name": "gdf_plus_multigrid_xc",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "gdf",
-      "target_integrator": "multigrid_xc"
-    },
-    {
-      "name": "rsdf_plus_multigrid_xc",
-      "enabled": true,
+      "name": "rsdf_multigrid_xc_mesh240",
       "device": "gpu",
       "df_backend": "rsdf",
-      "target_integrator": "multigrid_xc"
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": [240, 240, 240]
     }
   ]
 }

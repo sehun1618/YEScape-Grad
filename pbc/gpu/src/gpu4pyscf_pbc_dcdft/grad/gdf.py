@@ -23,7 +23,9 @@ from ..df.gdf.contracted_derivative import (
     restricted_hf_bilinear_derivative,
     restricted_hf_bilinear_derivative_one_pass,
     restricted_hf_bilinear_derivative_one_pass_gamma,
+    restricted_hf_bilinear_derivative_reverse_gamma,
     target_j_plus_restricted_hf_bilinear_derivative_one_pass,
+    target_j_plus_restricted_hf_bilinear_derivative_reverse_gamma,
 )
 from ..df.gdf.jk_derivative import (
     GDFJKDerivatives,
@@ -55,6 +57,7 @@ from .nuclear_response import (
 from .orbitals import build_mo_partitions, target_fock_vo_blocks
 from .pulay import contract_target_overlap
 from .target import (
+    release_completed_target_multigrid,
     target_energy_weighted_density,
     target_fock_kpts,
     target_xc_atom_gradient,
@@ -69,6 +72,7 @@ class GDFGradientResult:
     backend: str
     contributions: GradientContributions
     one_electron: np.ndarray
+    coupled_pseudopotential: np.ndarray | None
     target_coulomb: np.ndarray | None
     fused_target_j_z_bilinear: np.ndarray | None
     target_xc: np.ndarray
@@ -204,9 +208,18 @@ class GDFGradientResult:
                 else self.df_response_profile.get("observable_mode")
             ),
             "native_one_electron": self.native_one_electron,
+            "pseudopotential_component_resolved": (
+                self.coupled_pseudopotential is None
+            ),
+            "coupled_pseudopotential": (
+                self.coupled_pseudopotential is not None
+            ),
             "gradient_partition": (
                 "explicit_response_coupled"
-                if self.fused_target_j_z_bilinear is not None
+                if (
+                    self.fused_target_j_z_bilinear is not None
+                    or self.coupled_pseudopotential is not None
+                )
                 else "explicit_response"
             ),
             "target_coulomb_component_resolved": (
@@ -283,10 +296,19 @@ def gdf_gpu_gradient(
     z_dense_max_dimension=256,
     z_nuclear_batch_memory_fraction=DEFAULT_BATCH_MEMORY_FRACTION,
     z_nuclear_batch_max_components=None,
-    gdf_bilinear_mode="two_pass",
+    gdf_bilinear_mode=None,
+    gdf_derivative_omega_scale=1.0,
+    rsdf_derivative_omega_scale=1.0,
     progress_callback=None,
 ) -> GDFGradientResult:
     """Evaluate the restricted Gamma/k-point GDF analytic gradient."""
+
+    if gdf_bilinear_mode is None:
+        gdf_bilinear_mode = (
+            "optimized_fused"
+            if bool(getattr(dc_mf.with_df, "uses_native_integrals", False))
+            else "two_pass"
+        )
 
     return _gaussian_df_gpu_gradient(
         dc_mf,
@@ -301,6 +323,8 @@ def gdf_gpu_gradient(
         z_nuclear_batch_memory_fraction=z_nuclear_batch_memory_fraction,
         z_nuclear_batch_max_components=z_nuclear_batch_max_components,
         gdf_bilinear_mode=gdf_bilinear_mode,
+        gdf_derivative_omega_scale=gdf_derivative_omega_scale,
+        rsdf_derivative_omega_scale=rsdf_derivative_omega_scale,
         progress_callback=progress_callback,
     )
 
@@ -319,6 +343,8 @@ def _gaussian_df_gpu_gradient(
     z_nuclear_batch_memory_fraction=DEFAULT_BATCH_MEMORY_FRACTION,
     z_nuclear_batch_max_components=None,
     gdf_bilinear_mode="two_pass",
+    gdf_derivative_omega_scale=1.0,
+    rsdf_derivative_omega_scale=1.0,
     progress_callback=None,
 ) -> GDFGradientResult:
     """Shared device assembly for GDF-family CDERI providers."""
@@ -339,10 +365,17 @@ def _gaussian_df_gpu_gradient(
         native_gdf=native_gdf,
         nkpts=len(np.asarray(dc_mf.with_df.kpts).reshape(-1, 3)),
     )
-    fused_two_electron = gdf_bilinear_mode == "one_pass_fused"
+    fused_two_electron = gdf_bilinear_mode in {
+        "one_pass_fused",
+        "optimized_fused",
+        "reverse_adjoint_fused",
+    }
     reciprocal_memory_diagnostics = {}
     contracted_two_electron_response = None
     fused_target_j_z_bilinear = None
+    coupled_pseudopotential = None
+    transition_density = None
+    post_response_memory_release = None
 
     if progress_callback is not None:
         progress_callback("gradient_target_fock_rhs", state="started")
@@ -355,7 +388,15 @@ def _gaussian_df_gpu_gradient(
         # The fused kernel contains selected-DF target dJ in addition to the
         # source-HF Z response.  M2 owns target dJ in multigrid, so retain only
         # the source-HF one-pass contraction.
-        gdf_bilinear_mode = "one_pass"
+        gdf_bilinear_mode = (
+            "reverse_adjoint"
+            if gdf_bilinear_mode == "reverse_adjoint_fused"
+            or (
+                gdf_bilinear_mode == "optimized_fused"
+                and context.nkpts == 1
+            )
+            else "one_pass"
+        )
         fused_two_electron = False
     partitions = build_mo_partitions(context)
     target_fock, target_fock_workspace_reused = target_fock_kpts(
@@ -386,6 +427,30 @@ def _gaussian_df_gpu_gradient(
     )
     cp.cuda.Stream.null.synchronize()
     timings["hf_ax_and_zvector"] = perf_counter() - start
+
+    # A multigrid XC derivative and the RSDF response each own a large,
+    # temporary device workspace.  Finish and retire the multigrid workspace
+    # before constructing the response so their peaks do not overlap.
+    target_xc = None
+    multigrid_target_xc = (
+        context.target_evaluation.target_integrator != "uniform"
+    )
+    if multigrid_target_xc:
+        if progress_callback is not None:
+            progress_callback(
+                "gradient_target_xc_multigrid", state="started"
+            )
+        start = perf_counter()
+        target_xc = target_xc_atom_gradient(context)
+        release_completed_target_multigrid(context)
+        cp.cuda.Stream.null.synchronize()
+        timings["target_xc_gradient"] = perf_counter() - start
+        if progress_callback is not None:
+            progress_callback(
+                "gradient_target_xc_multigrid",
+                state="complete",
+                wall_time_s=timings["target_xc_gradient"],
+            )
 
     if progress_callback is not None:
         progress_callback("gradient_one_electron", state="started")
@@ -427,13 +492,43 @@ def _gaussian_df_gpu_gradient(
             "axkij,kji->ax", hcore_by_atom, context.density
         ).real / context.nkpts
     if native_one_electron:
+        pseudo_mode = "coupled" if context.nkpts == 1 else "explicit"
+        pseudo_stage = f"gradient_pseudo_{pseudo_mode}"
+        if progress_callback is not None:
+            progress_callback(
+                pseudo_stage, state="started"
+            )
         local_part1_start = perf_counter()
-        one_electron += one_sources.contract_local_part1(context.density)
-        one_electron += one_sources.contract_nonlocal(context.density)
+        if context.nkpts == 1:
+            transition_density = _z_transition_density(z_result, partitions)
+            coupled_density = context.density + 2.0 * transition_density
+            coupled_pseudopotential = one_sources.contract_pseudo_batch(
+                coupled_density[None]
+            )[0]
+        else:
+            one_electron += one_sources.contract_local_part1(context.density)
+            one_electron += one_sources.contract_nonlocal(context.density)
+        if one_sources.local_part1 is not None:
+            reciprocal_memory_diagnostics[
+                (
+                    "local_part1_explicit_z_coupled"
+                    if coupled_pseudopotential is not None
+                    else "local_part1_explicit"
+                )
+            ] = dict(one_sources.local_part1.last_reciprocal_execution)
         cp.cuda.Stream.null.synchronize()
-        timings[f"{backend_name}_native_contracted_pseudo_explicit"] = (
+        pseudo_timing_key = (
+            f"{backend_name}_native_contracted_pseudo_{pseudo_mode}"
+        )
+        timings[pseudo_timing_key] = (
             perf_counter() - local_part1_start
         )
+        if progress_callback is not None:
+            progress_callback(
+                pseudo_stage,
+                state="complete",
+                wall_time_s=timings[pseudo_timing_key],
+            )
     cp.cuda.Stream.null.synchronize()
     timings["one_electron_host_integrals"] = (
         one_sources.host_integral_seconds
@@ -475,9 +570,10 @@ def _gaussian_df_gpu_gradient(
             progress_callback("gdf_response_tensors", state="started")
         start = perf_counter()
         if backend_name == "rsdf":
-            transition_density = _z_transition_density(
-                z_result, partitions
-            )
+            if transition_density is None:
+                transition_density = _z_transition_density(
+                    z_result, partitions
+                )
             cderi_response = response_builder(
                 dc_mf.with_df,
                 context.density,
@@ -486,6 +582,7 @@ def _gaussian_df_gpu_gradient(
                     "resolved" if multigrid_target_j else "fused"
                 ),
                 validate_central_source=False,
+                source_derivative_omega_scale=rsdf_derivative_omega_scale,
             )
             fused_target_j_z_bilinear = (
                 None
@@ -576,10 +673,19 @@ def _gaussian_df_gpu_gradient(
                 )
             )
 
+        if backend_name == "rsdf":
+            post_response_memory_release = _release_completed_rsdf_response(
+                dc_mf.with_df
+            )
+
     if progress_callback is not None:
         progress_callback("gradient_target_explicit", state="started")
     start = perf_counter()
-    target_xc = target_xc_atom_gradient(context)
+    if target_xc is None:
+        target_xc = target_xc_atom_gradient(context)
+        cp.cuda.Stream.null.synchronize()
+        timings["target_xc_gradient"] = perf_counter() - start
+        start = perf_counter()
     weighted_density = target_energy_weighted_density(
         context, target_fock
     )
@@ -598,10 +704,16 @@ def _gaussian_df_gpu_gradient(
         + target_overlap
         + cp.asarray(nuclear)
     )
+    if coupled_pseudopotential is not None:
+        explicit_device += coupled_pseudopotential
     if target_coulomb is not None:
         explicit_device += target_coulomb
     cp.cuda.Stream.null.synchronize()
     timings["target_explicit_device_assembly"] = perf_counter() - start
+    timings["target_explicit_total"] = (
+        timings["target_xc_gradient"]
+        + timings["target_explicit_device_assembly"]
+    )
     if progress_callback is not None:
         progress_callback(
             "gradient_target_explicit",
@@ -623,18 +735,36 @@ def _gaussian_df_gpu_gradient(
     if native_one_electron:
         response = native_response_core
         z_nuclear_batch_size = z_nuclear_batch_execution.final_batch_size
-        transition_density = _z_transition_density(z_result, partitions)
+        if transition_density is None:
+            transition_density = _z_transition_density(z_result, partitions)
+        if progress_callback is not None:
+            progress_callback(
+                "gradient_pseudo_z_response", state="started"
+            )
         local_part1_start = perf_counter()
-        response += 2.0 * one_sources.contract_local_part1(
-            transition_density
-        )
-        response += 2.0 * one_sources.contract_nonlocal(
-            transition_density
-        )
+        if coupled_pseudopotential is None:
+            response += 2.0 * one_sources.contract_local_part1(
+                transition_density
+            )
+            if one_sources.local_part1 is not None:
+                reciprocal_memory_diagnostics[
+                    "local_part1_z_response"
+                ] = dict(one_sources.local_part1.last_reciprocal_execution)
+            response += 2.0 * one_sources.contract_nonlocal(
+                transition_density
+            )
         cp.cuda.Stream.null.synchronize()
         timings[f"{backend_name}_native_contracted_pseudo_z_response"] = (
             perf_counter() - local_part1_start
         )
+        if progress_callback is not None:
+            progress_callback(
+                "gradient_pseudo_z_response",
+                state="complete",
+                wall_time_s=timings[
+                    f"{backend_name}_native_contracted_pseudo_z_response"
+                ],
+            )
         if native_gdf:
             if progress_callback is not None:
                 progress_callback(
@@ -642,14 +772,22 @@ def _gaussian_df_gpu_gradient(
                 )
             bilinear_start = perf_counter()
             if fused_two_electron:
-                fused_target_j_z_bilinear = (
-                    target_j_plus_restricted_hf_bilinear_derivative_one_pass(
-                        dc_mf.with_df,
-                        context.density,
-                        transition_density,
-                        exxdiv=context.source_mf.exxdiv,
-                        memory_diagnostics=reciprocal_memory_diagnostics,
-                    )
+                fused_builder = (
+                    target_j_plus_restricted_hf_bilinear_derivative_reverse_gamma
+                    if gdf_bilinear_mode in {
+                        "reverse_adjoint_fused",
+                        "optimized_fused",
+                    }
+                    and context.nkpts == 1
+                    else target_j_plus_restricted_hf_bilinear_derivative_one_pass
+                )
+                fused_target_j_z_bilinear = fused_builder(
+                    dc_mf.with_df,
+                    context.density,
+                    transition_density,
+                    exxdiv=context.source_mf.exxdiv,
+                    memory_diagnostics=reciprocal_memory_diagnostics,
+                    derivative_omega_scale=gdf_derivative_omega_scale,
                 )
             else:
                 response += _native_bilinear_derivative(
@@ -660,6 +798,7 @@ def _gaussian_df_gpu_gradient(
                     mode=gdf_bilinear_mode,
                     nkpts=context.nkpts,
                     memory_diagnostics=reciprocal_memory_diagnostics,
+                    derivative_omega_scale=gdf_derivative_omega_scale,
                 )
             cp.cuda.Stream.null.synchronize()
             timings[
@@ -747,6 +886,13 @@ def _gaussian_df_gpu_gradient(
         df_response_profile = (
             None if profile is None else profile.metadata()
         )
+        if (
+            df_response_profile is not None
+            and post_response_memory_release is not None
+        ):
+            df_response_profile["post_response_memory_release"] = (
+                post_response_memory_release
+            )
         if profile is not None:
             timings.update(
                 {
@@ -802,6 +948,11 @@ def _gaussian_df_gpu_gradient(
             ),
         ),
         one_electron=to_host(one_electron),
+        coupled_pseudopotential=(
+            None
+            if coupled_pseudopotential is None
+            else to_host(coupled_pseudopotential)
+        ),
         target_coulomb=(
             None if target_coulomb is None else to_host(target_coulomb)
         ),
@@ -866,6 +1017,9 @@ def _validate_gdf_bilinear_mode(
         "one_pass",
         "one_pass_gamma",
         "one_pass_fused",
+        "optimized_fused",
+        "reverse_adjoint",
+        "reverse_adjoint_fused",
     }
     if normalized not in allowed:
         raise ValueError(
@@ -875,17 +1029,60 @@ def _validate_gdf_bilinear_mode(
         "one_pass",
         "one_pass_gamma",
         "one_pass_fused",
+        "optimized_fused",
+        "reverse_adjoint",
+        "reverse_adjoint_fused",
     } and (
         backend_name != "gdf" or not native_gdf
     ):
         raise NotImplementedError(
             f"{normalized} requires native GPU GDF"
         )
-    if normalized == "one_pass_gamma" and int(nkpts) != 1:
+    if normalized in {
+        "one_pass_gamma",
+        "reverse_adjoint",
+        "reverse_adjoint_fused",
+    } and int(nkpts) != 1:
         raise NotImplementedError(
-            "one_pass_gamma cannot be used with sampled k-points"
+            f"{normalized} cannot be used with sampled k-points"
         )
     return normalized
+
+
+def _release_completed_rsdf_response(provider):
+    """Retire rebuildable RSDF factors and return unused device blocks."""
+
+    cp.cuda.Stream.null.synchronize()
+    before = DeviceMemorySnapshot.capture()
+    release_cderi = getattr(provider, "release_cderi_cache", None)
+    cderi_release = (
+        None
+        if release_cderi is None
+        else release_cderi(reason="analytic_gradient_response_complete")
+    )
+    pool = cp.get_default_memory_pool()
+    pool.free_all_blocks()
+    pinned_pool = cp.get_default_pinned_memory_pool()
+    if hasattr(pinned_pool, "free_all_blocks"):
+        pinned_pool.free_all_blocks()
+    try:
+        cp.fft.config.get_plan_cache().clear()
+    except (AttributeError, RuntimeError):
+        pass
+    cp.cuda.Stream.null.synchronize()
+    after = DeviceMemorySnapshot.capture()
+    return {
+        "free_device_bytes_before": before.free_device_bytes,
+        "free_device_bytes_after": after.free_device_bytes,
+        "free_device_bytes_delta": (
+            after.free_device_bytes - before.free_device_bytes
+        ),
+        "pool_used_bytes_before": before.pool_used_bytes,
+        "pool_used_bytes_after": after.pool_used_bytes,
+        "pool_reserved_bytes_before": before.pool_reserved_bytes,
+        "pool_reserved_bytes_after": after.pool_reserved_bytes,
+        "provider_cderi_release": cderi_release,
+    }
 
 
 def _native_bilinear_derivative(
@@ -897,6 +1094,7 @@ def _native_bilinear_derivative(
     mode,
     nkpts,
     memory_diagnostics,
+    derivative_omega_scale,
 ):
     if mode == "two_pass":
         return restricted_hf_bilinear_derivative(
@@ -913,6 +1111,15 @@ def _native_bilinear_derivative(
             exxdiv=exxdiv,
             memory_diagnostics=memory_diagnostics,
         )
+    if mode == "reverse_adjoint":
+        return restricted_hf_bilinear_derivative_reverse_gamma(
+            provider,
+            reference_density,
+            response_density,
+            exxdiv=exxdiv,
+            memory_diagnostics=memory_diagnostics,
+            derivative_omega_scale=derivative_omega_scale,
+        )
     if nkpts != 1:
         raise NotImplementedError(
             "one_pass_gamma cannot be used with sampled k-points"
@@ -923,6 +1130,7 @@ def _native_bilinear_derivative(
         response_density,
         exxdiv=exxdiv,
         memory_diagnostics=memory_diagnostics,
+        derivative_omega_scale=derivative_omega_scale,
     )
 
 

@@ -1,7 +1,7 @@
 {
-  "output_root": "results/water_ethanol_gdf_rsdf_multigrid_SZ",
+  "output_root": "../results/water_ethanol_gdf_rsdf_multigrid_SZ",
   "defaults": {
-    "atom_file": "structures/water_ethanol.xyz",
+    "atom_file": "../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [16.2, 0.0, 0.0],
@@ -57,7 +57,7 @@
     },
     {
       "name": "gdf_plus_multigrid_xc",
-      "enabled": true,
+      "enabled": false,
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
@@ -65,11 +65,27 @@
     },
     {
       "name": "rsdf_plus_multigrid_xc",
-      "enabled": true,
+      "enabled": false,
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
       "target_multigrid_mesh": [240, 240, 240]
+    },
+    {
+      "name": "gdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": null
+    },
+    {
+      "name": "rsdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "multigrid_xc",
+      "target_multigrid_mesh": null
     }
   ]
 }

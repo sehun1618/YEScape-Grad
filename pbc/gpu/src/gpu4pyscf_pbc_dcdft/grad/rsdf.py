@@ -15,6 +15,7 @@ def rsdf_gpu_gradient(
     z_residual_tolerance=1.0e-8,
     z_max_cycle=80,
     z_dense_max_dimension=256,
+    rsdf_derivative_omega_scale=1.0,
     progress_callback=None,
 ) -> GDFGradientResult:
     """Evaluate Gamma/k-point RSDF response with CuPy contractions."""
@@ -29,5 +30,6 @@ def rsdf_gpu_gradient(
         z_residual_tolerance=z_residual_tolerance,
         z_max_cycle=z_max_cycle,
         z_dense_max_dimension=z_dense_max_dimension,
+        rsdf_derivative_omega_scale=rsdf_derivative_omega_scale,
         progress_callback=progress_callback,
     )

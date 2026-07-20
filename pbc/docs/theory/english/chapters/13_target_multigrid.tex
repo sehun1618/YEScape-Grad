@@ -1,0 +1,169 @@
+\section{Independent ownership of target multigrid and source DF}
+\label{sec:target-multigrid}
+
+\subsection{Two independent choices}
+
+A periodic DC-DFT calculation contains two numerical choices with different
+roles.  The \emph{source two-electron backend} evaluates Coulomb, exchange,
+and orbital-Hessian actions for the source HF problem.  This backend is
+FFTDF, GDF, or RSDF.  The \emph{target integrator} evaluates target $J$ and
+$E_{\mathrm{xc}}$ at the converged HF density.  Calling both choices one
+``DF method'' obscures their separate responsibilities.
+
+We denote a route by the ordered pair
+\begin{equation}
+  \mathcal R
+  =\left(\mathcal B_{\mathrm{source}},\mathcal I_{\mathrm{target}}\right),
+  \qquad
+  \mathcal B_{\mathrm{source}}\in\{\mathrm{FFTDF},\mathrm{GDF},\mathrm{RSDF}\}.
+  \label{eq:target-owner-split}
+\end{equation}
+Changing the target integrator must not change the source HF density
+$D^{\mathrm{HF}}$, HF energy, occupied and virtual orbitals, or source Hessian
+$A^{\mathrm{HF}}$.  It changes the target quadrature in
+$E_{\mathrm{DFA}}[D^{\mathrm{HF}}]$, the target Fock matrix, the orbital-gradient
+right-hand side, and the explicit target derivative.
+
+\subsection{Three target-integration modes}
+
+The current GPU route distinguishes three modes.
+
+\begin{center}
+\begin{longtable}{p{0.21\textwidth}p{0.22\textwidth}p{0.22\textwidth}p{0.23\textwidth}}
+\toprule
+Mode & Target $J$ & Target XC & Source HF/AX \\
+\midrule
+\texttt{uniform} & selected DF & uniform KNumInt & selected DF \\
+\texttt{multigrid\_xc} & selected DF & multigrid & selected DF \\
+\texttt{multigrid\_j\_xc} & multigrid & multigrid & selected DF \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+For \texttt{multigrid\_xc}, called M1, the target effective potential is
+\begin{equation}
+  V_{\mathrm{eff}}^{\mathrm{M1}}[D]
+  =J_{\mathcal B_{\mathrm{source}}}[D]
+   +V_{\mathrm{xc}}^{\mathrm{MG}}[D].
+  \label{eq:target-m1-veff}
+\end{equation}
+M1 keeps the finite-auxiliary GDF/RSDF representation of target $J$ and
+replaces only the XC quadrature.
+
+For \texttt{multigrid\_j\_xc}, called M2,
+\begin{equation}
+  V_{\mathrm{eff}}^{\mathrm{M2}}[D]
+  =J_{\mathrm{MG}}[D]+V_{\mathrm{xc}}^{\mathrm{MG}}[D].
+  \label{eq:target-m2-veff}
+\end{equation}
+The multigrid $J_{\mathrm{MG}}$ and a finite-auxiliary GDF/RSDF $J$ are
+different finite numerical representations.  They approach the same Coulomb
+limit when their meshes and auxiliary bases are separately converged, but
+their finite-setting energies need not agree.  M2 is therefore a separate
+target model, not merely a drop-in acceleration of GDF or RSDF.
+
+\subsection{Ownership in the energy and gradient}
+
+The target Coulomb derivative must be included exactly once.  The ownership
+rule is
+\begin{equation}
+  \mathbf g_{\mathrm{target}}
+  =\begin{cases}
+    \mathbf g_J^{\mathcal B_{\mathrm{source}}}
+    +\mathbf g_{\mathrm{xc}}^{\mathrm{uniform}},
+      &\mathcal I=\texttt{uniform},\\
+    \mathbf g_J^{\mathcal B_{\mathrm{source}}}
+    +\mathbf g_{\mathrm{xc}}^{\mathrm{MG}},
+      &\mathcal I=\texttt{multigrid\_xc},\\
+    \mathbf g_{J+\mathrm{xc}}^{\mathrm{MG}},
+      &\mathcal I=\texttt{multigrid\_j\_xc}.
+  \end{cases}
+  \label{eq:target-gradient-owner}
+\end{equation}
+Adding the selected-DF target $dJ/dR$ in the last line double counts the
+Coulomb response.  Omitting it in M1 differentiates a Hamiltonian different
+from the one used for the energy.
+
+The target hcore and GTH pseudopotential remain owned by the selected
+one-electron provider in all three modes.  Attaching a multigrid object to the
+entire target KS object can implicitly redirect upstream \texttt{get\_hcore()}
+or \texttt{get\_j()} dispatch.  The implementation must instead combine the
+low-level target XC/J outputs explicitly and report separate hcore, PP, J,
+and XC owners.
+
+\subsection{Why target multigrid does not replace the HF Hessian}
+
+The DC-DFT adjoint equation differentiates the source HF stationarity
+constraint.  In
+\begin{equation}
+  A_{\mathrm{HF}}^Tz=-g_{\mathrm{target}},
+\end{equation}
+the right-hand side depends on the target integrator, whereas
+$A_{\mathrm{HF}}$ remains the source Hessian.  Replacing AX J/K by multigrid
+after selecting M1 or M2 would solve the response of a different stationarity
+constraint than the one satisfied by the source density.
+
+The workflow is therefore:
+\begin{enumerate}
+  \item converge source HF with GDF or RSDF and obtain $D^{\mathrm{HF}}$;
+  \item build $E_{\mathrm{DFA}}[D^{\mathrm{HF}}]$ and $F_{\mathrm{target}}$
+        with the selected target integrator;
+  \item form $g_{\mathrm{target}}$ from $F_{\mathrm{target},vo}$;
+  \item solve for $z$ with source GDF/RSDF AX;
+  \item assemble target explicit and source-HF response derivatives.
+\end{enumerate}
+
+\subsection{Source and target meshes}
+
+The \texttt{cell.mesh} resolved from \texttt{cell.ke\_cutoff} may be used by
+FFT-based source operators, the GTH local potential, and other reciprocal
+operations.  The target multigrid mesh is an independent parameter for target
+XC/J quadrature.  Equal default values do not imply equal accuracy meaning.
+
+Convergence should be separated as
+\begin{equation}
+  \lim_{\mathcal M_s\to\infty}
+  \lim_{\mathcal M_t\to\infty}
+  \mathbf g(\mathcal M_s,\mathcal M_t).
+  \label{eq:target-grid-convergence}
+\end{equation}
+Reporting only one cutoff does not identify which representation is
+converged.  \texttt{target\_\allowbreak multigrid\_\allowbreak mesh=null}
+inherits the current cell
+mesh; it is not an automatic memory cap.  Large-cell reports must record the
+resolved triplet and number of grid points.
+
+Multigrid distributes work over Gaussian/locality levels, but it remains a
+finite quadrature.  It is not automatically more accurate or more
+translation invariant than a dense uniform grid.  Energy phase scans,
+translation sums, and complete-gradient mesh convergence test distinct
+properties and should all be reported.
+
+\subsection{Workspace reuse and lifetime}
+
+Multigrid tasks, sorted Gaussian pairs, and the target Fock built during the
+target energy can be reused by the gradient.  Using a different multigrid
+object or mesh in the gradient does not differentiate the central energy.
+Conversely, keeping the large task cache after its final use overlaps its
+memory with later GDF/RSDF response work.
+
+The safe lifetime is
+\begin{equation}
+  \text{build at target energy}
+  \longrightarrow
+  \text{reuse at target gradient}
+  \longrightarrow
+  \text{release before DF response}.
+  \label{eq:target-multigrid-memory}
+\end{equation}
+This is ownership management after the last consumer, not an approximation
+that discards grid points.
+
+\subsection{Recommended scope}
+
+M1 is the conservative opt-in route because it retains source HF and the
+finite-auxiliary target $J$ while replacing only target XC.  M2 can be
+analytically consistent, but it also changes the target-$J$ representation
+and requires separate convergence.  A PP-only multigrid route is inconsistent
+until central hcore, explicit PP derivatives, the nuclear CPHF source, and the
+Z contraction all use the same representation.

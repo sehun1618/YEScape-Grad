@@ -1,7 +1,7 @@
 {
-  "output_root": "results/multigrid_performance_gate",
+  "output_root": "../results/current_correctness",
   "defaults": {
-    "atom_file": "structures/water8.xyz",
+    "atom_file": "../structures/water8.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [10.0, 0.0, 0.0],
@@ -33,50 +33,38 @@
     "z_tolerance": 1e-12,
     "z_residual_tolerance": 1e-8,
     "z_max_cycle": 80,
-    "gdf_bilinear_mode": "one_pass_fused",
-    "run_fd": false
+    "z_nuclear_batch_memory_fraction": 0.05,
+    "run_fd": true,
+    "fd_step_bohr": 0.0001,
+    "fd_atoms": [0],
+    "fd_axes": ["z"]
   },
   "jobs": [
     {
-      "name": "water8_repeat_01",
+      "name": "gdf_uniform",
       "device": "gpu",
-      "df_backends": ["gdf", "rsdf"],
-      "target_integrators": [
-        "uniform",
-        "multigrid_xc",
-        "multigrid_j_xc"
-      ]
+      "df_backend": "gdf",
+      "target_integrator": "uniform",
+      "gdf_bilinear_mode": "one_pass_fused"
     },
     {
-      "name": "water8_repeat_02",
+      "name": "rsdf_uniform",
       "device": "gpu",
-      "df_backends": ["gdf", "rsdf"],
-      "target_integrators": [
-        "uniform",
-        "multigrid_xc",
-        "multigrid_j_xc"
-      ]
+      "df_backend": "rsdf",
+      "target_integrator": "uniform"
     },
     {
-      "name": "water8_repeat_03",
+      "name": "gdf_multigrid_xc",
       "device": "gpu",
-      "df_backends": ["gdf", "rsdf"],
-      "target_integrators": [
-        "uniform",
-        "multigrid_xc",
-        "multigrid_j_xc"
-      ]
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc",
+      "gdf_bilinear_mode": "one_pass_fused"
     },
     {
-      "name": "water20_limited",
+      "name": "rsdf_multigrid_xc",
       "device": "gpu",
-      "df_backends": ["gdf", "rsdf"],
-      "target_integrators": [
-        "uniform",
-        "multigrid_xc",
-        "multigrid_j_xc"
-      ],
-      "atom_file": "structures/water20.xyz"
+      "df_backend": "rsdf",
+      "target_integrator": "multigrid_xc"
     }
   ]
 }

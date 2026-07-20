@@ -81,7 +81,7 @@
     "software_versions_recorded": true
   },
   "translation_sum_diagnosis": {
-    "evidence": "translation_sum_diagnosis_water8.json",
+    "evidence": "pbc/benchmark/backup/evidence/translation_sum_diagnosis_water8.json",
     "analytic_term_missing": false,
     "cause": "target-DFA uniform-grid egg-box error",
     "analytic_minus_rigid_fd_ha_per_bohr": 3.299866162265186e-08,

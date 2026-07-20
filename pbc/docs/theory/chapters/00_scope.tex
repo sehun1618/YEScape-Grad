@@ -58,11 +58,13 @@ equation을 한 번 풀어 response를 모은다.
   \item Gamma-point 및 일반 sampled k-point mesh,
   \item PBE, SCAN, r2SCAN target DFA,
   \item FFTDF, GDF, RSDF two-electron representation,
+  \item source DF와 독립적으로 선택하는 GPU target multigrid XC/J+XC,
+  \item dense reference와 production matrix-free Z-vector,
   \item CPU와 GPU implementation,
   \item fixed lattice에서의 energy 및 nuclear analytic gradient.
 \end{itemize}
 
-Stress/cell derivative, target-only multigrid, larger-angular-momentum completion
+Stress/cell derivative, multigrid pseudopotential, larger-angular-momentum completion
 matrix와 open-shell/UHF response는 active 범위에서 제외되어 별도 archive에 보존된다.
 따라서 이 문서에서 ``analytic gradient''라는 말은 항상 cell을 고정한
 $\partial E/\partial R_{Ax}$를 뜻한다.
@@ -74,7 +76,8 @@ $\partial E/\partial R_{Ax}$를 뜻한다.
 제~\ref{sec:fixed-density-energy}장은 fixed-HF-density target energy를 정의한다.
 제~\ref{sec:orbital-response}장과 제~\ref{sec:dc-lagrangian}장은 nonvariational
 response와 전체 gradient를 유도한다. 이후 GTH, FFTDF, GDF, MGGA, RSDF 순으로 각
-explicit derivative를 설명하고 마지막에 검증 방법을 정리한다.
+explicit derivative를 설명한다. 마지막에는 target multigrid ownership, matrix-free와
+bounded-memory response, 실제 계산 workflow 및 검증 방법을 연결한다.
 
 수식에서 ``정확하다''는 말은 두 층위를 구분해야 한다. 첫째, 선택한 finite basis,
 mesh, auxiliary basis와 k-point representation에서 analytic derivative가 같은

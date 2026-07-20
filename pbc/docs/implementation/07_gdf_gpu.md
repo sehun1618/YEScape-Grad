@@ -308,7 +308,8 @@ gradient의 CUDA-event profile에서는 기본값에서 2.502 s 중 SR derivativ
 2.057 s로 82%를 차지했고 LR derivative는 0.099 s뿐이었다. Source contraction은
 0.0015 s여서 contraction micro-optimization 대상이 아니었다.
 
-Gamma derivative는 기존 heuristic의 1.5배를 사용한다.
+초기 Water8 profiling 실험에서는 Gamma derivative에 기존 heuristic의 1.5배를
+사용했다.
 
 $$
 \omega_{\mathrm{Gamma\ deriv}}
@@ -317,10 +318,12 @@ $$
 
 Water8에서 reciprocal vector 수는 3375에서 9261로 늘었지만 SR kernel은 0.856 s로
 줄고 LR derivative는 0.241 s가 됐다. 2.0배에서는 reciprocal vector가 19683개로 늘어 LR
-비용이 다시 커졌으므로 1.5배가 더 빨랐다. 이 scale은 Gamma target-J, component-resolved
-bilinear 및 fused traversal에 공통 적용한다. sampled-k 경로는 변경하지 않았다.
+비용이 다시 커졌으므로 그 작은 시스템에서는 1.5배가 더 빨랐다. 이 결과는
+system-dependent한 과거 성능 probe이며 현재 production 경로가 아니다. 현재 GDF와
+RSDF의 derivative omega scale 기본값은 모두 1.0으로 PySCF가 정한 split을 보존한다.
+sampled-k 경로도 이 정책에서 변경하지 않았다.
 
-이 변경은 screening threshold나 Coulomb 식을 바꾸지 않는다. Water8/20의 이전 validated
+이 과거 분할 실험은 screening threshold나 Coulomb 식을 바꾸지 않는다. Water8/20의 이전 validated
 gradient와 최대 차이는 각각 $7.38\times10^{-12}$와
 $1.65\times10^{-11}$ Ha/Bohr였고, water8 선택 FD 오차는
 $2.09\times10^{-9}$ Ha/Bohr였다. Report에는 `short_range_omega`,
@@ -478,7 +481,8 @@ $S^{A_x}$ batch를 직접 contraction한다.
 `GDFGradientResult.timings_s`는 native mode에서
 `gdf_native_target_j_derivative`, `z_nuclear_device_contraction`,
 `z_nuclear_cphf_source`, `gdf_native_bilinear_z_response`,
-`gdf_native_contracted_pseudo_explicit`, `gdf_native_contracted_pseudo_z_response`,
+Gamma의 `gdf_native_contracted_pseudo_coupled` 또는 sampled-k의
+`gdf_native_contracted_pseudo_explicit`/`gdf_native_contracted_pseudo_z_response`,
 `one_electron_host_integrals`를 분리한다. `z_nuclear_response_batch_size`는 한 번의
 provider J/K traversal에 묶인 Cartesian source 수를 기록한다.
 `z_nuclear_response_batch_plan`은 memory-derived preflight를,
@@ -488,6 +492,18 @@ device/CuPy-pool high-water를 기록한다. 여기서 native mode의
 `gdf_host_primitive_integrals`, `gdf_metric_cderi_device_response`,
 `gdf_jk_device_contraction`을 기록한다. 따라서 setup mode를 확인한 뒤 integral setup,
 target Hartree derivative, Z-response 중 어느 부분이 병목인지 판단할 수 있다.
+
+Gamma에서는 pseudopotential derivative가 density에 선형이라는 점을 이용해
+
+$$
+G_{\mathrm{PP}}[D] + 2G_{\mathrm{PP}}[T_Z]
+=G_{\mathrm{PP}}[D+2T_Z]
+$$
+
+를 한 번의 local-part-1/nonlocal traversal로 계산한다. 결과는
+`coupled_pseudopotential`에 저장되며 metadata의
+`pseudopotential_component_resolved`는 `false`다. sampled-k는 검증된 기존의 두
+resolved contraction을 유지한다.
 
 Water20 r2SCAN/Gamma/SZV, 400 Ha maintenance profile에서 matrix-free 전환 뒤
 analytic-gradient wall time은 148.66 s에서 52.60 s로 감소했다. Nuclear CPHF source를
@@ -520,7 +536,7 @@ $2.09\times10^{-9}$ Ha/Bohr다.
 $3.23\times10^{-14}$ Ha/Bohr 차이를 보였다. Water8과 water20 모두 3375 reciprocal
 vector를 3360+15의 두 block으로 완전히 처리했고 OOM rebatch는 0회였다. 이 입력에서는
 계획된 working set이 각각 약 0.506 GB와 3.122 GB였고, planner는 약 35.0 GB를 reserve로
-남겼다. Raw queue 정의는 `benchmark/gdf_post_memory_repair_timing.json`, compact evidence는
+남겼다. Raw queue 정의는 `benchmark/backup/queues/gdf_post_memory_repair_timing.json`, compact evidence는
 `gpu/validation/results/2026-07-16_gdf_optimization.json`에 있다.
 
 같은 queue를 Gamma derivative omega 최적화 뒤 다시 3회 실행했다. `one_pass` median은
@@ -557,7 +573,7 @@ Native production evidence는
 | water20 Gamma r2SCAN, selected component | $4.618\times10^{-9}$ | - | - |
 
 Raw reports는
-`benchmark/results/gdf_optimization_release_gate_2026-07-16/`에 있다. 모든 값은
+`benchmark/backup/results/gdf_optimization_release_gate_2026-07-16/`에 있다. 모든 값은
 optimization goal의 FD, energy 및 gradient gate를 통과했다.
 
 | Case | max analytic-FD | CPU-GPU energy | CPU-GPU gradient |

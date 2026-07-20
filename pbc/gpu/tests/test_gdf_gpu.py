@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 import warnings
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cupy as cp
 import numpy as np
@@ -41,10 +41,13 @@ from gpu4pyscf_pbc_dcdft.df.gdf.contracted_derivative import (
     restricted_hf_bilinear_derivative,
     restricted_hf_bilinear_derivative_one_pass,
     restricted_hf_bilinear_derivative_one_pass_gamma,
+    restricted_hf_bilinear_derivative_reverse_gamma,
     target_j_plus_restricted_hf_bilinear_derivative_one_pass,
+    target_j_plus_restricted_hf_bilinear_derivative_reverse_gamma,
 )
 from gpu4pyscf.gto import mole as gpu_mole
 from gpu4pyscf.pbc.df.int3c2e import POOL_SIZE
+from gpu4pyscf.pbc.grad.pp import vppnl_nuc_grad
 from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
     contract_restricted_hf_bilinear_energy_derivative,
     contract_restricted_hf_energy_derivative,
@@ -60,13 +63,21 @@ from gpu4pyscf_pbc_dcdft.df.gdf.reciprocal_memory import (
 )
 from gpu4pyscf_pbc_dcdft.df.gdf.signed_gamma_native import (
     _gamma_coulomb_vector,
+    gamma_target_j_plus_signed_energy_derivative,
+)
+from gpu4pyscf_pbc_dcdft.df.gdf.reverse_gamma_native import (
+    gamma_reverse_adjoint_energy_derivative,
 )
 from gpu4pyscf_pbc_dcdft.df.gdf.signed_density import (
     build_gamma_signed_density_source,
     build_gamma_factorization_adjoint,
+    build_gamma_primitive_adjoint,
     contract_gamma_signed_density_source,
     contract_kpoint_bilinear_cderi_derivative,
     ewald_restricted_hf_bilinear_derivative,
+)
+from gpu4pyscf_pbc_dcdft.grad.nonlocal_pseudo import (
+    contract_nonlocal_pseudo_batch,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf import pp_value as pp_value_module
 
@@ -174,6 +185,30 @@ class GDFGPUEnergyTest(unittest.TestCase):
         self.assertFalse(provider.uses_native_integrals)
         self.assertIsNotNone(provider.cpu_witness)
         self.assertGreater(len(provider.central_cderi_blocks), 0)
+
+    def test_native_gamma_factorization_metadata_is_cached(self):
+        cell = _cell()
+        provider = gpu_df.GDF(
+            cell,
+            kpts=np.zeros((1, 3)),
+            auxbasis="gth-szv",
+            setup_mode="native",
+        )
+        first = provider.gamma_factorization_metadata
+        second = provider.gamma_factorization_metadata
+        self.assertIs(first, second)
+        self.assertEqual(first.nao, cell.nao_nr())
+        self.assertEqual(len(first.compressed_cderi), 1)
+        self.assertEqual(first.pair_address.ndim, 1)
+        self.assertEqual(first.auxiliary_transform.ndim, 2)
+        self.assertEqual(first.auxiliary_transform.shape[1], first.naux)
+        self.assertGreater(first.factorization_omega, 0.0)
+        self.assertEqual(
+            provider.capability()["gamma_factorization_metadata"][
+                "representation"
+            ],
+            "native_gamma_compressed",
+        )
 
     def test_native_pp_uses_bounded_builder_and_cache(self):
         cell = _cell()
@@ -463,11 +498,11 @@ class GDFGPUAlgebraTest(unittest.TestCase):
 
         def force_multiple_blocks(*args, **kwargs):
             ngrids = int(args[0])
+            kwargs["block_alignment"] = 1
+            kwargs["max_block_size"] = max(1, ngrids // 2)
             return plan_gamma_reciprocal_blocks(
                 *args,
                 **kwargs,
-                block_alignment=1,
-                max_block_size=max(1, ngrids // 2),
             )
 
         diagnostics = {}
@@ -502,6 +537,97 @@ class GDFGPUAlgebraTest(unittest.TestCase):
             short_range["maximum_tasks_per_batch"],
             POOL_SIZE,
         )
+
+    def test_native_gamma_reverse_adjoint_matches_signed_one_pass(self):
+        _cpu, gpu = _methods((1, 1, 1))
+        gpu.kernel()
+        reference = cp.asarray(gpu.source_scf.make_rdm1())
+        rng = np.random.default_rng(211)
+        raw = cp.asarray(rng.normal(size=reference.shape))
+        response = 0.02 * (raw + raw.T)
+        signed = restricted_hf_bilinear_derivative_one_pass_gamma(
+            gpu.with_df,
+            reference,
+            response,
+            exxdiv=gpu.exxdiv,
+        )
+        diagnostics = {}
+        reverse = restricted_hf_bilinear_derivative_reverse_gamma(
+            gpu.with_df,
+            reference,
+            response,
+            exxdiv=gpu.exxdiv,
+            memory_diagnostics=diagnostics,
+        )
+        self.assertLess(float(cp.max(cp.abs(reverse - signed))), 1.0e-9)
+        self.assertEqual(diagnostics["route"], "gamma_reverse_adjoint")
+        self.assertFalse(diagnostics["include_target_j"])
+
+    def test_native_gamma_reverse_adjoint_fused_matches_signed_fused(self):
+        _cpu, gpu = _methods((1, 1, 1))
+        gpu.kernel()
+        reference = cp.asarray(gpu.source_scf.make_rdm1())
+        rng = np.random.default_rng(223)
+        raw = cp.asarray(rng.normal(size=reference.shape))
+        response = 0.02 * (raw + raw.T)
+        signed = target_j_plus_restricted_hf_bilinear_derivative_one_pass(
+            gpu.with_df,
+            reference,
+            response,
+            exxdiv=gpu.exxdiv,
+        )
+        diagnostics = {}
+        reverse = target_j_plus_restricted_hf_bilinear_derivative_reverse_gamma(
+            gpu.with_df,
+            reference,
+            response,
+            exxdiv=gpu.exxdiv,
+            memory_diagnostics=diagnostics,
+        )
+        self.assertLess(float(cp.max(cp.abs(reverse - signed))), 1.0e-9)
+        self.assertTrue(diagnostics["include_target_j"])
+
+    def test_native_gamma_reverse_adjoint_component_parity(self):
+        _cpu, gpu = _methods((1, 1, 1))
+        gpu.kernel()
+        reference = cp.asarray(gpu.source_scf.make_rdm1())
+        rng = np.random.default_rng(227)
+        raw = cp.asarray(rng.normal(size=reference.shape))
+        response = 0.02 * (raw + raw.T)
+        optimizer = _build_gamma_derivative_optimizer(gpu.with_df)
+        signed_components = {}
+        reverse_components = {}
+        with _bounded_sr_derivative_batches(gpu.with_df, None):
+            signed = gamma_target_j_plus_signed_energy_derivative(
+                optimizer,
+                reference,
+                response,
+                exxdiv=gpu.exxdiv,
+                component_diagnostics=signed_components,
+            )
+            reverse = gamma_reverse_adjoint_energy_derivative(
+                optimizer,
+                reference,
+                response,
+                include_target_j=True,
+                exxdiv=gpu.exxdiv,
+                component_diagnostics=reverse_components,
+            )
+        self.assertLess(float(np.max(np.abs(reverse - signed))), 1.0e-9)
+        self.assertEqual(set(reverse_components), set(signed_components))
+        for name in reverse_components:
+            self.assertLess(
+                float(
+                    np.max(
+                        np.abs(
+                            reverse_components[name]
+                            - signed_components[name]
+                        )
+                    )
+                ),
+                1.0e-9,
+                msg=name,
+            )
 
     def test_native_kpoint_signed_one_pass_matches_two_pass(self):
         _cpu, gpu = _methods((2, 1, 1))
@@ -1028,6 +1154,76 @@ class GDFGPUAlgebraTest(unittest.TestCase):
             1.0e-9,
         )
 
+    def test_gamma_primitive_adjoint_matches_signed_quadratic_states(self):
+        rng = np.random.default_rng(151)
+        naux = 7
+        nao = 5
+        raw_solved = rng.normal(size=(naux, nao, nao))
+        solved = cp.asarray(raw_solved + raw_solved.transpose(0, 2, 1))
+
+        def symmetric_density():
+            raw = rng.normal(size=(nao, nao))
+            return cp.asarray(raw + raw.T)
+
+        reference = symmetric_density()
+        response = symmetric_density()
+
+        def quadratic_sources(density, coulomb_weight, exchange_weight):
+            auxiliary = cp.einsum(
+                "pij,ji->p", solved, density, optimize=True
+            )
+            source = coulomb_weight * (
+                density[:, :, None] * auxiliary[None, None, :]
+            )
+            source -= 0.5 * exchange_weight * cp.einsum(
+                "ij,pjk,kl->ilp",
+                density,
+                solved,
+                density,
+                optimize=True,
+            )
+            solved_density = cp.einsum(
+                "pij,jk->pik", solved, density, optimize=True
+            )
+            metric = coulomb_weight * (
+                auxiliary[:, None] * auxiliary[None, :]
+            )
+            metric -= 0.5 * exchange_weight * cp.einsum(
+                "pij,qji->pq",
+                solved_density,
+                solved_density,
+                optimize=True,
+            )
+            return source, metric
+
+        plus_source, plus_metric = quadratic_sources(
+            reference + response, 1.0, 1.0
+        )
+        minus_source, minus_metric = quadratic_sources(
+            reference - response, -1.0, -1.0
+        )
+        target_source, target_metric = quadratic_sources(
+            reference, 1.0, 0.0
+        )
+        direct = build_gamma_primitive_adjoint(
+            solved,
+            reference,
+            response,
+            include_target_j=True,
+        )
+        expected_source = (
+            plus_source + minus_source + target_source
+        ).transpose(2, 0, 1)
+        expected_metric = plus_metric + minus_metric + target_metric
+        self.assertLess(
+            float(cp.max(cp.abs(direct.source - expected_source))),
+            1.0e-10,
+        )
+        self.assertLess(
+            float(cp.max(cp.abs(direct.metric - expected_metric))),
+            1.0e-10,
+        )
+
     def test_native_local_part1_contraction_matches_full_h1(self):
         cell = _cell()
         for kmesh in ((1, 1, 1), (2, 1, 1)):
@@ -1048,14 +1244,73 @@ class GDFGPUAlgebraTest(unittest.TestCase):
                         full.matrix(atom_id, axis),
                         density,
                     ).real / len(kpts)
-            contracted = NativeGDFLocalPart1Derivative(
+            native = NativeGDFLocalPart1Derivative(
                 cell,
                 kpts,
-            ).contract(density)
+            )
+            contracted = native.contract(density)
             self.assertLess(
                 float(np.max(np.abs(cp.asnumpy(contracted) - reference))),
                 1.0e-8,
             )
+            execution = native.last_reciprocal_execution
+            self.assertEqual(execution["grid_count"], len(native.gv))
+            self.assertLessEqual(execution["block_size"], 1024)
+            self.assertEqual(
+                execution["block_count"],
+                int(np.ceil(len(native.gv) / execution["block_size"])),
+            )
+
+    def test_gamma_local_part1_batch_matches_separate_contractions(self):
+        cell = _cell()
+        kpts = np.zeros((1, 3))
+        density = cp.asarray(cell.pbc_intor("int1e_ovlp", kpts=kpts))
+        densities = cp.stack((density, density * 0.37))
+        native = NativeGDFLocalPart1Derivative(cell, kpts)
+
+        batched = native.contract_batch(densities)
+        separate = cp.stack(
+            [native.contract(source) for source in densities]
+        )
+
+        self.assertLess(
+            float(cp.max(cp.abs(batched - separate))),
+            1.0e-9,
+        )
+        self.assertEqual(
+            native.last_reciprocal_execution["density_count"],
+            1,
+        )
+
+    def test_gamma_nonlocal_pseudo_batch_matches_separate_route(self):
+        cell = _water_cell()
+        density = cp.asarray(cell.pbc_intor("int1e_ovlp"))[None]
+        densities = cp.stack((density, density * 0.37))
+
+        batched = contract_nonlocal_pseudo_batch(cell, densities)
+        separate = cp.stack(
+            [cp.asarray(vppnl_nuc_grad(cell, source)) for source in densities]
+        )
+
+        self.assertLess(
+            float(cp.max(cp.abs(batched - separate))),
+            1.0e-9,
+        )
+
+    def test_local_part1_planner_allows_sub_alignment_low_memory_block(self):
+        native = object.__new__(NativeGDFLocalPart1Derivative)
+        native.reciprocal_memory_fraction = 0.1
+        native.reciprocal_max_grid_block_size = 1024
+        native.nkpts = 1
+        native.fourier = Mock()
+        native.fourier.cell.nao = 100
+        native.gv = np.empty((100, 3))
+        with patch(
+            "gpu4pyscf_pbc_dcdft.df.gdf.local_part1_derivative."
+            "get_avail_mem",
+            return_value=1000,
+        ):
+            self.assertEqual(native._fourier_block_size(), 1)
 
 
 @unittest.skipUnless(_gpu_available(), "CUDA device is required")
@@ -1068,6 +1323,7 @@ class GDFGPUGradientTest(unittest.TestCase):
         gpu.kernel()
         cpu_gradient = cpu.nuc_grad_method().kernel()
         gpu_gradient_object = gpu.nuc_grad_method()
+        self.assertEqual(gpu_gradient_object.gdf_derivative_omega_scale, 1.0)
         gpu_gradient = gpu_gradient_object.kernel()
         self.assertLess(
             float(np.max(np.abs(cpu_gradient - gpu_gradient))),
@@ -1089,20 +1345,15 @@ class GDFGPUGradientTest(unittest.TestCase):
             1,
         )
         metadata = gpu_gradient_object.result.metadata()
-        self.assertEqual(metadata["gdf_bilinear_mode"], "one_pass")
+        self.assertEqual(metadata["gdf_bilinear_mode"], "optimized_fused")
         if kmesh == (1, 1, 1):
             reciprocal = metadata["gdf_reciprocal_memory"]
-            self.assertEqual(reciprocal["route"], "gamma")
-            self.assertEqual(
-                reciprocal["zero_order_execution"]["completed_count"],
-                reciprocal["plan"]["ngrids"],
-            )
-            self.assertEqual(
-                reciprocal["derivative_execution"]["completed_count"],
-                reciprocal["plan"]["ngrids"],
-            )
+            self.assertEqual(reciprocal["route"], "gamma_reverse_adjoint")
         else:
-            self.assertIsNone(metadata["gdf_reciprocal_memory"])
+            reciprocal = metadata["gdf_reciprocal_memory"]
+            self.assertNotIn("route", reciprocal)
+            self.assertIn("local_part1_explicit", reciprocal)
+            self.assertIn("local_part1_z_response", reciprocal)
         self.assertEqual(
             metadata["z_nuclear_response_batch_plan"]["component_count"],
             3 * gpu.cell.natm,
@@ -1185,8 +1436,52 @@ class GDFGPUGradientTest(unittest.TestCase):
     def test_gamma_fused_full_gradient_parity(self):
         self.assert_fused_full_gradient_parity((1, 1, 1))
 
+    def test_gamma_reverse_adjoint_full_gradient_parity(self):
+        _cpu, gpu = _methods((1, 1, 1))
+        gpu.kernel()
+        signed = gpu.nuc_grad_method()
+        signed.gdf_bilinear_mode = "one_pass_fused"
+        signed_gradient = signed.kernel()
+
+        reverse = gpu.nuc_grad_method()
+        reverse.gdf_bilinear_mode = "reverse_adjoint_fused"
+        reverse.gdf_derivative_omega_scale = 1.9
+        reverse_gradient = reverse.kernel()
+        self.assertLess(
+            float(np.max(np.abs(reverse_gradient - signed_gradient))),
+            1.0e-9,
+        )
+        metadata = reverse.result.metadata()
+        self.assertEqual(
+            metadata["gdf_bilinear_mode"],
+            "reverse_adjoint_fused",
+        )
+        self.assertEqual(
+            metadata["gdf_reciprocal_memory"]["route"],
+            "gamma_reverse_adjoint",
+        )
+
     def test_kpoint_fused_full_gradient_parity(self):
         self.assert_fused_full_gradient_parity((2, 1, 1))
+
+    def test_kpoint_optimized_fused_uses_complex_one_pass_parity(self):
+        _cpu, gpu = _methods((2, 1, 1))
+        gpu.kernel()
+        signed = gpu.nuc_grad_method()
+        signed.gdf_bilinear_mode = "one_pass_fused"
+        signed_gradient = signed.kernel()
+
+        optimized = gpu.nuc_grad_method()
+        optimized.gdf_bilinear_mode = "optimized_fused"
+        optimized_gradient = optimized.kernel()
+        self.assertLess(
+            float(np.max(np.abs(optimized_gradient - signed_gradient))),
+            1.0e-9,
+        )
+        self.assertEqual(
+            optimized.result.metadata()["gdf_bilinear_mode"],
+            "optimized_fused",
+        )
 
     def test_one_pass_gamma_rejects_sampled_kpoints(self):
         _cpu, gpu = _methods((2, 1, 1))

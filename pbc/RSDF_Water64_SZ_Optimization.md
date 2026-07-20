@@ -20,7 +20,7 @@ The optimizations must preserve the following contracts:
 
 Reference result:
 
-`benchmark/results/water64_rsdf_benchmark_SZ/000_water64_selected_fd_check_gpu_rsdf/report.json`
+`benchmark/backup/results/water64_rsdf_benchmark_SZ/000_water64_selected_fd_check_gpu_rsdf/report.json`
 
 The input is Water64, SZV-GTH orbital and auxiliary bases, Gamma sampling,
 500 Ha cutoff, r2SCAN, matrix-free Z-vector, and no finite difference.
@@ -88,7 +88,7 @@ Expected effect:
 
 Post-change result:
 
-`benchmark/results/water64_rsdf_benchmark_SZ_opt_r1_r2/000_water64_selected_fd_check_gpu_rsdf/report.json`
+`benchmark/backup/results/water64_rsdf_benchmark_SZ_opt_r1_r2/000_water64_selected_fd_check_gpu_rsdf/report.json`
 
 | Quantity | Baseline | R1 + R2 | Change |
 | --- | ---: | ---: | ---: |
@@ -115,7 +115,7 @@ the cache.
 
 Post-change result:
 
-`benchmark/results/water64_rsdf_benchmark_SZ_opt_r1_r2_r3/000_water64_selected_fd_check_gpu_rsdf/report.json`
+`benchmark/backup/results/water64_rsdf_benchmark_SZ_opt_r1_r2_r3/000_water64_selected_fd_check_gpu_rsdf/report.json`
 
 The first HF hcore request computes the CPU-witness GTH pseudopotential value
 as before. The target-DFA hcore request reuses the cached value. Each caller
@@ -177,7 +177,7 @@ OOM retries are transactional.
 
 Final result:
 
-`benchmark/results/water64_rsdf_benchmark_SZ_opt_r1_r2_r3_r4_bounded/000_water64_selected_fd_check_gpu_rsdf/report.json`
+`benchmark/backup/results/water64_rsdf_benchmark_SZ_opt_r1_r2_r3_r4_bounded/000_water64_selected_fd_check_gpu_rsdf/report.json`
 
 | Quantity | Baseline | R1 + R2 + R3 + bounded R4 | Change |
 | --- | ---: | ---: | ---: |
@@ -311,3 +311,67 @@ No new Water64 finite-difference calculation was performed for R5. Water64
 correctness is the analytic exact-central/reference parity reported above;
 finite-difference correctness remains covered by the smaller release-gate
 systems where the same response and assembly paths are exercised.
+
+## Optimization R6: Compressed J/K Ownership Handoff
+
+Static path inspection showed that the exact GPU-source provider built
+GPU4PySCF's compressed central factors but immediately expanded them to
+canonical `(naux, nao, nao)` blocks.  Because `RSDF` inherits the reference
+GDF setup mode, SCF, target J/K, and every matrix-free AX application then
+used the project-local dense canonical contraction instead of GPU4PySCF's
+compressed J/K implementation.
+
+The retained implementation separates the two lifetimes.
+
+1. Central setup calls `build_cderi(..., compress=True)` and preserves the
+   compact AO-pair indices required by GPU4PySCF.
+2. Source HF, target J/K, and matrix-free AX use the upstream compressed
+   Gamma or sampled-k J/K kernels.
+3. The first analytic-derivative request lazily expands canonical pair blocks.
+4. After that expansion, compressed storage is retired immediately; the two
+   large representations are not kept for the remainder of the gradient.
+5. A later J/K request rebuilds the exact compressed central representation
+   explicitly instead of using a stale or incomplete cache.
+
+This changes neither the metric nor the three-center source.  It changes only
+their storage and contraction route.
+
+### R6 validation and Water/Ethanol-SZ timing
+
+The ownership/cache tests (8 tests), exact Gamma and sampled-k
+energy-gradient parity (2 tests), and reciprocal-memory planner tests (7
+tests) passed.  The scaling measurement used Water/Ethanol-SZ, Gamma, r2SCAN,
+500 Ha, `exact_gpu_source`, XC-only multigrid with an explicit `240^3` target
+mesh, matrix-free Z, and no FD.
+
+Result:
+
+`benchmark/backup/results/water_ethanol_rsdf_r6_mesh240_2026-07-19/`
+
+| Quantity | Pre-R6 | R6 | Change |
+| --- | ---: | ---: | ---: |
+| source HF SCF | 105.6230 s | 92.4529 s | -12.47% |
+| target DFA energy | 9.3157 s | 9.2349 s | -0.87% |
+| matrix-free Z | 131.2726 s | 68.1380 s | -48.09% |
+| Z time per iteration | 5.9669 s | 3.0972 s | -48.09% |
+| RSDF response | 242.9334 s | 242.8575 s | -0.03% |
+| analytic gradient | 457.5378 s | 393.4373 s | -14.01% |
+| analytic total | 572.4784 s | 495.1274 s | -13.51% |
+| host peak RSS | 28.0701 GiB | 29.3849 GiB | +4.68% |
+| whole-workflow VRAM peak | 62.3049 GiB | 62.2502 GiB | -0.09% |
+| Z-stage VRAM peak | 16.9260 GiB | 8.6115 GiB | -49.12% |
+
+Both routes used 22 Z iterations.  Residuals were `1.17429e-13` and
+`1.17416e-13`.  The energy difference was `4.55e-13 Ha`; the analytic-gradient
+maximum and RMS differences were `1.51e-13` and `2.74e-14 Ha/Bohr`.
+
+The overall VRAM peak did not improve because target explicit grid work still
+peaks near 62.3 GiB.  Compressed native J/K trades a larger HF-stage workspace
+(19.55 to 29.31 GiB) and about 1.3 GiB more host RSS for much smaller/faster
+AX and later J/K stages.  The unchanged 242.9 s RSDF response is now the clear
+dominant optimization target.
+
+Two exploratory runs with `target_multigrid_mesh=null` failed in target
+multigrid with `CUDA_ERROR_ILLEGAL_ADDRESS`.  A pre-R6 archived null-mesh run
+had the same failure class.  These runs are not part of the R6 comparison;
+the successful pre-R6 baseline and R6 measurement both use explicit `240^3`.

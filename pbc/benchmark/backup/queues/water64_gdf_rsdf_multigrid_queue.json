@@ -1,7 +1,7 @@
 {
-  "output_root": "results/water64_benchmark_DZ",
+  "output_root": "../results/water64_gdf_rsdf_multigrid_SZ_0720",
   "defaults": {
-    "atom_file": "structures/water64.xyz",
+    "atom_file": "../../structures/water64.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [12.4139, 0.0, 0.0],
@@ -9,13 +9,14 @@
       [0.0, 0.0, 12.4139]
     ],
     "lattice_unit": "Angstrom",
-    "basis": "DZVP-GTH",
+    "basis": "SZV-GTH",
     "pseudo": {
       "H": "GTH-SCAN-q1",
       "O": "GTH-SCAN-q6"
     },
-    "auxbasis": "DZVP-GTH",
+    "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
     "ke_cutoff_ha": 500.0,
     "precision": 1e-9,
     "kmesh": [1, 1, 1],
@@ -32,6 +33,7 @@
     "z_tolerance": 1e-12,
     "z_residual_tolerance": 1e-8,
     "z_max_cycle": 80,
+    "gdf_bilinear_mode": "one_pass_fused",
     "run_fd": false,
     "fd_step_bohr": 0.0001,
     "fd_atoms": "all",
@@ -39,29 +41,32 @@
   },
   "jobs": [
     {
-      "name": "selected_fd_check",
+      "name": "gdf_only",
+      "enabled": true,
       "device": "gpu",
       "df_backend": "gdf",
-      "run_fd": false,
-      "fd_atoms": [
-        0, 1, 2,
-        12, 13, 14,
-        24, 25, 26,
-        36, 37, 38,
-        48, 49, 50,
-        60, 61, 62,
-        72, 73, 74,
-        84, 85, 86,
-        96, 97, 98,
-        108, 109, 110,
-        120, 121, 122,
-        132, 133, 134,
-        144, 145, 146,
-        156, 157, 158,
-        168, 169, 170,
-        180, 181, 182
-      ],
-      "fd_axes": "all"
+      "target_integrator": "uniform"
+    },
+    {
+      "name": "rsdf_only",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "uniform"
+    },
+    {
+      "name": "gdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_integrator": "multigrid_xc"
+    },
+    {
+      "name": "rsdf_plus_multigrid_xc",
+      "enabled": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_integrator": "multigrid_xc"
     }
   ]
 }

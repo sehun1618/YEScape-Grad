@@ -34,7 +34,7 @@ is not stationary.
 | RSDF | r2SCAN | 400 | $173^3$ | $1.9222\times10^{-4}$ | $5.60125\times10^{-3}$ | $5.60122\times10^{-3}$ |
 
 The detailed values are stored in
-`benchmark/translation_sum_diagnosis_water8.json`. The executable probe is
+`benchmark/backup/evidence/translation_sum_diagnosis_water8.json`. The executable probe is
 `benchmark/diagnostics/diagnose_rigid_translation_eggbox.py`.
 
 ## Why Cutoff Convergence Is Not Monotonic Point by Point

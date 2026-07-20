@@ -23,7 +23,7 @@
 \title{Periodic Density-Corrected DFT Analytic Gradients\\
 Theory and Implementation Conventions}
 \author{PBC DC-DFT Package Project}
-\date{Active scope: FFTDF/GDF/RSDF, PBE/SCAN/r2SCAN}
+\date{Active scope: FFTDF/GDF/RSDF, target multigrid, PBE/SCAN/r2SCAN}
 
 \begin{document}
 \maketitle
@@ -37,7 +37,9 @@ Hessian and an adjoint Z-vector equation.  The presentation develops the
 notation and implementation conventions for FFTDF, Gaussian density fitting
 (GDF), range-separated density fitting (RSDF), GTH pseudopotentials, Gamma and
 sampled k-points, and the PBE and SCAN/r2SCAN target functionals in one
-consistent framework.  Stress, cell derivatives, target-only multigrid, and
+consistent framework.  It also covers a target multigrid integrator selected
+independently of source GDF/RSDF, matrix-free MINRES Z-vectors, and
+bounded-memory response algebra.  Stress, cell derivatives, multigrid PP, and
 open-shell response are outside the active scope of this edition.
 \end{abstract}
 \tableofcontents
@@ -54,6 +56,9 @@ open-shell response are outside the active scope of this edition.
 \input{english/chapters/09_mgga_scan_r2scan}
 \input{english/chapters/10_rsdf}
 \input{english/chapters/11_validation_units}
+\input{english/chapters/13_target_multigrid}
+\input{english/chapters/14_matrix_free_bounded_memory}
+\input{english/chapters/15_worked_workflow}
 \input{english/chapters/12_appendices}
 
 \end{document}

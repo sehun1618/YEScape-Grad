@@ -24,6 +24,7 @@ from pyscf_pbc_dcdft.dft.target_integrator import (
 from .. import df
 from ..scf import build_reference
 from .fixed_density import evaluate_energy
+from .scf_profile import SourceHFSCFProfiler
 
 
 class DCRestrictedBase(lib.StreamObject):
@@ -66,6 +67,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.target_evaluation = None
         self.dc_energy_result = None
         self.timings_s = {}
+        self.source_hf_profile = None
         self.progress_callback = None
         self._dcdft_input_signature = None
 
@@ -105,7 +107,13 @@ class DCRestrictedBase(lib.StreamObject):
         invalidate_computed_state(self)
         return self
 
-    def rs_density_fit(self, auxbasis=None, *, central_setup="reference"):
+    def rs_density_fit(
+        self,
+        auxbasis=None,
+        *,
+        central_setup="reference",
+        compressed_device_cache="host",
+    ):
         """Select GPU RSDF with explicit central-factor ownership."""
 
         self.with_df = df.RSDF(
@@ -113,6 +121,7 @@ class DCRestrictedBase(lib.StreamObject):
             kpts=self.kpts,
             auxbasis=auxbasis,
             central_setup=central_setup,
+            compressed_device_cache=compressed_device_cache,
         )
         invalidate_computed_state(self)
         return self
@@ -136,10 +145,18 @@ class DCRestrictedBase(lib.StreamObject):
         )
         reference.verbose = self.verbose
         self._progress("source_hf_scf", state="started")
+        profiler = SourceHFSCFProfiler(reference, self.with_df).start()
         start = perf_counter()
-        reference.kernel(dm0=dm0)
-        cp.cuda.Stream.null.synchronize()
+        try:
+            reference.kernel(dm0=dm0)
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            profiler.abort()
+            raise
         self.timings_s["hf_scf"] = perf_counter() - start
+        self.source_hf_profile = profiler.finish(
+            scf_wall_s=self.timings_s["hf_scf"]
+        )
         self._progress(
             "source_hf_scf",
             state="complete",
@@ -272,4 +289,5 @@ class DCRestrictedBase(lib.StreamObject):
             ),
             "silent_cpu_fallback": False,
             "timings_s": dict(self.timings_s),
+            "source_hf_profile": self.source_hf_profile,
         }

@@ -1,7 +1,7 @@
 {
-  "output_root": "results/example_benchmark_queue",
+  "output_root": "../results/example_benchmark_queue",
   "defaults": {
-    "atom_file": "structures/h2.xyz",
+    "atom_file": "../../structures/h2.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [6.0, 0.0, 0.0],

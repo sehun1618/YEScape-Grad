@@ -34,6 +34,9 @@ from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 
 
 _NATIVE_OMEGA = 0.2
+DEFAULT_RECIPROCAL_MEMORY_FRACTION = 0.10
+DEFAULT_RECIPROCAL_MAX_GRID_BLOCK_SIZE = 1024
+DEFAULT_RECIPROCAL_BLOCK_ALIGNMENT = 32
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,19 @@ class NativeGDFLocalPart1Derivative:
     The result already includes the Brillouin-zone factor ``1/Nk``.
     """
 
-    def __init__(self, cell, kpts, *, omega: float = _NATIVE_OMEGA):
+    def __init__(
+        self,
+        cell,
+        kpts,
+        *,
+        omega: float = _NATIVE_OMEGA,
+        reciprocal_memory_fraction=(
+            DEFAULT_RECIPROCAL_MEMORY_FRACTION
+        ),
+        reciprocal_max_grid_block_size=(
+            DEFAULT_RECIPROCAL_MAX_GRID_BLOCK_SIZE
+        ),
+    ):
         self.cell = cell
         self.kpts = np.asarray(kpts, dtype=float).reshape(-1, 3)
         self.nkpts = len(self.kpts)
@@ -72,6 +87,21 @@ class NativeGDFLocalPart1Derivative:
             raise NotImplementedError(
                 "native GPU4PySCF local part 1 currently fixes omega=0.2"
             )
+        self.reciprocal_memory_fraction = float(
+            reciprocal_memory_fraction
+        )
+        if not 0.0 < self.reciprocal_memory_fraction <= 1.0:
+            raise ValueError(
+                "reciprocal_memory_fraction must be in (0, 1]"
+            )
+        self.reciprocal_max_grid_block_size = int(
+            reciprocal_max_grid_block_size
+        )
+        if self.reciprocal_max_grid_block_size < 1:
+            raise ValueError(
+                "reciprocal_max_grid_block_size must be positive"
+            )
+        self.last_reciprocal_execution = None
         self.kmesh = np.asarray(
             kpts_to_kmesh(cell, self.kpts, bound_by_supmol=True),
             dtype=int,
@@ -118,15 +148,50 @@ class NativeGDFLocalPart1Derivative:
 
         return self.contract_components(density).total
 
+    def contract_batch(self, densities) -> cp.ndarray:
+        """Contract several Gamma densities while sharing Fourier geometry."""
+
+        return self.contract_components_batch(densities).total
+
     def contract_components(self, density) -> LocalPart1DerivativeComponents:
         """Return the four terms separately for diagnostics and tests."""
 
         dm = self._normalize_density(density)
-        short_ao, short_center = self._contract_short_range(dm)
-        long_ao, long_center = self._contract_long_range(dm)
+        components = self.contract_components_batch(dm[None])
         return LocalPart1DerivativeComponents(
-            short_range_ao=short_ao,
-            short_range_center=short_center,
+            short_range_ao=components.short_range_ao[0],
+            short_range_center=components.short_range_center[0],
+            long_range_ao=components.long_range_ao[0],
+            long_range_center=components.long_range_center[0],
+        )
+
+    def contract_components_batch(
+        self,
+        densities,
+    ) -> LocalPart1DerivativeComponents:
+        """Return component contractions for a leading density-set axis."""
+
+        batch = cp.asarray(densities)
+        if batch.ndim == 3:
+            batch = batch[None]
+        if batch.ndim != 4:
+            raise ValueError(
+                "density batch must have shape (nset,nkpts,nao,nao), "
+                f"got {batch.shape}"
+            )
+        normalized = cp.stack(
+            [self._normalize_density(density) for density in batch]
+        )
+        short_ao = []
+        short_center = []
+        for density in normalized:
+            ao, center = self._contract_short_range(density)
+            short_ao.append(ao)
+            short_center.append(center)
+        long_ao, long_center = self._contract_long_range_batch(normalized)
+        return LocalPart1DerivativeComponents(
+            short_range_ao=cp.stack(short_ao),
+            short_range_center=cp.stack(short_center),
             long_range_ao=long_ao,
             long_range_center=long_center,
         )
@@ -225,12 +290,40 @@ class NativeGDFLocalPart1Derivative:
             raise RuntimeError("PBCsr_ejk_int3c2e_ip1 failed")
 
     def _contract_long_range(self, density):
-        sorted_density = self.fourier.cell.apply_C_mat_CT(density)
-        bvk_density = self._fourier_bvk_density(sorted_density)
-        orbital = cp.zeros((self.cell.natm, 3), dtype=cp.float64)
+        orbital, center = self._contract_long_range_batch(density[None])
+        return orbital[0], center[0]
+
+    def _contract_long_range_batch(self, densities):
+        sorted_density = cp.stack(
+            [self.fourier.cell.apply_C_mat_CT(density) for density in densities]
+        )
+        bvk_density = cp.stack(
+            [self._fourier_bvk_density(density) for density in sorted_density]
+        )
+        orbital = cp.zeros(
+            (len(densities), self.cell.natm, 3),
+            dtype=cp.float64,
+        )
         center = cp.zeros_like(orbital)
 
         block_size = self._fourier_block_size()
+        block_count = int(math.ceil(len(self.gv) / block_size))
+        self.last_reciprocal_execution = {
+            "grid_count": int(len(self.gv)),
+            "block_size": int(block_size),
+            "block_count": block_count,
+            "memory_fraction": self.reciprocal_memory_fraction,
+            "maximum_grid_block_size": (
+                self.reciprocal_max_grid_block_size
+            ),
+            "density_count": int(len(densities)),
+            "estimated_pair_fourier_bytes_per_block": int(
+                block_size
+                * self.nkpts
+                * int(self.fourier.cell.nao) ** 2
+                * np.dtype(np.complex128).itemsize
+            ),
+        }
         shell_pairs, image_pairs, shell_offsets = self._fourier_shell_pairs
         environments = self.fourier.aft_envs
         for g0, g1 in lib.prange(0, len(self.gv), block_size):
@@ -243,7 +336,7 @@ class NativeGDFLocalPart1Derivative:
 
             pair_fourier = self.fourier_kernel(gv_block)
             pair_fourier = pair_fourier.transpose(0, 2, 3, 1)
-            rho = contract("kji,kijg->g", sorted_density, pair_fourier)
+            rho = contract("skji,kijg->sg", sorted_density, pair_fourier)
             phase_derivative = (
                 1j
                 * cp.asarray(gv_block)[:, None, :]
@@ -251,26 +344,27 @@ class NativeGDFLocalPart1Derivative:
                 * self.charges[None, :, None]
                 * self.weighted_coulomb[g0:g1, None, None]
             )
-            center += contract("g,gax->ax", rho, phase_derivative).real
+            center += contract("sg,gax->sax", rho, phase_derivative).real
 
             gv_transposed = cp.asarray(gv_block.T.ravel())
             potential = cp.ascontiguousarray(potential)
-            error = ft_ao.libpbc.PBC_ft_aopair_ej_ip1(
-                _pointer(orbital),
-                _pointer(bvk_density),
-                _pointer(potential),
-                _pointer(gv_transposed),
-                ctypes.byref(environments),
-                ctypes.c_int(len(shell_offsets) - 1),
-                ctypes.c_int(g1 - g0),
-                ctypes.c_int(self._fourier_shared_memory),
-                _pointer(shell_pairs),
-                _pointer(image_pairs),
-                _pointer(shell_offsets),
-                ctypes.c_int(int(self.fourier.permutation_symmetry)),
-            )
-            if error != 0:
-                raise RuntimeError("PBC_ft_aopair_ej_ip1 failed")
+            for source_id in range(len(densities)):
+                error = ft_ao.libpbc.PBC_ft_aopair_ej_ip1(
+                    _pointer(orbital[source_id]),
+                    _pointer(bvk_density[source_id]),
+                    _pointer(potential),
+                    _pointer(gv_transposed),
+                    ctypes.byref(environments),
+                    ctypes.c_int(len(shell_offsets) - 1),
+                    ctypes.c_int(g1 - g0),
+                    ctypes.c_int(self._fourier_shared_memory),
+                    _pointer(shell_pairs),
+                    _pointer(image_pairs),
+                    _pointer(shell_offsets),
+                    ctypes.c_int(int(self.fourier.permutation_symmetry)),
+                )
+                if error != 0:
+                    raise RuntimeError("PBC_ft_aopair_ej_ip1 failed")
 
         if not self.fourier.permutation_symmetry:
             orbital *= 0.5
@@ -297,12 +391,22 @@ class NativeGDFLocalPart1Derivative:
         return cp.asarray(bvk_density.real, order="C")
 
     def _fourier_block_size(self) -> int:
-        free_memory = get_avail_mem(exclude_memory_pool=True) * 0.6
+        free_memory = (
+            get_avail_mem(exclude_memory_pool=True)
+            * self.reciprocal_memory_fraction
+        )
         nao = int(self.fourier.cell.nao)
         values_per_grid = max(1, self.nkpts * nao * nao)
         size = int(free_memory / (values_per_grid * 16 * 2))
-        size = max(32, size // 32 * 32)
-        return min(size, len(self.gv), 16384)
+        alignment = DEFAULT_RECIPROCAL_BLOCK_ALIGNMENT
+        size = max(1, size)
+        if size >= alignment:
+            size = max(alignment, size // alignment * alignment)
+        return min(
+            size,
+            len(self.gv),
+            self.reciprocal_max_grid_block_size,
+        )
 
     def _build_g0_correction(self):
         if not (

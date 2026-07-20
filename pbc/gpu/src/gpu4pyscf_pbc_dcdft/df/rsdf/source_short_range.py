@@ -21,6 +21,11 @@ from gpu4pyscf.pbc.df.int3c2e import (
 )
 from pyscf import lib
 
+from .packed_gamma import (
+    SortedPackedGammaSources,
+    packed_indices_for_addresses,
+)
+
 
 def contract_gamma(optimizer, source, pair_addresses):
     """Contract one real Gamma source in the optimizer's sorted basis."""
@@ -54,6 +59,53 @@ def contract_gamma_batch(optimizer, sources, pair_addresses):
             axis=1,
         )
         for source_id in range(len(sources)):
+            context.run_kernel(
+                batch_id,
+                compressed[source_id],
+                ao_derivative[source_id],
+                auxiliary_derivative[source_id],
+            )
+    return (ao_derivative + auxiliary_derivative) * 2.0
+
+
+def contract_gamma_packed_batch(
+    optimizer,
+    sources,
+    pair_addresses,
+    *,
+    auxiliary_shell_limit=None,
+    diagnostics=None,
+):
+    """Contract packed Gamma sources without dense AO/source reconstruction."""
+
+    if not isinstance(sources, SortedPackedGammaSources):
+        raise TypeError("sources must be SortedPackedGammaSources")
+    values = cp.asarray(sources.values)
+    if values.ndim != 3:
+        raise ValueError(
+            "packed Gamma sources must have shape (nsource,npair,naux), "
+            f"got {values.shape}"
+        )
+    context = _KernelContext.build(
+        optimizer,
+        bvk_ncells=1,
+        auxiliary_shell_limit=auxiliary_shell_limit,
+    )
+    if diagnostics is not None:
+        diagnostics.update(context.batch_metadata())
+    ao_derivative, auxiliary_derivative = context.output_arrays(len(values))
+    source_indices = packed_indices_for_addresses(
+        pair_addresses,
+        sources.nao,
+    )
+    for batch_id in range(context.batch_count):
+        start, stop = context.auxiliary_ao_range(batch_id)
+        compressed = cp.take(
+            values[..., start:stop],
+            source_indices,
+            axis=1,
+        )
+        for source_id in range(len(values)):
             context.run_kernel(
                 batch_id,
                 compressed[source_id],
@@ -187,13 +239,29 @@ class _KernelContext:
         self.__dict__.update(values)
 
     @classmethod
-    def build(cls, optimizer, *, bvk_ncells):
+    def build(
+        cls,
+        optimizer,
+        *,
+        bvk_ncells,
+        auxiliary_shell_limit=None,
+    ):
         cell = optimizer.cell
         auxcell = optimizer.auxcell
-        auxiliary_limit = max(
+        maximum_auxiliary_limit = max(
             1,
             min(int(auxcell.nbas), POOL_SIZE // int(bvk_ncells)),
         )
+        auxiliary_limit = (
+            maximum_auxiliary_limit
+            if auxiliary_shell_limit is None
+            else int(auxiliary_shell_limit)
+        )
+        if not 1 <= auxiliary_limit <= maximum_auxiliary_limit:
+            raise ValueError(
+                "auxiliary_shell_limit must be between 1 and "
+                f"{maximum_auxiliary_limit}, got {auxiliary_shell_limit}"
+            )
         shell_pair_limit = max(
             1,
             POOL_SIZE // (auxiliary_limit * int(bvk_ncells)),
@@ -260,6 +328,19 @@ class _KernelContext:
             diffuse_coefficients=cp.asarray(optimizer.diffuse_coefs),
             log_cutoff=math.log(optimizer.cutoff),
         )
+
+    def batch_metadata(self):
+        return {
+            "shell_pair_batch_count": int(len(self.shell_pair_offsets) - 1),
+            "auxiliary_batch_count": int(self.batch_count),
+            "shell_pair_counts": [
+                int(value)
+                for value in np.diff(cp.asnumpy(self.shell_pair_offsets))
+            ],
+            "auxiliary_shell_counts": [
+                int(value) for value in np.diff(self.auxiliary_offsets)
+            ],
+        }
 
     def output_arrays(self, source_count=1):
         ao = cp.zeros((int(source_count), self.cell.natm, 3))

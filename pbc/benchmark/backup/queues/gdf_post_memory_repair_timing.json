@@ -1,7 +1,7 @@
 {
-  "output_root": "results/gdf_post_memory_repair_timing_2026-07-16",
+  "output_root": "../results/gdf_post_memory_repair_timing_2026-07-16",
   "defaults": {
-    "atom_file": "structures/water8.xyz",
+    "atom_file": "../../structures/water8.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [10.0, 0.0, 0.0],
@@ -82,7 +82,7 @@
       "name": "water20_limited_no_fd",
       "device": "gpu",
       "df_backend": "gdf",
-      "atom_file": "structures/water20.xyz"
+      "atom_file": "../../structures/water20.xyz"
     }
   ]
 }

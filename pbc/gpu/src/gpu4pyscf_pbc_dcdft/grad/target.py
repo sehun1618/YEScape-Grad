@@ -223,6 +223,65 @@ def target_xc_atom_gradient(context):
     )
 
 
+def release_completed_target_multigrid(context):
+    """Release multigrid task caches after the target derivative is complete.
+
+    The fixed-density energy workspace keeps ``MultiGridNumInt`` tasks so the
+    analytic gradient can reuse them.  Once ``get_veff_ip1`` has returned its
+    small atom-by-Cartesian result, those grid and Gaussian-pair caches are no
+    longer needed by the remaining GDF/RSDF response.  Dropping them here
+    prevents two individually large workspaces from overlapping in memory.
+    """
+
+    workspace = context.target_evaluation
+    if (
+        workspace is None
+        or workspace.target_integrator == UNIFORM
+        or workspace.target_numint is None
+    ):
+        return None
+
+    cp.cuda.Stream.null.synchronize()
+    free_before, total_bytes = cp.cuda.Device().mem_info
+    pool = cp.get_default_memory_pool()
+    pool_used_before = int(pool.used_bytes())
+    pool_reserved_before = int(pool.total_bytes())
+
+    target_numint = workspace.target_numint
+    task_count = len(getattr(target_numint, "tasks", ()) or ())
+    target_numint.reset()
+
+    # CuPy retains unused device blocks by default.  At this ownership
+    # boundary retaining them only raises the following RSDF response peak.
+    cp.cuda.Stream.null.synchronize()
+    pool.free_all_blocks()
+    pinned_pool = cp.get_default_pinned_memory_pool()
+    if hasattr(pinned_pool, "free_all_blocks"):
+        pinned_pool.free_all_blocks()
+    try:
+        cp.fft.config.get_plan_cache().clear()
+    except (AttributeError, RuntimeError):
+        # Some CuPy builds do not expose a configurable FFT plan cache.
+        pass
+    cp.cuda.Stream.null.synchronize()
+
+    free_after, _ = cp.cuda.Device().mem_info
+    metadata = {
+        "target_multigrid_cache_released_after_gradient": True,
+        "released_multigrid_task_count": int(task_count),
+        "release_total_device_bytes": int(total_bytes),
+        "release_free_device_bytes_before": int(free_before),
+        "release_free_device_bytes_after": int(free_after),
+        "release_free_device_bytes_delta": int(free_after - free_before),
+        "release_pool_used_bytes_before": pool_used_before,
+        "release_pool_used_bytes_after": int(pool.used_bytes()),
+        "release_pool_reserved_bytes_before": pool_reserved_before,
+        "release_pool_reserved_bytes_after": int(pool.total_bytes()),
+    }
+    workspace.ownership.update(metadata)
+    return metadata
+
+
 def contract_coulomb_full_derivative(context, coulomb_derivative):
     """Contract ``1/2 Tr[D dJ]`` from the full matrix derivative."""
 

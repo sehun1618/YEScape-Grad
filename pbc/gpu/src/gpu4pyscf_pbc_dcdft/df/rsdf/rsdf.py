@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import cupy as cp
 import numpy as np
 from pyscf_pbc_dcdft import df as cpu_df
 from pyscf_pbc_dcdft.df.rsdf.parameters import parameters_from_provider
@@ -42,12 +43,13 @@ class RSDF(GDF):
     ``central_setup='exact_gpu_source'`` resolves PySCF's independent source
     and metric parameters without building host CDERI, generates the large
     three-center source through GPU4PySCF, and keeps only the small screened
-    two-center metric primitive on the host.  Both modes expose identical
-    canonical CuPy factors to SCF, target DFA, AX/Z-vector, and gradients.
+    two-center metric primitive on the host.  The exact GPU-source mode keeps
+    compressed factors for SCF, target DFA, and AX/Z-vector J/K contractions;
+    canonical CuPy blocks are expanded lazily for analytic derivatives only.
     """
 
     backend_name = "rsdf"
-    _keys = GDF._keys | {"central_setup"}
+    _keys = GDF._keys | {"central_setup", "compressed_device_cache"}
 
     def __init__(
         self,
@@ -56,6 +58,7 @@ class RSDF(GDF):
         *,
         auxbasis=None,
         central_setup="reference",
+        compressed_device_cache="host",
     ):
         # RSDF owns an independent CPU-identical source/metric contract.  Do
         # not inherit GDF's native central-builder default implicitly.
@@ -66,8 +69,12 @@ class RSDF(GDF):
             setup_mode="reference",
         )
         self.central_setup = _validate_central_setup(central_setup)
+        self.compressed_device_cache = _validate_compressed_device_cache(
+            compressed_device_cache
+        )
         self._dc_central_build_metadata = None
         self._dc_cderi_eviction_metadata = None
+        self._dc_exact_central = None
         template = cpu_df.RSDF(
             cell, kpts=np.asarray(self.kpts), auxbasis=auxbasis
         )
@@ -79,7 +86,41 @@ class RSDF(GDF):
         super().reset(cell)
         self._dc_central_build_metadata = None
         self._dc_cderi_eviction_metadata = None
+        self._dc_exact_central = None
         return self
+
+    @property
+    def uses_native_jk(self):
+        """Use upstream compressed J/K for exact GPU-source central factors."""
+
+        return self.central_setup == "exact_gpu_source"
+
+    @property
+    def central_cderi_blocks(self):
+        """Materialize canonical pair blocks only for analytic derivatives."""
+
+        if self.central_setup != "exact_gpu_source":
+            self._ensure_built()
+            return self._dc_cderi_blocks
+        current_signature = make_gdf_build_signature(self)
+        if (
+            self._dc_build_signature is not None
+            and self._dc_build_signature != current_signature
+        ):
+            self._discard_cached_build()
+        if self._dc_cderi_blocks is not None:
+            return self._dc_cderi_blocks
+        self._ensure_built()
+        if self._dc_cderi_blocks is None:
+            self._dc_cderi_blocks = self._dc_exact_central.blocks
+            released = self._dc_exact_central.release_compressed()
+            self._cderi = None
+            self._cderip = None
+            self._cderi_idx = None
+            self._dc_central_build_metadata[
+                "compressed_release_after_canonical_bytes"
+            ] = int(released)
+        return self._dc_cderi_blocks
 
     def build(self, j_only=None, kpts_band=None):
         """Build full exchange-capable factors through the selected route."""
@@ -88,6 +129,7 @@ class RSDF(GDF):
 
         if self.central_setup == "reference":
             result = super().build(j_only=j_only, kpts_band=kpts_band)
+            self._dc_exact_central = None
             self._dc_central_build_metadata = {
                 "builder": "PySCF RSDF host central reference",
                 "source_owner": "PySCF host",
@@ -116,10 +158,16 @@ class RSDF(GDF):
             witness.auxcell,
             points,
             parameters,
+            compressed_device_cache=self.compressed_device_cache,
         )
         self._cpu_witness = witness
-        self._dc_cderi_blocks = central.blocks
-        self._cderi = self._dc_cderi_blocks
+        self._dc_exact_central = central
+        self._dc_cderi_blocks = None
+        self._cderi = central.compressed_blocks
+        self._cderip = central.compressed_negative_blocks
+        self._cderi_idx = tuple(
+            cp.asarray(value, dtype=cp.int32) for value in central.pair_indices
+        )
         self.auxcell = witness.auxcell
         self.nao = int(self.cell.nao_nr())
         self.kmesh = np.asarray(parameters.bvk_kmesh, dtype=int)
@@ -131,19 +179,23 @@ class RSDF(GDF):
     def release_cderi_cache(self, *, reason):
         """Release rebuildable central factors after their final gradient use."""
 
-        blocks = self._dc_cderi_blocks
         released_bytes = 0
-        if blocks is not None:
+        if self._dc_exact_central is not None:
+            released_bytes = self._dc_exact_central.release_canonical()
+        elif self._dc_cderi_blocks is not None:
             released_bytes = sum(
-                int(value.nbytes) for value in blocks.values()
+                int(value.nbytes) for value in self._dc_cderi_blocks.values()
             )
+            # Reference RSDF owns only canonical factors.  Mark the upstream
+            # sentinel empty so the next J/K request rebuilds those factors.
+            self._cderi = None
         self._dc_cderi_blocks = None
-        self._cderi = None
         self._dc_cderi_eviction_metadata = {
             "released": True,
             "reason": str(reason),
             "released_cderi_bytes": int(released_bytes),
-            "rebuild_on_next_jk_request": True,
+            "compressed_jk_factors_retained": self._cderi is not None,
+            "rebuild_on_next_canonical_request": True,
         }
         return dict(self._dc_cderi_eviction_metadata)
 
@@ -205,8 +257,10 @@ class RSDF(GDF):
             "gradient_status": "fused_adjoint_release_gate_passed",
             "target_xc": ["PBE", "SCAN", "R2SCAN"],
             "central_setup": self.central_setup,
+            "compressed_device_cache": self.compressed_device_cache,
             "central_cderi": (
-                "GPU three-center source + exact screened host metric"
+                "compressed GPU source factors + exact screened host metric; "
+                "lazy canonical derivative blocks"
                 if self.central_setup == "exact_gpu_source"
                 else "PySCF RSDF host setup, canonical CuPy storage"
             ),
@@ -225,7 +279,13 @@ class RSDF(GDF):
                 "and fused target-J/Z-bilinear adjoint contraction"
             ),
             "response_mode": "native_source_native_metric_fused_adjoint",
+            "jk_contraction": (
+                "GPU4PySCF compressed CuPy/CUDA"
+                if self.uses_native_jk
+                else "project-local canonical CuPy"
+            ),
             "jk_contraction_metadata": self._dc_jk_contraction_metadata,
+            "jk_profile": self._dc_jk_profile,
             "silent_cpu_fallback": False,
             "host_boundaries": [
                 self._central_host_boundary(),
@@ -250,6 +310,7 @@ class RSDF(GDF):
     def _discard_cached_build(self):
         super()._discard_cached_build()
         self._dc_central_build_metadata = None
+        self._dc_exact_central = None
 
     def _central_host_boundary(self):
         if self.central_setup == "exact_gpu_source":
@@ -274,5 +335,15 @@ def _validate_central_setup(value):
         raise ValueError(
             "RSDF central_setup must be 'reference' or "
             f"'exact_gpu_source', got {value!r}"
+        )
+    return mode
+
+
+def _validate_compressed_device_cache(value):
+    mode = str(value).strip().lower()
+    if mode not in {"auto", "device", "host"}:
+        raise ValueError(
+            "compressed_device_cache must be 'auto', 'device', or 'host', "
+            f"got {value!r}"
         )
     return mode

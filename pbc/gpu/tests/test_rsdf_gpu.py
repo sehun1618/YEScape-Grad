@@ -30,8 +30,10 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import (
     contracted_response as contracted_response_module,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.central_exact import (
+    _compressed_device_cache_plan,
     _source_builder_memory_plan,
 )
+from gpu4pyscf_pbc_dcdft.df.gdf import gdf as gdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import rsdf as rsdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     source_reciprocal as source_reciprocal_module,
@@ -60,6 +62,11 @@ from gpu4pyscf_pbc_dcdft.df.rsdf.metric_adjoint import (
 from gpu4pyscf_pbc_dcdft.df.rsdf.metric_native import (
     build_metric_contraction_context,
 )
+from gpu4pyscf_pbc_dcdft.df.rsdf.packed_gamma import (
+    pack_gamma_cderi_adjoint,
+    transform_gamma_sources_to_sorted_packed,
+    unpack_lower_triangle,
+)
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_native import (
     build_source_optimizer,
     contract_gamma_reciprocal_source,
@@ -78,6 +85,7 @@ from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
     contract_restricted_hf_bilinear_energy_derivative,
     gdf_jk_derivative,
 )
+from gpu4pyscf_pbc_dcdft.grad import gdf as gdf_gradient_module
 
 
 def _cell():
@@ -141,6 +149,91 @@ def _method(cell, kmesh, *, device, central_setup=None):
 
 
 class RSDFGPUParityTest(unittest.TestCase):
+    def test_gamma_packed_source_sorted_transform_matches_dense(self):
+        method = _method(_cell(), (1, 1, 1), device="gpu")
+        provider = method.with_df
+        witness = provider.cpu_witness
+        parameters = parameters_from_provider(witness)
+        optimizer = build_source_optimizer(
+            provider.cell,
+            witness.auxcell,
+            parameters,
+        )
+        rng = np.random.default_rng(29)
+        nao = int(provider.cell.nao_nr())
+        naux = int(witness.auxcell.nao_nr())
+        raw = rng.normal(size=(naux, nao, nao))
+        adjoint = cp.asarray(raw + raw.transpose(0, 2, 1))
+        source_order = adjoint.reshape(naux, -1).T
+        expected = source_native_module._sorted_source(
+            optimizer,
+            source_order,
+        )
+        packed = pack_gamma_cderi_adjoint(adjoint)
+        transformed = transform_gamma_sources_to_sorted_packed(
+            optimizer,
+            (packed,),
+            auxiliary_block_size=1,
+        )
+        actual = unpack_lower_triangle(
+            transformed.values[0],
+            transformed.nao,
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-10,
+            rtol=1.0e-10,
+        )
+        pair_addresses = optimizer.pair_and_diag_indices(
+            cart=True,
+            original_ao_order=False,
+        )[0]
+        dense_short = source_native_module.source_short_range.contract_gamma_batch(
+            optimizer,
+            expected[None],
+            pair_addresses,
+        )
+        packed_short = (
+            source_native_module.source_short_range.contract_gamma_packed_batch(
+                optimizer,
+                transformed,
+                pair_addresses,
+            )
+        )
+        dense_reciprocal = (
+            source_native_module.source_reciprocal.contract_gamma_batch(
+                optimizer,
+                expected[None],
+            )
+        )
+        packed_reciprocal = (
+            source_native_module.source_reciprocal.contract_gamma_packed_batch(
+                optimizer,
+                transformed,
+            )
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(packed_short),
+            cp.asnumpy(dense_short),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(packed_reciprocal),
+            cp.asnumpy(dense_reciprocal),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        self.assertEqual(
+            packed.values.shape[0],
+            nao * (nao + 1) // 2,
+        )
+        self.assertEqual(
+            packed.nbytes,
+            source_order.nbytes * (nao + 1) // (2 * nao),
+        )
+
     def test_fused_gamma_adjoint_matches_resolved_and_stays_real(self):
         rng = np.random.default_rng(31)
         naux, nao = 3, 4
@@ -427,8 +520,43 @@ class RSDFGPUParityTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(releases, ["native_gamma_source_sorting"])
+        self.assertEqual(
+            releases, ["native_gamma_source_adjoint_complete"]
+        )
         self.assertTrue(metadata["released"])
+
+    def test_gamma_source_releases_cderi_even_when_sorting_fits(self):
+        releases = []
+
+        def release(*, reason):
+            releases.append(reason)
+            return {"released": True, "reason": reason}
+
+        provider = SimpleNamespace(release_cderi_cache=release)
+        optimizer = SimpleNamespace(
+            cell=SimpleNamespace(nao=4),
+            auxcell=SimpleNamespace(nao=5),
+        )
+        groups = ({(0, 0): cp.zeros((9, 3), dtype=cp.float64)},)
+        with mock.patch.object(
+            contracted_response_module.cp.cuda.runtime,
+            "memGetInfo",
+            return_value=(10**9, 2 * 10**9),
+        ):
+            metadata = (
+                contracted_response_module._release_gamma_central_if_needed(
+                    provider,
+                    optimizer,
+                    np.zeros((1, 3)),
+                    groups,
+                    minimum_reserve_bytes=0,
+                )
+            )
+
+        self.assertTrue(metadata["source_sorting_would_fit_without_release"])
+        self.assertEqual(
+            releases, ["native_gamma_source_adjoint_complete"]
+        )
 
     def test_single_gamma_source_consumes_owner_without_stack_copy(self):
         class IdentityTransform:
@@ -513,7 +641,33 @@ class RSDFGPUParityTest(unittest.TestCase):
             reported,
         )
 
-    def test_exact_gpu_source_provider_avoids_host_cderi(self):
+    def test_compressed_device_cache_plan_is_bounded_and_gamma_only(self):
+        enabled = _compressed_device_cache_plan(
+            128 * 1024**2,
+            available_bytes=32 * 1024**3,
+            policy="auto",
+            is_gamma=True,
+        )
+        oversized = _compressed_device_cache_plan(
+            768 * 1024**2,
+            available_bytes=32 * 1024**3,
+            policy="auto",
+            is_gamma=True,
+        )
+        sampled_k = _compressed_device_cache_plan(
+            128 * 1024**2,
+            available_bytes=32 * 1024**3,
+            policy="auto",
+            is_gamma=False,
+        )
+
+        self.assertTrue(enabled["enabled"])
+        self.assertFalse(oversized["enabled"])
+        self.assertEqual(oversized["reason"], "over_auto_budget")
+        self.assertFalse(sampled_k["enabled"])
+        self.assertEqual(sampled_k["reason"], "sampled_k_not_implemented")
+
+    def test_exact_gpu_source_provider_avoids_canonical_host_cderi(self):
         cell = _cell()
         kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
         provider = gpu_df.RSDF(
@@ -527,9 +681,192 @@ class RSDFGPUParityTest(unittest.TestCase):
 
         self.assertIsNone(provider.cpu_witness._cderi)
         self.assertEqual(provider.central_setup, "exact_gpu_source")
+        self.assertTrue(provider.uses_native_jk)
+        self.assertIsNone(provider._dc_cderi_blocks)
+        self.assertIs(
+            provider._cderi,
+            provider._dc_exact_central.compressed_blocks,
+        )
+        self.assertIsNotNone(provider._cderi_idx)
+        self.assertTrue(
+            all(
+                not isinstance(value, cp.ndarray)
+                for value in provider._cderi.values()
+            )
+        )
+        self.assertFalse(
+            provider._dc_central_build_metadata["canonical_materialized"]
+        )
+        self.assertEqual(
+            provider._dc_central_build_metadata["compressed_storage_location"],
+            "mapped_host",
+        )
+        self.assertEqual(
+            provider._dc_central_build_metadata["compressed_device_cache"][
+                "reason"
+            ],
+            "policy_host",
+        )
         self.assertEqual(
             provider.capability()["central_build_metadata"]["source_owner"],
             "GPU4PySCF CUDA three-center builder",
+        )
+
+    def test_exact_gpu_source_dispatches_jk_to_native_compressed_route(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            central_setup="exact_gpu_source",
+        )
+        provider.build(j_only=False)
+        expected = (object(), object())
+
+        with mock.patch.object(
+            gdf_provider_module.GPU4PySCFGDF,
+            "get_jk",
+            return_value=expected,
+        ) as native_get_jk:
+            actual = provider.get_jk(
+                cp.eye(cell.nao_nr()),
+                with_j=True,
+                with_k=True,
+            )
+
+        self.assertIs(actual, expected)
+        native_get_jk.assert_called_once()
+        self.assertIsNone(provider._dc_cderi_blocks)
+
+    def test_exact_gpu_source_splits_complex_gamma_jk_into_real_calls(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            central_setup="exact_gpu_source",
+        )
+        provider.build(j_only=False)
+        shape = (cell.nao_nr(), cell.nao_nr())
+        real_j = cp.full(shape, 1.0)
+        real_k = cp.full(shape, 2.0)
+        imag_j = cp.full(shape, 3.0)
+        imag_k = cp.full(shape, 4.0)
+
+        with mock.patch.object(
+            gdf_provider_module.GPU4PySCFGDF,
+            "get_jk",
+            side_effect=((real_j, real_k), (imag_j, imag_k)),
+        ) as native_get_jk:
+            actual_j, actual_k = provider.get_jk(
+                cp.eye(cell.nao_nr(), dtype=cp.complex128) * (1.0 + 2.0j),
+                with_j=True,
+                with_k=True,
+            )
+
+        self.assertEqual(native_get_jk.call_count, 2)
+        np.testing.assert_allclose(
+            cp.asnumpy(actual_j),
+            cp.asnumpy(real_j + 1j * imag_j),
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(actual_k),
+            cp.asnumpy(real_k + 1j * imag_k),
+        )
+
+    def test_source_hf_profile_resolves_jk_and_scf_phases(self):
+        method = _method(
+            _cell(),
+            (1, 1, 1),
+            device="gpu",
+            central_setup="exact_gpu_source",
+        )
+
+        profile = method.metadata()["source_hf_profile"]
+        jk_profile = profile["jk"]
+        self.assertGreater(jk_profile["logical_call_count"], 0)
+        self.assertGreater(jk_profile["device_total_s"], 0.0)
+        self.assertIsNotNone(jk_profile["first_call_device_s"])
+        self.assertGreaterEqual(jk_profile["repeated_call_device_s"], 0.0)
+        self.assertGreater(profile["phases"]["diagonalization"]["call_count"], 0)
+        self.assertGreater(profile["phases"]["density_update"]["call_count"], 0)
+        self.assertGreaterEqual(profile["unattributed_scf_wall_s"], 0.0)
+        self.assertIs(
+            method.with_df.capability()["jk_profile"],
+            jk_profile,
+        )
+
+    def test_exact_gpu_source_canonical_cache_is_lazy_and_rebuildable(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            central_setup="exact_gpu_source",
+        )
+        provider.build(j_only=False)
+        first = cp.asnumpy(provider.central_cderi_blocks[(0, 0)]).copy()
+        self.assertTrue(
+            provider._dc_central_build_metadata["canonical_materialized"]
+        )
+        self.assertIsNone(provider._cderi)
+        self.assertFalse(
+            provider._dc_central_build_metadata["compressed_resident"]
+        )
+        eviction = provider.release_cderi_cache(reason="unit-test")
+
+        self.assertIsNone(provider._cderi)
+        self.assertIsNone(provider._dc_cderi_blocks)
+        self.assertFalse(eviction["compressed_jk_factors_retained"])
+        self.assertFalse(
+            provider._dc_central_build_metadata["canonical_materialized"]
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(provider.central_cderi_blocks[(0, 0)]),
+            first,
+            atol=1.0e-11,
+            rtol=0.0,
+        )
+
+    def test_reference_cderi_release_requires_rebuild_for_next_jk(self):
+        cell = _cell()
+        kpts = cell.make_kpts((1, 1, 1), wrap_around=True)
+        provider = gpu_df.RSDF(
+            cell,
+            kpts=kpts,
+            auxbasis="gth-szv",
+            central_setup="reference",
+        )
+        provider.build(j_only=False)
+
+        provider.release_cderi_cache(reason="unit-test")
+
+        self.assertIsNone(provider._cderi)
+        self.assertIsNone(provider._dc_cderi_blocks)
+
+    def test_completed_response_releases_provider_cderi(self):
+        release = mock.Mock(
+            return_value={"released": True, "released_cderi_bytes": 17}
+        )
+        provider = SimpleNamespace(release_cderi_cache=release)
+
+        metadata = gdf_gradient_module._release_completed_rsdf_response(
+            provider
+        )
+
+        release.assert_called_once_with(
+            reason="analytic_gradient_response_complete"
+        )
+        self.assertEqual(
+            metadata["provider_cderi_release"]["released_cderi_bytes"],
+            17,
+        )
+        self.assertGreaterEqual(
+            metadata["pool_reserved_bytes_before"],
+            metadata["pool_reserved_bytes_after"],
         )
 
     def test_exact_central_gamma_matches_cpu_storage(self):
@@ -740,8 +1077,8 @@ class RSDFGPUParityTest(unittest.TestCase):
                 naux=384,
             )
 
-        self.assertLessEqual(plan.initial_block_size, 4096)
-        self.assertEqual(plan.memory_fraction, 0.25)
+        self.assertLessEqual(plan.initial_block_size, 512)
+        self.assertEqual(plan.memory_fraction, 0.15)
 
     def test_kpoint_source_contractions_match_cpu_primitives(self):
         method = _method(_cell(), (2, 1, 1), device="gpu")
@@ -1619,6 +1956,7 @@ class RSDFGPUParityTest(unittest.TestCase):
         )
         cpu_gradient = cpu.nuc_grad_method().kernel()
         gpu_gradient_object = gpu.nuc_grad_method()
+        self.assertEqual(gpu_gradient_object.rsdf_derivative_omega_scale, 1.0)
         gpu_gradient = gpu_gradient_object.kernel()
         self.assertLess(abs(cpu.e_tot - gpu.e_tot), 1.0e-8)
         self.assertLess(np.max(np.abs(cpu_gradient - gpu_gradient)), 1.0e-7)

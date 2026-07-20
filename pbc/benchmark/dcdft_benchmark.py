@@ -482,6 +482,9 @@ def build_method(config: Mapping[str, Any], cell, device: str, backend: str):
             rsdf_kwargs["central_setup"] = config.get(
                 "rsdf_central_setup", "reference"
             )
+            rsdf_kwargs["compressed_device_cache"] = config.get(
+                "rsdf_compressed_device_cache", "host"
+            )
         method.with_df = df.RSDF(cell, **rsdf_kwargs)
     method.conv_tol = float(config.get("conv_tol", 1.0e-10))
     conv_tol_grad = config.get("conv_tol_grad", 1.0e-8)
@@ -1018,6 +1021,8 @@ def _configure_gradient(config: Mapping[str, Any], gradient_object: Any) -> None
         "z_nuclear_batch_memory_fraction": float,
         "z_nuclear_batch_max_components": int,
         "gdf_bilinear_mode": str,
+        "gdf_derivative_omega_scale": float,
+        "rsdf_derivative_omega_scale": float,
     }
     for name, converter in attributes.items():
         if name in config and hasattr(gradient_object, name):
@@ -1340,6 +1345,11 @@ def run_benchmark(
                 if device == "gpu" and backend == "rsdf"
                 else None
             ),
+            "rsdf_compressed_device_cache": (
+                config.get("rsdf_compressed_device_cache", "host")
+                if device == "gpu" and backend == "rsdf"
+                else None
+            ),
             "target_integrator": str(
                 config.get("target_integrator", UNIFORM)
             ).lower(),
@@ -1383,6 +1393,16 @@ def run_benchmark(
             "gdf_bilinear_mode": getattr(
                 gradient_object,
                 "gdf_bilinear_mode",
+                None,
+            ),
+            "gdf_derivative_omega_scale": getattr(
+                gradient_object,
+                "gdf_derivative_omega_scale",
+                None,
+            ),
+            "rsdf_derivative_omega_scale": getattr(
+                gradient_object,
+                "rsdf_derivative_omega_scale",
                 None,
             ),
         },

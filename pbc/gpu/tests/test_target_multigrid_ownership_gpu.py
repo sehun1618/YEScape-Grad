@@ -9,7 +9,10 @@ import numpy as np
 from gpu4pyscf.lib.cupy_helper import tag_array
 
 from gpu4pyscf_pbc_dcdft.dft.target_numint import evaluate_target_veff
-from gpu4pyscf_pbc_dcdft.grad.target import target_xc_atom_gradient
+from gpu4pyscf_pbc_dcdft.grad.target import (
+    release_completed_target_multigrid,
+    target_xc_atom_gradient,
+)
 
 
 class _FakeMultiGridNumInt:
@@ -32,6 +35,18 @@ class _SelectedDF:
     def get_jk(self, density, **_kwargs):
         self.calls += 1
         return cp.ones_like(cp.asarray(density)), None
+
+
+class _ResettableMultiGridNumInt:
+    def __init__(self):
+        self.tasks = [object(), object(), object()]
+        self.sorted_gaussian_pairs = object()
+        self.reset_calls = 0
+
+    def reset(self):
+        self.reset_calls += 1
+        self.tasks = None
+        self.sorted_gaussian_pairs = None
 
 
 class TargetMultigridOwnershipTest(unittest.TestCase):
@@ -110,6 +125,26 @@ class TargetMultigridOwnershipTest(unittest.TestCase):
             ]
         )
         self.assertLess(float(cp.max(cp.abs(value - 2.0)).get()), 1.0e-14)
+
+    def test_completed_multigrid_workspace_is_released(self):
+        numerical_integrator = _ResettableMultiGridNumInt()
+        workspace = SimpleNamespace(
+            target_integrator="multigrid_xc",
+            target_numint=numerical_integrator,
+            ownership={},
+        )
+        context = SimpleNamespace(target_evaluation=workspace)
+
+        metadata = release_completed_target_multigrid(context)
+
+        self.assertEqual(numerical_integrator.reset_calls, 1)
+        self.assertIsNone(numerical_integrator.tasks)
+        self.assertIsNone(numerical_integrator.sorted_gaussian_pairs)
+        self.assertTrue(
+            metadata["target_multigrid_cache_released_after_gradient"]
+        )
+        self.assertEqual(metadata["released_multigrid_task_count"], 3)
+        self.assertEqual(workspace.ownership, metadata)
 
 
 if __name__ == "__main__":

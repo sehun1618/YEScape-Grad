@@ -26,13 +26,22 @@ _DERIVATIVE_BATCH_PATCH_LOCK = RLock()
 _GAMMA_DERIVATIVE_OMEGA_SCALE = 1.5
 
 
-def _build_gamma_derivative_optimizer(provider):
+def _build_gamma_derivative_optimizer(provider, *, omega_scale=None):
     """Build the exact SR/LR split tuned for Gamma derivative throughput."""
 
     from gpu4pyscf.pbc.df.int3c2e import SRInt3c2eOpt
     from gpu4pyscf.pbc.df.rsdf_builder import _guess_omega
 
-    omega = _GAMMA_DERIVATIVE_OMEGA_SCALE * float(
+    scale = (
+        _GAMMA_DERIVATIVE_OMEGA_SCALE
+        if omega_scale is None
+        else float(omega_scale)
+    )
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(
+            f"Gamma derivative omega scale must be positive, got {scale}"
+        )
+    omega = scale * float(
         _guess_omega(provider.cell)
     )
     return SRInt3c2eOpt(
@@ -186,6 +195,7 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
     *,
     exxdiv="ewald",
     memory_diagnostics=None,
+    derivative_omega_scale=None,
 ):
     """Evaluate the production Gamma bilinear derivative in one traversal.
 
@@ -207,7 +217,10 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
 
     from .signed_gamma_native import gamma_signed_energy_derivative
 
-    optimizer = _build_gamma_derivative_optimizer(provider)
+    optimizer = _build_gamma_derivative_optimizer(
+        provider,
+        omega_scale=derivative_omega_scale,
+    )
     with _bounded_sr_derivative_batches(provider, None):
         value = gamma_signed_energy_derivative(
             optimizer,
@@ -218,10 +231,34 @@ def restricted_hf_bilinear_derivative_one_pass_gamma(
             memory_diagnostics=memory_diagnostics,
         )
     if memory_diagnostics is not None:
-        memory_diagnostics["derivative_omega_scale"] = (
+        memory_diagnostics["derivative_omega_scale"] = float(
             _GAMMA_DERIVATIVE_OMEGA_SCALE
+            if derivative_omega_scale is None
+            else derivative_omega_scale
         )
     return cp.asarray(value, dtype=cp.float64)
+
+
+def restricted_hf_bilinear_derivative_reverse_gamma(
+    provider,
+    reference_density,
+    response_density,
+    *,
+    exxdiv="ewald",
+    memory_diagnostics=None,
+    derivative_omega_scale=None,
+):
+    """Evaluate the Gamma bilinear derivative through primitive adjoints."""
+
+    return _reverse_gamma_derivative(
+        provider,
+        reference_density,
+        response_density,
+        include_target_j=False,
+        exxdiv=exxdiv,
+        memory_diagnostics=memory_diagnostics,
+        derivative_omega_scale=derivative_omega_scale,
+    )
 
 
 def restricted_hf_bilinear_derivative_one_pass(
@@ -291,6 +328,7 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
     *,
     exxdiv="ewald",
     memory_diagnostics=None,
+    derivative_omega_scale=None,
 ):
     """Fuse target-J and Z-bilinear GDF derivatives into one traversal.
 
@@ -314,7 +352,10 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
             gamma_target_j_plus_signed_energy_derivative,
         )
 
-        optimizer = _build_gamma_derivative_optimizer(provider)
+        optimizer = _build_gamma_derivative_optimizer(
+            provider,
+            omega_scale=derivative_omega_scale,
+        )
         with _bounded_sr_derivative_batches(provider, None):
             value = gamma_target_j_plus_signed_energy_derivative(
                 optimizer,
@@ -325,8 +366,10 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
                 memory_diagnostics=memory_diagnostics,
             )
         if memory_diagnostics is not None:
-            memory_diagnostics["derivative_omega_scale"] = (
+            memory_diagnostics["derivative_omega_scale"] = float(
                 _GAMMA_DERIVATIVE_OMEGA_SCALE
+                if derivative_omega_scale is None
+                else derivative_omega_scale
             )
         return cp.asarray(value, dtype=cp.float64)
 
@@ -356,6 +399,74 @@ def target_j_plus_restricted_hf_bilinear_derivative_one_pass(
             points,
             exxdiv=exxdiv,
             omega=0.0,
+        )
+    return cp.asarray(value, dtype=cp.float64)
+
+
+def target_j_plus_restricted_hf_bilinear_derivative_reverse_gamma(
+    provider,
+    reference_density,
+    response_density,
+    *,
+    exxdiv="ewald",
+    memory_diagnostics=None,
+    derivative_omega_scale=None,
+):
+    """Fuse target J and Gamma Z response through primitive adjoints."""
+
+    return _reverse_gamma_derivative(
+        provider,
+        reference_density,
+        response_density,
+        include_target_j=True,
+        exxdiv=exxdiv,
+        memory_diagnostics=memory_diagnostics,
+        derivative_omega_scale=derivative_omega_scale,
+    )
+
+
+def _reverse_gamma_derivative(
+    provider,
+    reference_density,
+    response_density,
+    *,
+    include_target_j,
+    exxdiv,
+    memory_diagnostics,
+    derivative_omega_scale,
+):
+    if not getattr(provider, "uses_native_integrals", False):
+        raise RuntimeError(
+            "reverse-adjoint Gamma GDF requires setup_mode='native'"
+        )
+    provider._ensure_built()
+    points = np.asarray(provider.kpts, dtype=float).reshape(-1, 3)
+    if len(points) != 1 or float(np.max(np.abs(points))) > 1.0e-12:
+        raise NotImplementedError(
+            "reverse-adjoint GDF currently supports Gamma only"
+        )
+
+    from .reverse_gamma_native import gamma_reverse_adjoint_energy_derivative
+
+    optimizer = _build_gamma_derivative_optimizer(
+        provider,
+        omega_scale=derivative_omega_scale,
+    )
+    with _bounded_sr_derivative_batches(provider, None):
+        value = gamma_reverse_adjoint_energy_derivative(
+            optimizer,
+            reference_density,
+            response_density,
+            include_target_j=include_target_j,
+            exxdiv=exxdiv,
+            omega=0.0,
+            memory_diagnostics=memory_diagnostics,
+        )
+    if memory_diagnostics is not None:
+        memory_diagnostics["derivative_omega_scale"] = float(
+            _GAMMA_DERIVATIVE_OMEGA_SCALE
+            if derivative_omega_scale is None
+            else derivative_omega_scale
         )
     return cp.asarray(value, dtype=cp.float64)
 

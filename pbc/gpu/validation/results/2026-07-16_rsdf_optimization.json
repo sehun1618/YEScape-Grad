@@ -79,7 +79,7 @@
     }
   },
   "source_queues": [
-    "pbc/benchmark/rsdf_r0_baseline.json",
-    "pbc/benchmark/rsdf_r1_release_gate.json"
+    "pbc/benchmark/backup/queues/rsdf_r0_baseline.json",
+    "pbc/benchmark/backup/queues/rsdf_r1_release_gate.json"
   ]
 }

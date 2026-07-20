@@ -4,7 +4,7 @@
 **검토 대상:** `agent/gdf-rsdf-continuation`의 현재 작업 트리
 **검토 관점:** 구조/API, 수치 정확성, GPU 구현, benchmark/validation
 **기준 commit:** `e8116bd6b855b92ef956eb78c77d4524288d4404`
-**검증 artifact:** `benchmark/review_release_readiness_validation.json`
+**검증 artifact:** `benchmark/backup/evidence/review_release_readiness_validation.json`
 
 ## 1. 목적과 적용 범위
 
@@ -76,7 +76,7 @@ artifact의 식별성, 정확도 상태의 의미, software provenance와 public
 custom option 또는 benchmark lifecycle 경계에서 발생한다.
 
 위 suite의 명령, test 수와 시간은
-`benchmark/review_release_readiness_validation.json`에 고정했다. 표의 arbitrary
+`benchmark/backup/evidence/review_release_readiness_validation.json`에 고정했다. 표의 arbitrary
 complex-k FFTDF와 non-time-reversal GDF 수치는 리뷰 당시 ad-hoc probe 결과이며 아직
 독립 release artifact 또는 상시 자동 gate로 승격되지 않았다.
 
@@ -101,8 +101,8 @@ blocks, pseudopotential cache와 bounded GPU PP value route가 실제 Water64 sc
 
 현재 다음 queue는 이름에 `selected_fd_check`가 있지만 실제로는 FD를 실행하지 않는다.
 
-- `benchmark/water64_benchmark_queue.json`
-- `benchmark/water64_rsdf_benchmark_queue.json`
+- `benchmark/backup/queues/water64_benchmark_queue.json`
+- `benchmark/backup/queues/water64_rsdf_benchmark_queue.json`
 
 두 report 모두 다음 상태다.
 
@@ -142,7 +142,7 @@ r2SCAN의 phase-scan amplitude는 PBE보다 약 12배 컸고, 1000 Ha에서는 4
 90% 감소했지만 완전히 사라지지는 않았다. Cutoff가 바뀌면 atom-grid phase도 바뀌므로
 한 geometry의 net sum은 단조 수렴할 필요가 없다. 상세 evidence와 운용 정책은
 `TRANSLATION_SUM_DIAGNOSIS_2026-07-17.md` 및
-`benchmark/translation_sum_diagnosis_water8.json`에 고정했다. 현재 성능 비교는
+`benchmark/backup/evidence/translation_sum_diagnosis_water8.json`에 고정했다. 현재 성능 비교는
 유효하지만 geometry optimization 또는 dynamics에서는 mesh/gradient convergence와
 net-gradient gate가 필요하다.
 

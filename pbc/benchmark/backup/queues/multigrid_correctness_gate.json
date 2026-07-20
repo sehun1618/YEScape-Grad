@@ -1,7 +1,7 @@
 {
-  "output_root": "results/multigrid_correctness_gate",
+  "output_root": "../results/multigrid_correctness_gate",
   "defaults": {
-    "atom_file": "structures/h2.xyz",
+    "atom_file": "../../structures/h2.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [6.0, 0.0, 0.0],

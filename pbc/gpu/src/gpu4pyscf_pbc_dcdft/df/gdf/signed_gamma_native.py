@@ -124,6 +124,7 @@ def gamma_signed_energy_derivative(
     omega=0.0,
     verbose=None,
     memory_diagnostics=None,
+    component_diagnostics=None,
 ):
     """Return ``Q(D+T)-Q(D-T)`` with one native derivative traversal.
 
@@ -149,6 +150,7 @@ def gamma_signed_energy_derivative(
         omega=omega,
         verbose=verbose,
         memory_diagnostics=memory_diagnostics,
+        component_diagnostics=component_diagnostics,
     )
 
 
@@ -161,6 +163,7 @@ def gamma_target_j_plus_signed_energy_derivative(
     omega=0.0,
     verbose=None,
     memory_diagnostics=None,
+    component_diagnostics=None,
 ):
     """Return target-J plus the RHF bilinear derivative in one traversal.
 
@@ -195,6 +198,7 @@ def gamma_target_j_plus_signed_energy_derivative(
         omega=omega,
         verbose=verbose,
         memory_diagnostics=memory_diagnostics,
+        component_diagnostics=component_diagnostics,
     )
 
 
@@ -223,6 +227,7 @@ def _weighted_energy_derivative(
     omega,
     verbose,
     memory_diagnostics,
+    component_diagnostics,
 ):
     """Apply one native derivative traversal to weighted quadratic states."""
 
@@ -288,7 +293,8 @@ def _weighted_energy_derivative(
         state.auxvec = state.j3c_oo.trace(axis1=1, axis2=2)
     timeline.mark("metric_factorization_and_state_solve")
     metric_source = _signed_metric_source(states, naux)
-    result = -int2c2e_opt.energy_ip1_per_atom(metric_source)
+    metric_derivative = -int2c2e_opt.energy_ip1_per_atom(metric_source)
+    result = metric_derivative
     timeline.mark("metric_derivative")
 
     long_range, derivative_execution = _long_range_derivative(
@@ -302,7 +308,7 @@ def _weighted_energy_derivative(
     result += long_range
     timeline.mark("long_range_derivative")
     short_range_device_timing = {}
-    result += _short_range_derivative(
+    short_range = _short_range_derivative(
         int3c2e_opt,
         states,
         pair_addresses,
@@ -312,16 +318,30 @@ def _weighted_energy_derivative(
         naux=naux,
         device_timing=short_range_device_timing,
     )
+    result += short_range
     timeline.mark("short_range_derivative")
-    result += _ewald_derivative(
+    ewald = _ewald_derivative(
         cell,
         states,
         exxdiv=exxdiv,
         omega=omega,
     )
+    result += ewald
     timeline.mark("ewald_derivative")
     log.debug1("completed one-pass Gamma signed GDF derivative")
     host_result = np.asarray(result, dtype=float)
+    if component_diagnostics is not None:
+        component_diagnostics.clear()
+        component_diagnostics.update(
+            {
+                "metric": np.asarray(metric_derivative, dtype=float),
+                "long_range_and_auxiliary_center": np.asarray(
+                    long_range, dtype=float
+                ),
+                "short_range": np.asarray(short_range, dtype=float),
+                "ewald": np.asarray(ewald, dtype=float),
+            }
+        )
     if memory_diagnostics is not None:
         memory_diagnostics.clear()
         memory_diagnostics.update(
@@ -467,6 +487,7 @@ class _ReciprocalContext:
         i_addr,
         j_addr,
         omega,
+        max_block_size=None,
     ):
         cell = int3c2e_opt.cell
         auxcell = int3c2e_opt.auxcell
@@ -504,6 +525,7 @@ class _ReciprocalContext:
             naux,
             nocc_max,
             free_device_bytes=free,
+            max_block_size=max_block_size,
         )
 
         def allocate_block(p0, p1):
@@ -666,6 +688,7 @@ def _long_range_derivative(
     *,
     nao,
     naux,
+    primitive_source=None,
 ):
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
@@ -689,6 +712,29 @@ def _long_range_derivative(
     i_addr, j_addr = divmod(pair_addresses, nao)
 
     def worker(p0, p1):
+        if primitive_source is not None:
+            return _evaluate_long_range_adjoint_block(
+                cell,
+                auxcell,
+                primitive_source,
+                metric_source,
+                vectors,
+                coulomb,
+                evaluator,
+                p0,
+                p1,
+                nao=nao,
+                naux=naux,
+                i_addr=i_addr,
+                j_addr=j_addr,
+                kernel=kernel,
+                aft_envs=aft_envs,
+                shell_offsets=shell_offsets,
+                shared_memory=shared_memory,
+                bas_ij_idx=bas_ij_idx,
+                bas_ij_img_idx=bas_ij_img_idx,
+                permutation_symmetry=ft_opt.permutation_symmetry,
+            )
         return _evaluate_long_range_block(
             cell,
             auxcell,
@@ -740,6 +786,104 @@ def _long_range_derivative(
     else:
         result += auxiliary_grouped
     return result, execution
+
+
+def _evaluate_long_range_adjoint_block(
+    cell,
+    auxcell,
+    primitive_source,
+    metric_source,
+    vectors,
+    coulomb,
+    evaluator,
+    p0,
+    p1,
+    *,
+    nao,
+    naux,
+    i_addr,
+    j_addr,
+    kernel,
+    aft_envs,
+    shell_offsets,
+    shared_memory,
+    bas_ij_idx,
+    bas_ij_img_idx,
+    permutation_symmetry,
+):
+    """Contract one reciprocal block with direct ``dB``/``dM`` adjoints."""
+
+    ngrid = int(p1 - p0)
+    pair_g = evaluator(vectors[p0:p1])
+    pair_g = pair_g.view(np.float64).reshape(nao, nao, ngrid * 2)
+    pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+
+    aux_g = ft_ao.ft_ao(auxcell, vectors[p0:p1]).T
+    aux_weighted_conj = cp.empty_like(aux_g)
+    cp.conj(aux_g, out=aux_weighted_conj)
+    aux_weighted_conj *= coulomb[p0:p1]
+    aux_weighted_real = aux_weighted_conj.view(np.float64)
+
+    derivative_aux_source = cp.empty((naux, ngrid * 2))
+    contract(
+        "rpq,pqG->rG",
+        primitive_source,
+        pair_g,
+        out=derivative_aux_source,
+    )
+    ao_source = cp.empty((nao, nao, ngrid * 2))
+    contract(
+        "rpq,rG->pqG",
+        primitive_source,
+        aux_weighted_real,
+        out=ao_source,
+    )
+    contract(
+        "sr,sG->rG",
+        metric_source,
+        aux_g.view(np.float64),
+        alpha=-1.0,
+        beta=1.0,
+        out=derivative_aux_source,
+    )
+    derivative_aux_complex = derivative_aux_source.view(np.complex128)
+    derivative_aux_complex *= coulomb[p0:p1]
+
+    derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
+    auxiliary_partial = cp.empty((3, naux))
+    for axis in range(3):
+        cp.multiply(
+            aux_g,
+            -1j * vectors[p0:p1, axis],
+            out=derivative_aux_g,
+        )
+        auxiliary_partial[axis] = cp.einsum(
+            "ag,ag->a",
+            derivative_aux_g.view(np.float64),
+            derivative_aux_source,
+        )
+
+    ao_derivative = cp.zeros((cell.natm, 3))
+    vector_transpose = cp.asarray(vectors[p0:p1].T.ravel())
+    error = kernel(
+        ctypes.cast(ao_derivative.data.ptr, ctypes.c_void_p),
+        ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
+        ctypes.cast(vector_transpose.data.ptr, ctypes.c_void_p),
+        ctypes.byref(aft_envs),
+        ctypes.c_int(len(shell_offsets) - 1),
+        ctypes.c_int(ngrid),
+        ctypes.c_int(shared_memory),
+        ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
+        ctypes.c_int(permutation_symmetry),
+    )
+    if error != 0:
+        raise RuntimeError("PBC_ft_aopair_ek_ip1 failed")
+    return _LongRangeBlockResult(
+        ao_derivative=ao_derivative,
+        auxiliary_partial=auxiliary_partial,
+    )
 
 
 @dataclass(frozen=True)
@@ -908,6 +1052,7 @@ def _short_range_derivative(
     nao,
     naux,
     device_timing=None,
+    primitive_source=None,
 ):
     cell = int3c2e_opt.cell
     auxcell = int3c2e_opt.auxcell
@@ -979,27 +1124,30 @@ def _short_range_derivative(
         for k0, k1 in lib.prange(0, naux_batch, block_size):
             width = k1 - k0
             aux1 = aux0 + width
-            source = cp.zeros((nao, nao, width))
-            for state in states:
-                source += state.coulomb_weight * (
-                    state.density[:, :, None]
-                    * state.auxvec[None, None, aux0:aux1]
-                )
-                tmp = cp.empty((state.nocc, nao, width))
-                contract(
-                    "rji,qj->iqr",
-                    state.j3c_oo[aux0:aux1],
-                    state.factor_l,
-                    out=tmp,
-                )
-                contract(
-                    "iqr,pi->pqr",
-                    tmp,
-                    state.factor_r,
-                    alpha=-0.5 * state.exchange_weight,
-                    beta=1.0,
-                    out=source,
-                )
+            if primitive_source is None:
+                source = cp.zeros((nao, nao, width))
+                for state in states:
+                    source += state.coulomb_weight * (
+                        state.density[:, :, None]
+                        * state.auxvec[None, None, aux0:aux1]
+                    )
+                    tmp = cp.empty((state.nocc, nao, width))
+                    contract(
+                        "rji,qj->iqr",
+                        state.j3c_oo[aux0:aux1],
+                        state.factor_l,
+                        out=tmp,
+                    )
+                    contract(
+                        "iqr,pi->pqr",
+                        tmp,
+                        state.factor_r,
+                        alpha=-0.5 * state.exchange_weight,
+                        beta=1.0,
+                        out=source,
+                    )
+            else:
+                source = primitive_source[aux0:aux1].transpose(1, 2, 0)
             cp.take(
                 source.reshape(-1, width),
                 pair_addresses,

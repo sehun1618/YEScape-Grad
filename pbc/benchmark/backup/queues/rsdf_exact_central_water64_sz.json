@@ -1,7 +1,7 @@
 {
-  "output_root": "results/rsdf_r1_water64_sz_2",
+  "output_root": "../results/rsdf_exact_central_water64_sz_2026-07-17",
   "defaults": {
-    "atom_file": "structures/water64.xyz",
+    "atom_file": "../../structures/water64.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [12.4139, 0.0, 0.0],
@@ -15,7 +15,7 @@
       "O": "GTH-SCAN-q6"
     },
     "auxbasis": "SZV-GTH",
-    "ke_cutoff_ha": 400.0,
+    "ke_cutoff_ha": 500.0,
     "precision": 1e-9,
     "kmesh": [1, 1, 1],
     "xc": "r2SCAN",
@@ -35,9 +35,10 @@
   },
   "jobs": [
     {
-      "name": "water64_repeat_01",
+      "name": "water64_exact_gpu_source_central",
       "device": "gpu",
-      "df_backend": "rsdf"
+      "df_backend": "rsdf",
+      "rsdf_central_setup": "exact_gpu_source"
     }
   ]
 }

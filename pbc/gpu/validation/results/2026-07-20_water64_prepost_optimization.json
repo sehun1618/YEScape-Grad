@@ -1,0 +1,40 @@
+{
+  "schema": "pbc_dcdft_water64_prepost_optimization_v1",
+  "date": "2026-07-20",
+  "system": "Water64 SZV-GTH Gamma r2SCAN multigrid-XC mesh 240^3, ke_cutoff 500 Ha",
+  "omega_policy": {
+    "gdf_derivative_omega_scale": 1.0,
+    "rsdf_derivative_omega_scale": 1.0,
+    "baseline_note": "The a112d2c worktree changes only the historical hard-coded GDF derivative omega scale from 1.5 to 1.0."
+  },
+  "before": {
+    "git_commit": "a112d2c6cb7cf0295494dab836d07d48fb460c9d",
+    "source_tree_sha256": "4dcfcddddb10463780a0e6a867198800a5e04169ec1fc93c241140c67789f7af",
+    "result_root": "benchmark/results/current_water64_prepost_baseline_a112d2c_omega1"
+  },
+  "after": {
+    "git_commit": "a112d2c6cb7cf0295494dab836d07d48fb460c9d",
+    "source_tree_sha256": "131a854c0f53e9fdfea14fb7d17e35e828921e463702bc64ef5c04199c8d27cf",
+    "queue": "benchmark/queues/current_water64_prepost_optimized_omega1.json",
+    "result_root": "benchmark/results/current_water64_prepost_optimized_omega1"
+  },
+  "gdf": {
+    "workflow_without_fd_s": {"before": 62.022731, "after": 48.316101, "reduction_percent": 22.099},
+    "analytic_gradient_s": {"before": 50.163681, "after": 36.484774, "reduction_percent": 27.269},
+    "sampled_peak_vram_delta_gib": {"before": 47.794922, "after": 11.130859, "reduction_percent": 76.711},
+    "host_peak_rss_gib": {"before": 4.713375, "after": 4.701153},
+    "energy_difference_ha": 0.0,
+    "gradient_max_difference_ha_per_bohr": 2.395306175628775e-13,
+    "gradient_rms_difference_ha_per_bohr": 3.8417284385922624e-14
+  },
+  "rsdf": {
+    "workflow_without_fd_s": {"before": 64.176660, "after": 54.670520, "reduction_percent": 14.812},
+    "analytic_gradient_s": {"before": 48.192911, "after": 39.203862, "reduction_percent": 18.652},
+    "sampled_peak_vram_delta_gib": {"before": 24.576172, "after": 9.203125, "reduction_percent": 62.553},
+    "host_peak_rss_gib": {"before": 5.024429, "after": 5.019924},
+    "energy_difference_ha": 0.0,
+    "gradient_max_difference_ha_per_bohr": 1.4455103780619538e-13,
+    "gradient_rms_difference_ha_per_bohr": 2.8170259679964355e-14
+  },
+  "decision": "Keep the current optimized GDF and RSDF production routes. They reduce Water64 time and peak VRAM while preserving energy and the complete analytic gradient."
+}

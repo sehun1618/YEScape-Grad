@@ -24,6 +24,8 @@ class DCGradients(lib.StreamObject):
         "z_nuclear_batch_memory_fraction",
         "z_nuclear_batch_max_components",
         "gdf_bilinear_mode",
+        "gdf_derivative_omega_scale",
+        "rsdf_derivative_omega_scale",
         "verbose",
         "stdout",
         "max_memory",
@@ -48,6 +50,8 @@ class DCGradients(lib.StreamObject):
         )
         self.z_nuclear_batch_max_components = None
         self.gdf_bilinear_mode = _default_gdf_bilinear_mode(base)
+        self.gdf_derivative_omega_scale = 1.0
+        self.rsdf_derivative_omega_scale = 1.0
         self.de = None
         self.result = None
         self.atmlst = None
@@ -86,6 +90,9 @@ class DCGradients(lib.StreamObject):
                     self.z_nuclear_batch_max_components
                 ),
                 gdf_bilinear_mode=self.gdf_bilinear_mode,
+                gdf_derivative_omega_scale=(
+                    self.gdf_derivative_omega_scale
+                ),
                 progress_callback=self.progress_callback,
             )
         elif backend == "rsdf":
@@ -97,6 +104,9 @@ class DCGradients(lib.StreamObject):
                 z_residual_tolerance=self.z_residual_tolerance,
                 z_max_cycle=self.z_max_cycle,
                 z_dense_max_dimension=self.z_dense_max_dimension,
+                rsdf_derivative_omega_scale=(
+                    self.rsdf_derivative_omega_scale
+                ),
                 progress_callback=self.progress_callback,
             )
         else:
@@ -123,7 +133,7 @@ def _default_gdf_bilinear_mode(base):
     if getattr(provider, "backend_name", None) != "gdf":
         return "one_pass"
     return (
-        "one_pass"
+        "optimized_fused"
         if bool(getattr(provider, "uses_native_integrals", False))
         else "two_pass"
     )

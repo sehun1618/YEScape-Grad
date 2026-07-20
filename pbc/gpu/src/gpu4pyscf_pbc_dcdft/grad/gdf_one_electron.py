@@ -15,6 +15,7 @@ from pyscf_pbc_dcdft.grad.gdf_one_electron import (
 )
 
 from ..df.gdf.local_part1_derivative import NativeGDFLocalPart1Derivative
+from .nonlocal_pseudo import contract_nonlocal_pseudo_batch
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,32 @@ class GDFOneElectronDerivatives:
             kpts = self.kpts
         value = vppnl_nuc_grad(self.cell, cp.asarray(density), kpts=kpts)
         return cp.asarray(value, dtype=cp.float64) / len(self.kpts)
+
+    def contract_pseudo_batch(self, densities) -> cp.ndarray:
+        """Contract local-part-1 and nonlocal PP for several densities."""
+
+        batch = cp.asarray(densities)
+        if batch.ndim == 3:
+            batch = batch[None]
+        if self.local_part1 is None:
+            local = cp.zeros(
+                (len(batch), self.cell.natm, 3),
+                dtype=cp.float64,
+            )
+        else:
+            local = self.local_part1.contract_batch(batch)
+        if self.density_contracted_nonlocal:
+            points = None
+            if len(self.kpts) != 1 or np.max(np.abs(self.kpts)) > 1.0e-12:
+                points = self.kpts
+            nonlocal_value = contract_nonlocal_pseudo_batch(
+                self.cell,
+                batch,
+                kpts=points,
+            ) / len(self.kpts)
+        else:
+            nonlocal_value = cp.zeros_like(local)
+        return local + nonlocal_value
 
 
 def build_gdf_one_electron_derivatives(

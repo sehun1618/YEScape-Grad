@@ -1,7 +1,7 @@
 {
-  "output_root": "results/rsdf_exact_central_probe_2026-07-17",
+  "output_root": "../results/rsdf_exact_central_probe_2026-07-17",
   "defaults": {
-    "atom_file": "structures/water8.xyz",
+    "atom_file": "../../structures/water8.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [10.0, 0.0, 0.0],
@@ -75,14 +75,14 @@
       "device": "gpu",
       "df_backend": "rsdf",
       "rsdf_central_setup": "reference",
-      "atom_file": "structures/water20.xyz"
+      "atom_file": "../../structures/water20.xyz"
     },
     {
       "name": "water20_exact_gpu_source_central",
       "device": "gpu",
       "df_backend": "rsdf",
       "rsdf_central_setup": "exact_gpu_source",
-      "atom_file": "structures/water20.xyz"
+      "atom_file": "../../structures/water20.xyz"
     }
   ]
 }

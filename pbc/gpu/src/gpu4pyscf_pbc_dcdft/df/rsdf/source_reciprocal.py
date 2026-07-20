@@ -18,10 +18,14 @@ from ..gdf.reciprocal_memory import (
     execute_adaptive_reciprocal_blocks,
     plan_gamma_reciprocal_blocks,
 )
+from .packed_gamma import (
+    SortedPackedGammaSources,
+    packed_pair_weights,
+)
 
 
-DEFAULT_SOURCE_RECIPROCAL_MEMORY_FRACTION = 0.25
-DEFAULT_SOURCE_RECIPROCAL_MAX_BLOCK_SIZE = 4096
+DEFAULT_SOURCE_RECIPROCAL_MEMORY_FRACTION = 0.15
+DEFAULT_SOURCE_RECIPROCAL_MAX_BLOCK_SIZE = 512
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,76 @@ def contract_gamma_batch(optimizer, sources, *, diagnostics=None):
         phase="rsdf_source_reciprocal",
     )
     _record_diagnostics(diagnostics, "gamma", plan, execution)
+    return ao_derivative * 2.0 + _group_auxiliary_batch(
+        auxcell,
+        auxiliary_partial,
+    )
+
+
+def contract_gamma_packed_batch(optimizer, sources, *, diagnostics=None):
+    """Contract packed Gamma sources with block-local dense AO workspaces."""
+
+    if not isinstance(sources, SortedPackedGammaSources):
+        raise TypeError("sources must be SortedPackedGammaSources")
+    values = cp.asarray(sources.values)
+    cell = optimizer.cell
+    auxcell = optimizer.auxcell
+    mesh = np.asarray(optimizer.mesh, dtype=int)
+    vectors = asarray(auxcell.get_Gv(mesh))
+    coulomb = _gamma_coulomb_vector(
+        _weighted_coulG_kpts(
+            cell,
+            mesh,
+            0.0,
+            float(optimizer.omega),
+        ),
+        ngrids=len(vectors),
+    )
+    ft_opt = ft_ao.FTOpt.from_intopt(optimizer)
+    evaluator = ft_opt.ft_evaluator(
+        compressing=False,
+        cart=True,
+        original_ao_order=False,
+    )[0]
+    kernel_inputs = _fourier_kernel_inputs(cell, ft_opt)
+    pair_addresses = ft_opt.pair_and_diag_indices(
+        cart=True,
+        original_ao_order=False,
+    )[0]
+    nao = int(sources.nao)
+    naux = int(values.shape[-1])
+    i_addr, j_addr = divmod(pair_addresses, nao)
+    plan = _memory_plan(len(vectors), nao, naux * len(values))
+    ao_derivative = cp.zeros((len(values), cell.natm, 3))
+    auxiliary_partial = cp.zeros((len(values), 3, naux))
+
+    def worker(start, stop):
+        return _gamma_packed_block(
+            cell,
+            auxcell,
+            values,
+            vectors,
+            coulomb,
+            evaluator,
+            start,
+            stop,
+            nao=nao,
+            naux=naux,
+            i_addr=i_addr,
+            j_addr=j_addr,
+            permutation_symmetry=ft_opt.permutation_symmetry,
+            **kernel_inputs,
+        )
+
+    execution = _execute_blocks(
+        len(vectors),
+        plan,
+        worker,
+        ao_derivative,
+        auxiliary_partial,
+        phase="rsdf_packed_source_reciprocal",
+    )
+    _record_diagnostics(diagnostics, "gamma_packed", plan, execution)
     return ao_derivative * 2.0 + _group_auxiliary_batch(
         auxcell,
         auxiliary_partial,
@@ -260,6 +334,83 @@ def _gamma_block(
         auxiliary_weighted,
         optimize=True,
     )
+    ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
+    ao_derivative = cp.stack(
+        [
+            _run_fourier_kernel(
+                cell,
+                source,
+                block_vectors,
+                width,
+                permutation_symmetry=permutation_symmetry,
+                **kernel_inputs,
+            )
+            for source in ao_source
+        ]
+    )
+    return _BlockResult(ao_derivative, auxiliary_partial)
+
+
+def _gamma_packed_block(
+    cell,
+    auxcell,
+    sources,
+    vectors,
+    coulomb,
+    evaluator,
+    start,
+    stop,
+    *,
+    nao,
+    naux,
+    i_addr,
+    j_addr,
+    permutation_symmetry,
+    **kernel_inputs,
+):
+    """Consume packed sources while limiting dense AO storage to one G block."""
+
+    width = int(stop - start)
+    block_vectors = vectors[start:stop]
+    pair_real = evaluator(block_vectors).view(np.float64).reshape(
+        nao,
+        nao,
+        width * 2,
+    )
+    pair_real[j_addr, i_addr] = pair_real[i_addr, j_addr]
+    pair_complex = pair_real.view(np.complex128)
+    row, column = cp.tril_indices(nao)
+    pair_packed = pair_complex[row, column]
+    pair_weights = packed_pair_weights(nao, dtype=pair_packed.real.dtype)
+
+    auxiliary_g = ft_ao.ft_ao(auxcell, block_vectors).T
+    auxiliary_weighted = auxiliary_g.conj() * coulomb[start:stop]
+    auxiliary_source = cp.einsum(
+        "spr,pG,p->srG",
+        sources,
+        pair_packed,
+        pair_weights,
+        optimize=True,
+    )
+    auxiliary_source *= coulomb[start:stop]
+    auxiliary_source = cp.ascontiguousarray(auxiliary_source).view(np.float64)
+    auxiliary_partial = _auxiliary_phase_derivative(
+        auxiliary_g,
+        block_vectors,
+        auxiliary_source,
+    )
+    del pair_complex, pair_real, pair_packed, auxiliary_source
+
+    ao_packed = cp.einsum(
+        "spr,rG->spG",
+        sources,
+        auxiliary_weighted,
+        optimize=True,
+    )
+    ao_source = cp.empty((len(sources), nao, nao, width), dtype=ao_packed.dtype)
+    ao_source[:, row, column] = ao_packed
+    ao_source[:, column, row] = ao_packed
+    del ao_packed
     ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
     ao_derivative = cp.stack(
         [

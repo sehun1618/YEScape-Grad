@@ -33,8 +33,13 @@ import cupy as cp
 import numpy as np
 from gpu4pyscf.lib.cupy_helper import get_avail_mem
 from gpu4pyscf.pbc.df import rsdf_builder
+from gpu4pyscf.pbc.lib.kpts_helper import (
+    conj_images_in_bvk_cell,
+    kk_adapted_iter,
+)
 from pyscf.pbc.df import rsdf_helper
 from pyscf.pbc.lib.kpts_helper import is_zero
+from pyscf.pbc.tools.k2gamma import translation_vectors_for_kmesh
 
 
 DEFAULT_METRIC_MEMORY_FRACTION = 0.25
@@ -42,17 +47,107 @@ DEFAULT_METRIC_MINIMUM_RESERVE_BYTES = 512 * 1024**2
 DEFAULT_METRIC_MAX_GRID_BLOCK_SIZE = 4096
 DEFAULT_SOURCE_BUILD_MAX_WORKING_BYTES = 512 * 1024**2
 DEFAULT_SOURCE_BUILD_MINIMUM_DYNAMIC_BYTES = 64 * 1024**2
+DEFAULT_COMPRESSED_DEVICE_CACHE_MAX_BYTES = 512 * 1024**2
+DEFAULT_COMPRESSED_DEVICE_CACHE_MEMORY_FRACTION = 0.02
+DEFAULT_COMPRESSED_DEVICE_CACHE_RESERVE_BYTES = 2 * 1024**3
 
 _BUILDER_ADAPTER_LOCK = RLock()
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExactCentralCDERI:
-    """Canonical device CDERI blocks and auditable build metadata."""
+    """Compressed central factors with lazy canonical derivative storage.
 
-    blocks: MappingProxyType
-    negative_blocks: MappingProxyType | None
+    GPU4PySCF's compressed representation is the efficient owner for SCF and
+    matrix-free response J/K.  Analytic nuclear derivatives need canonical
+    ``(naux, nao, nao)`` pair blocks, but only after the Z-vector solve.  Keep
+    the compressed factors authoritative and materialize canonical blocks on
+    the first derivative request so both large representations do not have to
+    coexist throughout the complete workflow.
+    """
+
+    compressed_blocks: MappingProxyType | None
+    compressed_negative_blocks: MappingProxyType | None
+    pair_indices: tuple
+    cell: object
+    kpts: np.ndarray
+    kmesh: np.ndarray
     metadata: dict[str, object]
+    _blocks: MappingProxyType | None = None
+    _negative_blocks: MappingProxyType | None = None
+
+    @property
+    def blocks(self):
+        """Return canonical device blocks, expanding them only when needed."""
+
+        if self._blocks is None:
+            if self.compressed_blocks is None:
+                raise RuntimeError(
+                    "canonical RSDF factors cannot be rebuilt after both "
+                    "compressed and canonical storage were released"
+                )
+            self._blocks = _canonical_pair_mapping(
+                self.compressed_blocks,
+                self.pair_indices,
+                cell=self.cell,
+                kpts=self.kpts,
+                kmesh=self.kmesh,
+            )
+            self._negative_blocks = _canonical_pair_mapping(
+                self.compressed_negative_blocks,
+                self.pair_indices,
+                cell=self.cell,
+                kpts=self.kpts,
+                kmesh=self.kmesh,
+            )
+            canonical_bytes = sum(
+                int(value.nbytes) for value in self._blocks.values()
+            )
+            self.metadata["canonical_device_bytes"] = canonical_bytes
+            self.metadata["canonical_materialized"] = True
+        return self._blocks
+
+    @property
+    def negative_blocks(self):
+        """Return canonical negative-metric blocks when they exist."""
+
+        self.blocks
+        return self._negative_blocks
+
+    def release_canonical(self):
+        """Release rebuildable canonical blocks while retaining SCF factors."""
+
+        released = 0
+        if self._blocks is not None:
+            released += sum(int(value.nbytes) for value in self._blocks.values())
+        if self._negative_blocks is not None:
+            released += sum(
+                int(value.nbytes) for value in self._negative_blocks.values()
+            )
+        self._blocks = None
+        self._negative_blocks = None
+        self.metadata["canonical_device_bytes"] = 0
+        self.metadata["canonical_materialized"] = False
+        return int(released)
+
+    def release_compressed(self):
+        """Retire J/K storage after the canonical derivative handoff."""
+
+        released = 0
+        if self.compressed_blocks is not None:
+            released += sum(
+                int(value.nbytes) for value in self.compressed_blocks.values()
+            )
+        if self.compressed_negative_blocks is not None:
+            released += sum(
+                int(value.nbytes)
+                for value in self.compressed_negative_blocks.values()
+            )
+        self.compressed_blocks = None
+        self.compressed_negative_blocks = None
+        self.metadata["compressed_resident_bytes"] = 0
+        self.metadata["compressed_resident"] = False
+        return int(released)
 
 
 @dataclass
@@ -70,7 +165,14 @@ class _BuildState:
             self.metric_plans = []
 
 
-def build_exact_cderi(cell, auxcell, kpts, parameters) -> ExactCentralCDERI:
+def build_exact_cderi(
+    cell,
+    auxcell,
+    kpts,
+    parameters,
+    *,
+    compressed_device_cache="auto",
+) -> ExactCentralCDERI:
     """Build CPU-equivalent regular-Coulomb RSDF CDERI factors.
 
     Parameters
@@ -108,7 +210,7 @@ def build_exact_cderi(cell, auxcell, kpts, parameters) -> ExactCentralCDERI:
         reference_auxcell=working_auxcell,
     ):
         gamma = len(points) == 1 and is_zero(points[0])
-        raw_blocks, raw_negative = rsdf_builder.build_cderi(
+        raw_blocks, raw_negative, pair_indices = rsdf_builder.build_cderi(
             working_cell,
             working_auxcell,
             kpts=None if gamma else points,
@@ -116,20 +218,40 @@ def build_exact_cderi(cell, auxcell, kpts, parameters) -> ExactCentralCDERI:
             j_only=False,
             omega=None,
             linear_dep_threshold=float(parameters.linear_dep_threshold),
+            compress=True,
         )
     cp.cuda.Stream.null.synchronize()
-    build_seconds = perf_counter() - start
+    raw_build_seconds = perf_counter() - start
 
-    blocks = _device_pair_mapping(raw_blocks)
-    negative = (
-        None
-        if raw_negative is None
-        else _device_pair_mapping(raw_negative)
+    compressed = _compressed_mapping(raw_blocks)
+    negative = _compressed_mapping(raw_negative)
+    compressed_bytes = sum(int(value.nbytes) for value in compressed.values())
+    cache_plan = _compressed_device_cache_plan(
+        compressed_bytes,
+        available_bytes=int(get_avail_mem(exclude_memory_pool=True)),
+        policy=compressed_device_cache,
+        is_gamma=gamma,
     )
-    central_bytes = sum(int(value.nbytes) for value in blocks.values())
+    upload_seconds = 0.0
+    if cache_plan["enabled"]:
+        upload_start = cp.cuda.Event()
+        upload_end = cp.cuda.Event()
+        upload_start.record()
+        compressed = _device_mapping(compressed)
+        negative = _device_mapping(negative)
+        upload_end.record()
+        upload_end.synchronize()
+        upload_seconds = float(
+            cp.cuda.get_elapsed_time(upload_start, upload_end) / 1000.0
+        )
+    build_seconds = perf_counter() - start
     return ExactCentralCDERI(
-        blocks=blocks,
-        negative_blocks=negative,
+        compressed_blocks=compressed,
+        compressed_negative_blocks=negative,
+        pair_indices=tuple(_host_index_copy(value) for value in pair_indices),
+        cell=cell,
+        kpts=points.copy(),
+        kmesh=np.asarray(kmesh, dtype=int).copy(),
         metadata={
             "builder": "project-local exact RSDF central adapter",
             "source_owner": "GPU4PySCF CUDA three-center builder",
@@ -143,9 +265,19 @@ def build_exact_cderi(cell, auxcell, kpts, parameters) -> ExactCentralCDERI:
             "metric_mesh": [int(value) for value in parameters.metric_mesh],
             "metric_precision": float(parameters.precision_j2c),
             "kmesh": [int(value) for value in kmesh],
-            "pair_count": len(blocks),
-            "central_device_bytes": central_bytes,
+            "pair_count": len(points) * (len(points) + 1) // 2,
+            "compressed_storage_bytes": compressed_bytes,
+            "compressed_resident_bytes": compressed_bytes,
+            "compressed_resident": True,
+            "canonical_device_bytes": 0,
+            "canonical_materialized": False,
             "total_build_seconds": build_seconds,
+            "raw_builder_seconds": raw_build_seconds,
+            "compressed_device_upload_seconds": upload_seconds,
+            "compressed_storage_location": (
+                "device" if cache_plan["enabled"] else "mapped_host"
+            ),
+            "compressed_device_cache": cache_plan,
             "host_short_range_metric_seconds": state.host_metric_seconds,
             "device_long_range_metric_seconds": state.device_metric_seconds,
             "metric_calls": state.metric_calls,
@@ -387,18 +519,132 @@ def _source_builder_memory_plan(actual_free_bytes, *, source_mesh, naux):
     }
 
 
-def _device_pair_mapping(raw):
-    blocks = {
-        (int(pair[0]), int(pair[1])): cp.asarray(value)
-        for pair, value in raw.items()
-        if (
-            isinstance(pair, tuple)
-            and len(pair) == 2
-            and int(pair[0]) >= int(pair[1])
-        )
-    }
+def _compressed_mapping(raw):
+    """Return an immutable shallow mapping of upstream compressed factors."""
+
+    if raw is None:
+        return None
+    blocks = {key: value for key, value in raw.items()}
     if not blocks:
-        raise RuntimeError("GPU4PySCF RSDF builder returned no k-point pairs")
+        raise RuntimeError("GPU4PySCF RSDF builder returned no compressed blocks")
+    return MappingProxyType(blocks)
+
+
+def _device_mapping(raw):
+    """Return immutable device-resident factors from a compressed mapping."""
+
+    if raw is None:
+        return None
+    return MappingProxyType({key: cp.asarray(value) for key, value in raw.items()})
+
+
+def _compressed_device_cache_plan(
+    storage_bytes,
+    *,
+    available_bytes,
+    policy,
+    is_gamma,
+):
+    """Choose bounded persistent storage for repeatedly traversed factors."""
+
+    mode = str(policy).strip().lower()
+    if mode not in {"auto", "device", "host"}:
+        raise ValueError(
+            "compressed_device_cache must be 'auto', 'device', or 'host', "
+            f"got {policy!r}"
+        )
+    fraction_budget = int(
+        available_bytes * DEFAULT_COMPRESSED_DEVICE_CACHE_MEMORY_FRACTION
+    )
+    reserve_budget = max(
+        0,
+        available_bytes - DEFAULT_COMPRESSED_DEVICE_CACHE_RESERVE_BYTES,
+    )
+    auto_budget = min(
+        DEFAULT_COMPRESSED_DEVICE_CACHE_MAX_BYTES,
+        fraction_budget,
+        reserve_budget,
+    )
+    gamma_supported = bool(is_gamma)
+    if mode == "device" and not gamma_supported:
+        raise NotImplementedError(
+            "persistent compressed device factors currently support Gamma only"
+        )
+    enabled = gamma_supported and (
+        mode == "device" or (mode == "auto" and storage_bytes <= auto_budget)
+    )
+    if mode == "device" and storage_bytes > reserve_budget:
+        raise MemoryError(
+            "insufficient reserved GPU memory for compressed device cache: "
+            f"required={storage_bytes}, budget={reserve_budget}"
+        )
+    return {
+        "policy": mode,
+        "enabled": bool(enabled),
+        "gamma_supported": gamma_supported,
+        "storage_bytes": int(storage_bytes),
+        "available_bytes_at_plan": int(available_bytes),
+        "auto_budget_bytes": int(auto_budget),
+        "max_cache_bytes": DEFAULT_COMPRESSED_DEVICE_CACHE_MAX_BYTES,
+        "memory_fraction": DEFAULT_COMPRESSED_DEVICE_CACHE_MEMORY_FRACTION,
+        "minimum_reserve_bytes": DEFAULT_COMPRESSED_DEVICE_CACHE_RESERVE_BYTES,
+        "reason": (
+            "enabled"
+            if enabled
+            else (
+                "sampled_k_not_implemented"
+                if not gamma_supported
+                else "policy_host" if mode == "host" else "over_auto_budget"
+            )
+        ),
+    }
+
+
+def _host_index_copy(value):
+    """Copy compact AO-pair metadata to durable host storage."""
+
+    if isinstance(value, cp.ndarray):
+        return cp.asnumpy(value)
+    return np.asarray(value).copy()
+
+
+def _canonical_pair_mapping(compressed, pair_indices, *, cell, kpts, kmesh):
+    """Expand upstream compressed factors into lower-triangular pair blocks."""
+
+    if compressed is None:
+        return None
+    points = np.asarray(kpts, dtype=float).reshape(-1, 3)
+    mesh = np.asarray(kmesh, dtype=int)
+    pair_address = cp.asarray(pair_indices[0], dtype=np.int32)
+    conjugate_images = cp.asarray(
+        conj_images_in_bvk_cell(mesh),
+        dtype=np.int32,
+    )
+    lattice_translations = cp.asarray(
+        translation_vectors_for_kmesh(cell, mesh, True)
+    )
+    phases = cp.exp(1j * lattice_translations.dot(cp.asarray(points).T))
+    nao = int(cell.nao_nr())
+    blocks = {}
+    for kp, _kp_conj, ki_idx, kj_idx in kk_adapted_iter(mesh):
+        packed = compressed.get(kp)
+        if packed is None:
+            continue
+        unpacked = rsdf_builder._unpack_cderi_v2(
+            cp.asarray(packed),
+            pair_address,
+            kj_idx,
+            conjugate_images,
+            phases,
+            nao,
+        )
+        for ki, kj in zip(ki_idx, kj_idx):
+            first, second = int(ki), int(kj)
+            if first >= second:
+                blocks[(first, second)] = cp.asarray(unpacked[first]).copy()
+        del unpacked
+    if not blocks:
+        raise RuntimeError("compressed RSDF factors produced no canonical pairs")
     return MappingProxyType(blocks)
 
 

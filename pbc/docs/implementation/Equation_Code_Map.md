@@ -5,10 +5,11 @@
 | Equation term | CPU/shared policy | GPU implementation |
 | --- | --- | --- |
 | target integrator mode | `pyscf_pbc_dcdft.dft.target_integrator` | `gpu4pyscf_pbc_dcdft.dft.base` |
-| target J/XC energy and Fock | uniform reference | `gpu4pyscf_pbc_dcdft.dft.target_numint` |
-| target $dJ+dE_{xc}$ ownership | selected-DF or combined multigrid policy | `gpu4pyscf_pbc_dcdft.grad.target` |
+| target J/XC energy and Fock, Eqs. `eq:target-m1-veff`, `eq:target-m2-veff` | uniform reference | `gpu4pyscf_pbc_dcdft.dft.target_numint` |
+| target $dJ+dE_{xc}$ ownership, Eq. `eq:target-gradient-owner` | selected-DF or combined multigrid policy | `gpu4pyscf_pbc_dcdft.grad.target` |
 | source HF identity/workspace | `pyscf_pbc_dcdft.dft.state` | `gpu4pyscf_pbc_dcdft.dft.workspace` |
 | M2 selected-DF $dJ$ suppression | shared ownership predicate | `gpu4pyscf_pbc_dcdft.grad.gdf`, `grad.fftdf` |
+| target task reuse/release, Eq. `eq:target-multigrid-memory` | ownership policy | `gpu4pyscf_pbc_dcdft.grad.target::release_completed_target_multigrid` |
 
 이 문서는 theory equation과 production source owner를 연결한다. 수식은
 `docs/theory/PBC_DC_DFT_Gradient_Theory.tex`의 label을 기준으로 하며, 경로는 각
@@ -22,7 +23,8 @@ route는 active public API가 아니다.
 | $E_{\mathrm{DFA}}[D^{\mathrm{HF}}]$, Eq. `eq:dc-energy-components` | fixed-density target energy | `dft/fixed_density.py::evaluate_energy` | `dft/fixed_density.py::evaluate_energy` | scalar, Ha | FFTDF/GDF/RSDF full-energy FD |
 | $g_{ai\mathbf{k}}$, Eq. `eq:target-orbital-gradient` | target-Fock VO source | `grad/orbitals.py::target_fock_vo_blocks` | `grad/orbitals.py::target_fock_vo_blocks` | per-$\mathbf{k}$ $(n_v,n_o)$, Ha | orbital-rotation FD |
 | $\mathcal A^{\mathrm{HF}}X$, Eq. `eq:hf-hessian-action` | HF orbital Hessian action | `grad/response.py::HFOrbitalHessian` | `grad/response.py::HFOrbitalHessian` | realified VO vector, Ha | linear-action and symmetry tests |
-| $A_R^{T}z_R=-g_R$, Eq. `eq:zvector-equation` | adjoint Z-vector | `grad/zvector.py::solve_z_vector` | `grad/zvector.py::solve_z_vector` (`auto`: small dense, production matrix-free MINRES) | realified VO vector | residual $<10^{-8}$, dense/matrix-free Gamma/k parity |
+| $A_R^{T}z_R=-g_R$, Eqs. `eq:zvector-equation`, `eq:matrix-free-action` | adjoint Z-vector | `grad/zvector.py::solve_z_vector` | `grad/zvector.py::solve_z_vector` (`auto`: small dense, production matrix-free MINRES) | realified VO vector | residual $<10^{-8}$, dense/matrix-free Gamma/k parity |
+| $P^{-1}$, Eq. `eq:gap-preconditioner` | orbital-gap scaling | common numerical policy | `grad/zvector.py::_energy_gap_diagonal`, `_matrix_free_solution` | realified diagonal | positive-gap and dense/matrix-free parity |
 | $B^{A_x}_{ai\mathbf{k}}$, Eq. `eq:cphf-source` | nuclear response source | `grad/nuclear_response.py::nuclear_response_source_vo` | `grad/nuclear_response.py::nuclear_response_source_vo_sets` + `grad/response.py::apply_hf_response_sets` | $(N_{\mathrm{atom}},3,n_v,n_o)$, Ha/Bohr, memory-bounded component batch | source-matrix FD and component/batch parity |
 | $E^{A_x}_{\mathrm{resp}}$, Eq. `eq:response-gradient` | Z-vector response contraction | `grad/assembly.py::assemble_gradient` | backend gradient assembly | $(N_{\mathrm{atom}},3)$, Ha/Bohr | full-energy FD |
 | $dE/dR_{A_x}$, Eq. `eq:final-gradient-assembly` | total nuclear gradient | `grad/fftdf.py`, `grad/gdf.py`, `grad/rsdf.py` | same paths in GPU package | $(N_{\mathrm{atom}},3)$, Ha/Bohr | Cartesian central FD |
@@ -35,6 +37,7 @@ route는 active public API가 아니다.
 | $\partial V_{\mathrm{NL}}/\partial R_{A_x}$, Eq. `eq:gth-nonlocal-derivative` | FFT finite-mesh nonlocal GTH derivative | `pseudo/fft_nonlocal_derivative.py::fft_nonlocal_gth_derivative` | `pseudo/nonlocal_derivative.py::nonlocal_gth_derivative` | H1 matrix, Ha/Bohr | FFTDF matrix FD |
 | $\partial V_{\mathrm{NL}}/\partial R_{A_x}$, Eq. `eq:gth-nonlocal-derivative` | exact-integral GDF/RSDF nonlocal derivative | `pseudo/nonlocal_derivative.py::nonlocal_gth_derivative` | explicit host integral boundary | H1 matrix, Ha/Bohr | GDF/RSDF matrix FD |
 | $-\operatorname{Tr}(D^{E,\mathrm{target}}S^{A_x})$, Eq. `eq:target-overlap-pulay` | target overlap/Pulay term | `grad/pulay.py::contract_target_overlap` | `grad/pulay.py::contract_target_overlap` | $(N_{\mathrm{atom}},3)$, Ha/Bohr | component and full-energy FD |
+| $G_{\mathrm{PP}}[D]+2G_{\mathrm{PP}}[T_Z]$ | coupled GTH explicit/Z response | resolved CPU contractions | `grad/gdf.py` + `grad/nonlocal_pseudo.py` + `df/gdf/local_part1_derivative.py` | one coupled $(N_{\mathrm{atom}},3)$ channel, Ha/Bohr | resolved-route parity, selected FD, Gamma/k regression |
 
 ## FFTDF
 
@@ -54,7 +57,7 @@ route는 active public API가 아니다.
 | $C=L^{-1}B$, Eq. `eq:gdf-cderi` | central CDERI | `df/gdf/cholesky.py` | `df/gdf/gdf.py::GDF.build` | compressed native storage or canonical reference blocks | J/K and energy parity |
 | $dC=L^{-1}(dB-dL\,C)$, Eq. `eq:gdf-cderi-derivative` | source + metric auxiliary response | `df/gdf/cholesky.py::differentiate_cderi` | native source-contracted CUDA kernel; reference: `df/gdf/cholesky.py::CDERIFactorization.differentiate` | atom scalar derivative or reference tensor | direct CDERI/reference FD and full-energy FD |
 | $dJ/dR$, $dK/dR$, Eqs. `eq:gdf-coulomb-aux-derivative`, `eq:gdf-j-derivative` | GDF J/K energy derivative | `df/gdf/jk_derivative.py::gdf_jk_derivative` | `df/gdf/contracted_derivative.py::{coulomb,exchange,restricted_hf}_energy_derivative` | $(N_{\mathrm{atom}},3)$, Ha/Bohr in native mode | Gamma/k-point algebra and full-energy FD |
-| $Q(D+T_Z)-Q(D-T_Z)$ | bilinear HF two-electron Z response | full $dJ/dR,dK/dR$ contraction | `df/gdf/contracted_derivative.py::restricted_hf_bilinear_derivative` (현재 two-pass polarization) | $(N_{\mathrm{atom}},3)$, Ha/Bohr | full-tensor reference parity; signed one-pass kernel은 optimization track |
+| $Q(D+T_Z)-Q(D-T_Z)$, Eqs. `eq:polarization-identity`, `eq:bilinear-response` | bilinear HF two-electron Z response | full $dJ/dR,dK/dR$ contraction | `df/gdf/contracted_derivative.py::{restricted_hf_bilinear_derivative,restricted_hf_bilinear_derivative_one_pass}`; Gamma/k owners in `signed_gamma_native.py`, `signed_kpoint_native.py` | $(N_{\mathrm{atom}},3)$, Ha/Bohr | two-pass/full-tensor parity, Gamma/k signed one-pass parity |
 | $dE_{\mathrm{DC}}/dR_{A_x}$, Eq. `eq:final-gradient-assembly` | GDF total gradient | `grad/gdf.py::gdf_cpu_gradient` | `grad/gdf.py::gdf_gpu_gradient` | $(N_{\mathrm{atom}},3)$, Ha/Bohr | full-energy FD and CPU/GPU parity |
 
 ## MGGA: SCAN 및 r2SCAN

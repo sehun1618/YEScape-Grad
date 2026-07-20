@@ -161,6 +161,8 @@ Only MGGA has a large net translation & $\tau$ factor, second AO derivatives, gr
 RSDF value parity fails & mixed source/metric $\omega$ or mesh \\
 Z residual is small but full FD fails & explicit hcore/J/XC/Pulay derivative \\
 Only CPU/GPU totals agree, components differ & silent fallback or different ownership \\
+Stable multigrid energy and gradient but incorrect FD & different target mesh/tasks or double-counted J owner \\
+Illegal address at a large target mesh without OOM & index/buffer violation in an earlier asynchronous custom kernel \\
 \bottomrule
 \end{longtable}
 \end{center}

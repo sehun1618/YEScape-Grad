@@ -19,6 +19,40 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### GDF and RSDF GPU response
 
+- Fuse the Gamma explicit and Z-vector GTH pseudopotential derivative through
+  the exact linear source `D + 2 T_Z`.  Water20 PP time is halved; current GDF
+  and RSDF workflows improve by 7.36% and 6.68% with maximum gradient changes
+  below `6.5e-14 Ha/Bohr` and selected-FD errors below `5.2e-9 Ha/Bohr`.
+- Promote native GDF `optimized_fused` to the public GPU gradient default.
+  Keep both derivative omega scales at 1.0 so PySCF-resolved partitions remain
+  the production default.  Water64 scale-1.0 selected-FD errors stay below
+  `7.4e-9 Ha/Bohr`.
+- On a fresh, same-input Water64/SZ paired gate at omega scale 1.0, the current
+  GDF and RSDF routes reduce workflow time by 22.10% and 14.81% and sampled
+  peak VRAM by 76.71% and 62.55%.  Complete gradients remain within
+  `2.4e-13 Ha/Bohr` of their pre-optimization references.
+- Add source-HF CUDA-event profiling for exact-central setup, first/repeated
+  J/K, diagonalization and density updates.  Mapped-host compressed-CDERI
+  storage remains the production default.
+
+- Route exact GPU-source RSDF SCF, target J/K, and matrix-free AX calls through
+  GPU4PySCF's compressed J/K implementation.  Canonical AO-pair factors are
+  now expanded only when analytic derivatives request them, after which the
+  compressed storage is retired so the two large representations do not
+  remain resident together.  On the recorded Water/Ethanol-SZ Gamma case this
+  reduced source HF by 12.5%, matrix-free Z by 48.1%, and analytic total time
+  by 13.5%; energy and gradient changed by only `4.55e-13 Ha` and
+  `1.51e-13 Ha/Bohr`, respectively.
+- Stage the multigrid target gradient before the large RSDF derivative
+  response, then retire completed multigrid tasks, unused CuPy pool blocks,
+  FFT plans, and rebuildable canonical CDERI at their final-use boundaries.
+  Bound the local-part-1 reciprocal derivative to 10% of available VRAM and
+  at most 1024 G-vectors per exact block.  Retire Gamma canonical CDERI after
+  its final source/metric-adjoint use and cap the subsequent source-reciprocal
+  derivative at 15% of free VRAM and 512 G-vectors.  On Water/Ethanol-SZ with
+  a `240^3` r2SCAN multigrid mesh the combined changes reduced sampled peak
+  VRAM from 62.250 to 39.192 GiB (`-37.04%`) while preserving energy and
+  gradient within `4.55e-13 Ha` and `1.26e-13 Ha/Bohr`.
 - Add bounded-memory Gamma GDF reciprocal planning, transactional OOM
   rebatching, workspace reuse, reportable phase metadata, and a profiled
   Gamma derivative short-/long-range workload balance.

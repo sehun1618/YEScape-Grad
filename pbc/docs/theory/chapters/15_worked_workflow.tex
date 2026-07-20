@@ -1,0 +1,170 @@
+\section{계산 흐름 예제와 결과 해석}
+\label{sec:worked-workflow}
+
+이 장은 앞의 수식을 실제 restricted closed-shell Gamma 계산 순서로 연결한다. 특정
+molecule의 숫자를 재현하는 input tutorial이 아니라, 어떤 object가 언제 만들어지고
+어느 numerical representation을 소유하는지 추적하는 학습 예제다.
+
+\subsection{Step 0: numerical problem을 먼저 고정한다}
+
+예제로 source backend는 RSDF, target integrator는 \texttt{multigrid\_xc}, target
+functional은 r2SCAN이라고 하자. 계산 전 다음을 고정한다.
+\begin{itemize}
+  \item 원자 좌표와 lattice, 단위, charge/spin,
+  \item primary basis, GTH pseudopotential와 auxiliary basis,
+  \item Gamma 또는 explicit k-point list와 weight,
+  \item source cutoff/mesh, RSDF source/metric $\omega$와 mesh,
+  \item target multigrid mesh,
+  \item HF, gradient 및 Z-vector tolerance.
+\end{itemize}
+Source mesh와 target mesh를 모두 기록해야 ``500 Ha에서 계산했다''보다 재현 가능한
+problem 정의가 된다.
+
+\subsection{Step 1: source HF}
+
+RSDF가 $J[D]$와 $K[D]$를 만들어
+\begin{equation}
+  F_{\mathrm{HF}}=h+J[D]-\tfrac12K[D]
+\end{equation}
+를 반복한다. 수렴 후 보존하는 핵심 object는 $D^{\mathrm{HF}}$, MO coefficient,
+occupation, orbital energy와 source DF provider다. 이 단계에는 r2SCAN target
+optimization이 없다. Target integrator를 uniform에서 multigrid로 바꾸어도 이 source
+state가 달라지면 ownership 구현이 잘못된 것이다.
+
+\subsection{Step 2: fixed-density target energy}
+
+같은 $D^{\mathrm{HF}}$를 target functional에 넣는다. M1에서는
+\begin{equation}
+  E_{\mathrm{target}}
+  =\Tr[D^{\mathrm{HF}}h]+E_J^{\mathrm{RSDF}}[D^{\mathrm{HF}}]
+   +E_{\mathrm{xc}}^{\mathrm{MG}}[D^{\mathrm{HF}}]+E_{NN}.
+\end{equation}
+Target Fock은
+\begin{equation}
+  F_{\mathrm{target}}
+  =h+J_{\mathrm{RSDF}}[D^{\mathrm{HF}}]
+    +V_{\mathrm{xc}}^{\mathrm{MG}}[D^{\mathrm{HF}}]
+\end{equation}
+이다. 이 Fock로 SCF를 돌리지 않는다. Energy object는 target multigrid task와 Fock을
+gradient가 재사용할 수 있도록 workspace에 보존한다.
+
+\subsection{Step 3: nonstationary right-hand side}
+
+Source HF orbital basis에서 target Fock의 VO block을 취한다.
+\begin{equation}
+  g_{ai}=2(C_v^\dagger F_{\mathrm{target}}C_o)_{ai}.
+\end{equation}
+$g=0$이면 target energy도 우연히 HF orbital에 stationary하므로 orbital-response term이
+없다. 일반 DC-DFT에서는 $g\ne0$이고 이 값이 Z-vector equation의 right-hand side다.
+
+\subsection{Step 4: source HF Z-vector}
+
+Realified vector dimension $m$이 작으면 dense $A_R$를 만들어 reference solution을 얻을
+수 있다. 큰 계산은 RSDF transition-density J/K를 사용하는 matrix-free AX와 MINRES를
+사용한다. Report에서 다음을 확인한다.
+\begin{itemize}
+  \item solver가 dense인지 matrix-free인지,
+  \item real response dimension과 iteration 수,
+  \item minimum orbital gap과 preconditioner,
+  \item final scaled residual $\eta_z$,
+  \item solver 및 mean-iteration wall time.
+\end{itemize}
+Iteration 수가 작다는 사실만으로 정확성이 보장되지는 않는다. 실제 residual과 small-case
+dense parity가 completion 근거다.
+
+\subsection{Step 5: explicit target gradient}
+
+Nuclear derivative를 취할 때 target density를 고정한 explicit term을 계산한다.
+\begin{itemize}
+  \item selected one-electron $h^{Ax}$와 GTH PP derivative,
+  \item RSDF target $dJ/dR$,
+  \item multigrid target $dE_{\mathrm{xc}}/dR$,
+  \item target energy-weighted density와 $dS/dR$의 Pulay contraction,
+  \item nuclear--nuclear derivative.
+\end{itemize}
+M1이므로 target $dJ/dR$는 RSDF가 소유하고 multigrid derivative는 XC만 포함한다.
+M2라면 combined multigrid $dJ+dE_{\mathrm{xc}}$를 사용하고 RSDF target $dJ$를 끈다.
+
+\subsection{Step 6: source response gradient}
+
+각 $Ax$에 대해 one-electron, overlap 및 source RSDF two-electron nuclear source
+$B^{Ax}$를 만들고 $z^TB^{Ax}$를 누적한다. Full $B$ 또는 full $C^{Ax}$를 동시에 저장할
+필요는 없다. Nuclear component batching, source/metric adjoint contraction과 reciprocal
+streaming을 적용한 뒤 $(N_A,3)$ scalar array만 보존한다.
+
+\subsection{Step 7: 최종 조립}
+
+최종 결과는 식~\eqref{eq:final-gradient-assembly}에 따라
+\begin{equation}
+  \mathbf g
+  =\mathbf g_{\mathrm{explicit,target}}
+   +\mathbf g_{\mathrm{Pulay}}
+   +\mathbf g_{\mathrm{source,response}}
+   +\mathbf g_{NN}
+\end{equation}
+로 조립한다. Public output은 force가 아니라 gradient이며 단위는 Ha/Bohr다.
+
+\subsection{Shape와 owner 추적표}
+
+\begin{center}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\textwidth}
+                  >{\raggedright\arraybackslash}p{0.25\textwidth}
+                  >{\raggedright\arraybackslash}p{0.20\textwidth}
+                  >{\raggedright\arraybackslash}p{0.22\textwidth}}
+\toprule
+Object & 대표 shape & Owner & 다음 consumer \\
+\midrule
+$D^{\mathrm{HF}}$ & $(N_k,N_{AO},N_{AO})$ & source HF & target energy, AX \\
+$F_{\mathrm{target}}$ & same & target integrator + DF & VO right-hand side \\
+$g_{vo}$ & k별 $(N_v,N_o)$ & common orbital layer & Z solver \\
+$z_{vo}$ & k별 $(N_v,N_o)$ & source HF Hessian & nuclear response \\
+Target XC gradient & $(N_A,3)$ & multigrid & final assembly \\
+RSDF response & $(N_A,3)$ & RSDF adjoint & final assembly \\
+Final gradient & $(N_A,3)$ & common assembly & report/FD \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{검증 순서}
+
+한 번의 큰 계산이 끝났다는 사실만으로 구현이 검증되지는 않는다. 권장 순서는 다음과
+같다.
+\begin{enumerate}
+  \item 작은 distorted geometry에서 primitive matrix/response parity를 확인한다.
+  \item Gamma와 explicit one-k-point shape parity를 확인한다.
+  \item sampled k-point에서 conjugation과 $1/N_k$를 확인한다.
+  \item 선택한 Cartesian component의 full-energy FD를 수행한다.
+  \item 전체 $3N_A$ FD 또는 representative complete small-system gate를 통과한다.
+  \item source mesh, target mesh, auxiliary basis와 k-mesh를 각각 수렴시킨다.
+  \item 마지막으로 larger-system timing과 memory를 측정한다.
+\end{enumerate}
+
+Analytic--FD agreement는 ``선택한 finite representation을 올바르게 미분했다''는
+증거다. Mesh convergence는 ``그 finite representation이 원하는 physical limit에
+충분히 가깝다''는 별도 증거다.
+
+\subsection{Timing과 memory를 읽는 법}
+
+End-to-end 시간을 source HF, target energy, target explicit gradient, Z-vector,
+one-electron/PP, DF response와 final reporting으로 나누어 본다. GPU 계산에서 높은 CPU
+사용률은 host integral generation, task construction 또는 data packing일 수 있으며 곧바로
+GPU fallback을 뜻하지 않는다. 실제 owner metadata와 stage timing을 함께 본다.
+
+Peak VRAM도 어느 stage에서 발생했는지 확인한다. OOM은 allocation failure이고
+\texttt{CUDA\_ERROR\_ILLEGAL\_ADDRESS}는 실행된 kernel의 invalid access다. CUDA가
+asynchronous이므로 traceback의 다음 CuPy operation이 최초 원인이 아닐 수 있다. 큰-grid
+오류는 blocking diagnostic으로 first failing kernel을 찾고, 단순히 cutoff를 낮춰 숨기기
+전에 physics representation과 kernel limitation을 분리한다.
+
+\subsection{Further reading}
+
+Periodic Gaussian implementation과 software convention은
+\href{https://doi.org/10.1002/wcms.1340}{PySCF framework paper}를 출발점으로 삼는다.
+RSDF의 range-separated three-center construction은 Ye와 Berkelbach,
+\href{https://doi.org/10.1063/5.0046617}{J. Chem. Phys. 154, 131104 (2021)}를
+참고한다. SCAN과 r2SCAN의 functional 정의는 각각
+\href{https://doi.org/10.1103/PhysRevLett.115.036402}{Phys. Rev. Lett. 115,
+036402 (2015)}와
+\href{https://doi.org/10.1021/acs.jpclett.0c02405}{J. Phys. Chem. Lett. 11,
+8208--8215 (2020)}에 있다. 이 문서의 구현-specific owner와 validation mapping은
+\texttt{docs/implementation/Equation\_Code\_Map.md}를 따른다.

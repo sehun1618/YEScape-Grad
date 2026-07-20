@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import cupy as cp
 import numpy as np
+from gpu4pyscf.pbc.df.rsdf_builder import estimate_ke_cutoff_for_omega
 from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
 from pyscf_pbc_dcdft.df.rsdf.parameters import (
     RSDFParameters,
@@ -33,6 +34,7 @@ from .source_adjoint import (
     build_pair_cderi_adjoints,
     build_pair_fused_cderi_adjoint,
     push_cderi_adjoint_through_source,
+    push_packed_gamma_adjoint_through_source,
 )
 from .source_native import (
     build_source_optimizer,
@@ -89,6 +91,7 @@ def build_rsdf_contracted_response(
     native_metric_derivatives: bool | str = "auto",
     observable_mode: str = "resolved",
     validate_central_source: bool = True,
+    source_derivative_omega_scale: float = 1.0,
 ) -> RSDFContractedResponse:
     """Stream primitive derivatives into the two required force scalars.
 
@@ -142,11 +145,16 @@ def build_rsdf_contracted_response(
     reciprocal_memory = None
     fused_adjoint_memory = []
     pairs = canonical_pairs(len(kpts))
+    source_derivative_parameters = _scaled_source_parameters(
+        provider.cell,
+        parameters,
+        source_derivative_omega_scale,
+    )
     source_optimizer = _native_source_optimizer(
         provider,
         witness,
         kpts,
-        parameters,
+        source_derivative_parameters,
         enabled=native_source_derivatives,
     )
     use_native_metric = _native_derivatives_enabled(
@@ -275,6 +283,15 @@ def build_rsdf_contracted_response(
             source_result.reciprocal_seconds
         )
         reciprocal_memory = source_result.reciprocal_memory
+        reciprocal_memory["source_derivative_parameters"] = {
+            "omega_scale": float(source_derivative_omega_scale),
+            "source_omega": float(
+                source_derivative_parameters.source_omega
+            ),
+            "source_mesh": list(
+                source_derivative_parameters.source_mesh
+            ),
+        }
         device_derivative_seconds += device_native_source_seconds
 
     host_seconds = sum(
@@ -359,6 +376,26 @@ def _native_source_optimizer(
         witness.auxcell,
         parameters,
         bvk_kmesh=parameters.bvk_kmesh,
+    )
+
+
+def _scaled_source_parameters(cell, parameters, scale):
+    """Return an exact derivative-only SR/LR partition and matching mesh."""
+
+    scale = float(scale)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(
+            f"RSDF source derivative omega scale must be positive, got {scale}"
+        )
+    if scale == 1.0:
+        return parameters
+    omega = float(parameters.source_omega) * scale
+    cutoff = estimate_ke_cutoff_for_omega(cell, omega)
+    mesh = tuple(int(value) for value in cell.cutoff_to_mesh(cutoff))
+    return replace(
+        parameters,
+        source_omega=omega,
+        source_mesh=mesh,
     )
 
 
@@ -764,14 +801,44 @@ def _build_native_pair_adjoints(
         )
     source_adjoints = None
     if native_source:
-        source_adjoints = tuple(
-            push_cderi_adjoint_through_source(
-                factorization.factor,
-                adjoint,
-                overwrite=(observable_mode == "fused"),
-            )
-            for adjoint in cderi_adjoints
+        packed_gamma = (
+            observable_mode == "fused"
+            and int(pair[0]) == 0
+            and int(pair[1]) == 0
+            and len(reference) == 1
         )
+        if packed_gamma:
+            source_adjoints = tuple(
+                push_packed_gamma_adjoint_through_source(
+                    factorization.factor,
+                    adjoint,
+                )
+                for adjoint in cderi_adjoints
+            )
+            if fused_adjoint_memory is not None:
+                dense_bytes = sum(
+                    int(adjoint.nbytes) for adjoint in cderi_adjoints
+                )
+                packed_bytes = sum(
+                    int(adjoint.nbytes) for adjoint in source_adjoints
+                )
+                fused_adjoint_memory["packed_gamma"] = {
+                    "enabled": True,
+                    "dense_source_bytes": dense_bytes,
+                    "packed_source_bytes": packed_bytes,
+                    "resident_byte_reduction_fraction": (
+                        1.0 - packed_bytes / dense_bytes
+                    ),
+                }
+        else:
+            source_adjoints = tuple(
+                push_cderi_adjoint_through_source(
+                    factorization.factor,
+                    adjoint,
+                    overwrite=(observable_mode == "fused"),
+                )
+                for adjoint in cderi_adjoints
+            )
     return source_adjoints, metric_adjoints, fused_adjoint_memory
 
 
@@ -783,7 +850,7 @@ def _release_gamma_central_if_needed(
     *,
     minimum_reserve_bytes=2 * 1024**3,
 ):
-    """Evict rebuildable Gamma CDERI only when source sorting cannot fit."""
+    """Evict Gamma CDERI after its final adjoint use, before source sorting."""
 
     points = np.asarray(kpts, dtype=float).reshape(-1, 3)
     groups = tuple(source_adjoint_groups)
@@ -809,20 +876,22 @@ def _release_gamma_central_if_needed(
     phase_two_fits = phase_two_free >= fully_sorted_bytes + reserve
     metadata = {
         "released": False,
-        "reason": "source_sorting_already_fits",
+        "reason": "provider_does_not_support_cderi_eviction",
         "free_device_bytes_before": free_before,
         "source_adjoint_bytes": source_bytes,
         "ao_sorted_intermediate_bytes": int(ao_sorted_bytes),
         "fully_sorted_source_bytes": int(fully_sorted_bytes),
         "minimum_reserve_bytes": reserve,
+        "source_sorting_would_fit_without_release": bool(
+            phase_one_fits and phase_two_fits
+        ),
     }
-    if phase_one_fits and phase_two_fits:
-        return metadata
     release = getattr(provider, "release_cderi_cache", None)
     if release is None:
-        metadata["reason"] = "provider_does_not_support_cderi_eviction"
         return metadata
-    provider_metadata = release(reason="native_gamma_source_sorting")
+    provider_metadata = release(
+        reason="native_gamma_source_adjoint_complete"
+    )
     metadata.update(provider_metadata)
     return metadata
 

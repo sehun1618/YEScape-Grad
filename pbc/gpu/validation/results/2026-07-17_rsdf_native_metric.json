@@ -60,11 +60,11 @@
     "device_peak_explicit_working_bytes": 517588352
   },
   "source_queues": [
-    "pbc/benchmark/rsdf_r0_baseline.json"
+    "pbc/benchmark/backup/queues/rsdf_r0_baseline.json"
   ],
   "source_result_directories": [
-    "pbc/benchmark/results/rsdf_n2_fused_source_water8_2026-07-17",
-    "pbc/benchmark/results/rsdf_n2_fused_source_water20_2026-07-17",
-    "pbc/benchmark/results/rsdf_n3_native_metric_2026-07-17"
+    "pbc/benchmark/backup/results/rsdf_n2_fused_source_water8_2026-07-17",
+    "pbc/benchmark/backup/results/rsdf_n2_fused_source_water20_2026-07-17",
+    "pbc/benchmark/backup/results/rsdf_n3_native_metric_2026-07-17"
   ]
 }

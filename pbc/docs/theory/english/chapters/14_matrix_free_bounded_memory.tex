@@ -1,0 +1,200 @@
+\section{Matrix-free Z-vectors and bounded-memory response}
+\label{sec:matrix-free-bounded-memory}
+
+\subsection{Response dimension and dense-matrix cost}
+
+At k-point $\vk$, occupied--virtual rotations have complex dimension
+$n_o^{\vk}n_v^{\vk}$.  After the realification of
+Eq.~\eqref{eq:realified-coordinate}, the total real dimension is
+\begin{equation}
+  m=2\sum_{\vk}n_o^{\vk}n_v^{\vk}.
+  \label{eq:response-real-dimension}
+\end{equation}
+A dense real Hessian is $m\times m$ and its float64 storage alone is
+\begin{equation}
+  M_{\mathrm{dense}}=8m^2\ \text{bytes}.
+  \label{eq:dense-hessian-storage}
+\end{equation}
+Factorization and condition diagnostics require additional copies and
+workspace.  The dense route is useful for equation-level parity on small
+reference systems, but it is not a production scaling strategy.
+
+Each dense column requires one AX application to a basis vector $e_j$.  This
+does not mean that $m^2$ separate equations are solved; rather, $m$ operator
+actions are collected to materialize $m^2$ matrix elements.
+
+\subsection{Matrix-free Hessian actions}
+
+The matrix-free route never stores $A$.  For a trial vector $u$, it evaluates
+\begin{equation}
+  u\longmapsto D^{(1)}(u)
+  \longmapsto \delta J[D^{(1)}]-\tfrac12\delta K[D^{(1)}]
+  \longmapsto Au.
+  \label{eq:matrix-free-action}
+\end{equation}
+The first map constructs a Hermitian transition density from VO rotations.
+The second applies the selected FFTDF/GDF/RSDF central J/K provider.  The last
+projects the AO result back to VO blocks and adds the orbital-energy gap.
+
+If a Krylov solve takes 21 iterations, it does not select only 21 important
+components out of the $m$ unknowns.  Every iteration applies AX to a complete
+length-$m$ trial vector; 21 Krylov directions were sufficient to represent
+the solution to the requested residual.
+
+\subsection{MINRES and the energy-gap preconditioner}
+
+The realified HF Hessian is ideally real symmetric, but need not be positive
+definite.  MINRES is a Lanczos/Krylov method that reduces the residual norm
+for symmetric indefinite systems.  Starting from $z_0=0$, the order-$p$
+subspace is
+\begin{equation}
+  \mathcal K_p(A,b)
+  =\operatorname{span}\{b,Ab,A^2b,\ldots,A^{p-1}b\}.
+  \label{eq:minres-krylov}
+\end{equation}
+
+A simple preconditioner is the independent-particle gap,
+\begin{equation}
+  P_{ai\vk,ai\vk}=\varepsilon_a^{\vk}-\varepsilon_i^{\vk},
+  \qquad P^{-1}r\approx A^{-1}r.
+  \label{eq:gap-preconditioner}
+\end{equation}
+This does not approximate the final physical solution by dropping
+two-electron coupling.  MINRES still applies the full $A$; $P^{-1}$ rescales
+poorly conditioned directions so the Krylov subspace converges faster.
+Positive VO gaps, dtype, and k-point ordering are checked before iteration.
+
+Convergence is accepted using the explicitly recomputed equation residual
+\begin{equation}
+  \eta_z
+  =\frac{\|A_R^Tz_R+g_R\|_\infty}
+         {\max(1,\|g_R\|_\infty)}.
+  \label{eq:scaled-z-residual}
+\end{equation}
+If needed, iterative refinement solves
+\begin{equation}
+  A_R^T\delta z_R=-\left(A_R^Tz_R+g_R\right),
+  \qquad z_R\leftarrow z_R+\delta z_R
+  \label{eq:iterative-refinement}
+\end{equation}
+with the same matrix-free operator.
+
+\subsection{Symmetry, complex k-points, and solver selection}
+
+MINRES assumes that the realified operator is symmetric within numerical
+tolerance.  Incorrect reverse-pair conjugation, $1/N_k$, occupation factors,
+or J/K transposes increase $\|A_R-A_R^T\|$ in a dense test and can destabilize
+the matrix-free solve.  Small Gamma and sampled-k systems must establish
+dense/matrix-free parity for solutions, gradients, and residuals.
+
+An automatic policy may use dense reference solves at small $m$ and
+matrix-free solves at large $m$.  Rebuilding a large dense matrix merely to
+obtain an exact condition number defeats the purpose.  Production reports
+should state that the condition number was not evaluated and preserve the
+iteration count, residual, and minimum gap instead.
+
+\subsection{Batching nuclear sources}
+
+The Z-vector is solved once, but $B^{Ax}$ contains $3N_A$ perturbations.
+Materializing all AO/VO response tensors together scales approximately as
+\begin{equation}
+  M_B\sim 3N_A N_kN_{\mathrm{AO}}^2\,s_{\mathrm{dtype}}.
+  \label{eq:nuclear-batch}
+\end{equation}
+For a component batch $\mathcal C$, one evaluates
+\begin{equation}
+  g_{Ax}^{\mathrm{resp}}=z^TB^{Ax},\qquad (A,x)\in\mathcal C,
+\end{equation}
+and keeps only the scalar gradient.  The batch size is determined from free
+memory, dtype, AO dimension, and temporary count.  An OOM retry starts from
+the same component with a smaller batch and must not add completed
+components twice.
+
+\subsection{Adjoint contractions instead of full derivative tensors}
+
+Let a whitened three-center factor be $C=L^{-1}B$.  Its nuclear derivative is
+\begin{equation}
+  C^{Ax}=L^{-1}\left(B^{Ax}-L^{Ax}C\right),
+  \label{eq:bounded-cderi-derivative}
+\end{equation}
+but the gradient usually needs only
+\begin{equation}
+  \mathcal G^{Ax}=\operatorname{Re}\langle W_C,C^{Ax}\rangle.
+  \label{eq:reverse-contraction}
+\end{equation}
+Defining $W_B=L^{-\dagger}W_C$ gives
+\begin{equation}
+  \mathcal G^{Ax}
+  =\operatorname{Re}\langle W_B,B^{Ax}\rangle
+   -\operatorname{Re}\langle W_B,L^{Ax}C\rangle.
+  \label{eq:reverse-cderi-response}
+\end{equation}
+Source and metric derivative blocks can therefore be accumulated directly
+into scalars without storing a full
+$(3N_A,N_{\mathrm{aux}},N_{\mathrm{AO}}^2)$ tensor.  This is reverse-mode or
+adjoint algebra, not a screening approximation.
+
+\subsection{Signed two-density polarization}
+
+Write the fixed-density restricted-HF two-electron derivative as
+\begin{equation}
+  Q^{Ax}(X)
+  =\frac{1}{2N_k}\sum_{\vk}\operatorname{Re}
+   \Tr\left[X^{\vk}L^{Ax}[X]^{\vk}\right].
+  \label{eq:quadratic-derivative}
+\end{equation}
+Because $L^{Ax}$ is linear in density, the response between reference density
+$D$ and Z transition density $T$ obeys the exact polarization identity
+\begin{equation}
+  R_{2e}^{Z,Ax}=Q^{Ax}(D+T)-Q^{Ax}(D-T).
+  \label{eq:polarization-identity}
+\end{equation}
+The equivalent direct form is
+\begin{equation}
+  R_{2e}^{Z,Ax}
+  =\frac1{N_k}\sum_{\vk}\operatorname{Re}\left\{
+    \Tr[D^{\vk}L^{Ax}[T]^{\vk}]
+   +\Tr[T^{\vk}L^{Ax}[D]^{\vk}]
+  \right\}.
+  \label{eq:bilinear-response}
+\end{equation}
+
+Processing the signed states in one SR/LR/metric traversal can reuse grids
+and integrals that two independent quadratic traversals would read twice.
+Both Coulomb and exchange orientations, auxiliary-metric response, the Ewald
+exchange correction, and k-pair conjugation must be retained.  Evaluating
+only $D+T$ mixes self terms and is not Eq.~\eqref{eq:bilinear-response}.
+
+\subsection{Streaming, block size, and object lifetime}
+
+If a reciprocal derivative treats $b_G$ vectors and all AO pairs together,
+the main working set scales as
+\begin{equation}
+  M_{\mathrm{block}}
+  \sim b_GN_kN_{AO}^2s_{\mathrm{complex}}\,n_{\mathrm{temporary}}.
+  \label{eq:block-working-set}
+\end{equation}
+Reducing $b_G$ lowers peak memory while retaining every reciprocal vector.
+Smaller blocks may add kernel launches, so a free-memory fraction and a hard
+cap are used together and the resolved block size and count are reported.
+
+CDERI, multigrid tasks, and response temporaries should also be released
+after their last consumer.  The central distinction is
+\begin{equation}
+  \underbrace{\text{batching, streaming, adjoint, lifetime}}_{\text{same finite representation}}
+  \neq
+  \underbrace{\text{looser screening, smaller mesh, smaller basis}}_{\text{changed representation}}.
+  \label{eq:algebra-vs-approx}
+\end{equation}
+The first group must agree within roundoff and is tested by parity.  The
+second changes both cost and accuracy and requires a convergence study.
+
+\subsection{Algorithmic references}
+
+MINRES was introduced by C.~C. Paige and M.~A. Saunders,
+\href{https://doi.org/10.1137/0712047}{SIAM J. Numer. Anal. 12, 617--629
+(1975)}.  This project combines that general algorithm with an HF Hessian
+action and orbital-gap preconditioner.  The PySCF design and periodic Gaussian
+framework are described by
+\href{https://doi.org/10.1002/wcms.1340}{Sun et al., WIREs Comput. Mol. Sci.
+8, e1340 (2018)}.

@@ -12,6 +12,11 @@ from pyscf.pbc.tools.k2gamma import double_translation_indices
 from pyscf_pbc_dcdft.df.gdf.storage import canonical_pairs
 
 from . import source_reciprocal, source_short_range
+from .packed_gamma import (
+    PackedGammaSourceAdjoint,
+    SortedPackedGammaSources,
+    transform_gamma_sources_to_sorted_packed,
+)
 
 
 @dataclass(frozen=True)
@@ -80,18 +85,35 @@ def contract_gamma_sources_profiled(
         original_ao_order=False,
     )[0]
     events[1].record()
-    short_range = source_short_range.contract_gamma_batch(
-        optimizer,
-        sources,
-        pair_addresses,
-    )
+    short_range_diagnostics = {}
+    if isinstance(sources, SortedPackedGammaSources):
+        short_range = source_short_range.contract_gamma_packed_batch(
+            optimizer,
+            sources,
+            pair_addresses,
+            diagnostics=short_range_diagnostics,
+        )
+    else:
+        short_range = source_short_range.contract_gamma_batch(
+            optimizer,
+            sources,
+            pair_addresses,
+        )
     events[2].record()
     reciprocal_memory = {}
-    reciprocal = source_reciprocal.contract_gamma_batch(
-        optimizer,
-        sources,
-        diagnostics=reciprocal_memory,
-    )
+    if isinstance(sources, SortedPackedGammaSources):
+        reciprocal = source_reciprocal.contract_gamma_packed_batch(
+            optimizer,
+            sources,
+            diagnostics=reciprocal_memory,
+        )
+    else:
+        reciprocal = source_reciprocal.contract_gamma_batch(
+            optimizer,
+            sources,
+            diagnostics=reciprocal_memory,
+        )
+    reciprocal_memory["short_range_batching"] = short_range_diagnostics
     events[3].record()
     events[3].synchronize()
     return _source_result(
@@ -274,6 +296,17 @@ def _gamma_source_batch(optimizer, source_adjoints, *, consume=False):
     adjoints = source_adjoints if consume else list(source_adjoints)
     if not adjoints:
         raise ValueError("at least one Gamma source adjoint is required")
+    if all(isinstance(adjoint, PackedGammaSourceAdjoint) for adjoint in adjoints):
+        sources = tuple(adjoints)
+        transformed = transform_gamma_sources_to_sorted_packed(
+            optimizer,
+            sources,
+        )
+        if consume:
+            adjoints.clear()
+        return transformed
+    if any(isinstance(adjoint, PackedGammaSourceAdjoint) for adjoint in adjoints):
+        raise TypeError("cannot mix packed and dense Gamma source adjoints")
     if len(adjoints) == 1:
         if consume:
             return _sorted_gamma_source_owned(optimizer, adjoints)[None]

@@ -65,6 +65,102 @@ class GammaFactorizationAdjoint:
         return value.real
 
 
+@dataclass(frozen=True)
+class GammaPrimitiveAdjoint:
+    """Primitive three-center and metric sources for one Gamma response.
+
+    ``source[p]`` contracts with the derivative of the unorthogonalized
+    three-center matrix ``B[p]``. ``metric[p, q]`` contracts with ``dM``.
+    Both arrays are built from one metric-solved tensor ``W=M^-1 B`` and do
+    not require the two full-rank quadratic states ``D+T`` and ``D-T``.
+    """
+
+    source: cp.ndarray
+    metric: cp.ndarray
+
+
+def build_gamma_primitive_adjoint(
+    metric_solved_source,
+    reference_density,
+    response_density,
+    *,
+    include_target_j=False,
+) -> GammaPrimitiveAdjoint:
+    """Build direct Gamma ``dB``/``dM`` sources for target J and Z response.
+
+    Expanding ``Q(D+T)-Q(D-T)`` gives the same restricted-HF response using
+    only cross terms.  ``include_target_j`` additionally includes the
+    selected-density Coulomb derivative at ``D``.
+    """
+
+    solved = _real_gamma_matrix_stack(
+        metric_solved_source,
+        name="metric_solved_source",
+    )
+    reference = _real_gamma_density(
+        reference_density,
+        name="reference_density",
+    )
+    response = _real_gamma_density(
+        response_density,
+        name="response_density",
+    )
+    if reference.shape != response.shape:
+        raise ValueError(
+            "reference and response densities must have the same shape, "
+            f"got {reference.shape} and {response.shape}"
+        )
+    if solved.shape[1:] != reference.shape:
+        raise ValueError(
+            f"metric-solved AO shape {solved.shape[1:]} does not match "
+            f"density shape {reference.shape}"
+        )
+
+    auxiliary_reference = cp.einsum(
+        "pij,ji->p", solved, reference, optimize=True
+    )
+    auxiliary_response = cp.einsum(
+        "pij,ji->p", solved, response, optimize=True
+    )
+
+    source = 2.0 * (
+        reference[:, :, None] * auxiliary_response[None, None, :]
+        + response[:, :, None] * auxiliary_reference[None, None, :]
+    )
+    source -= cp.einsum(
+        "ij,pjk,kl->ilp",
+        reference,
+        solved,
+        response,
+        optimize=True,
+    )
+    source -= cp.einsum(
+        "ij,pjk,kl->ilp",
+        response,
+        solved,
+        reference,
+        optimize=True,
+    )
+    if include_target_j:
+        source += (
+            reference[:, :, None]
+            * auxiliary_reference[None, None, :]
+        )
+
+    source = source.transpose(2, 0, 1)
+    # For the inverse-metric representation, the complete metric source is
+    # the contraction of the primitive-source adjoint with W.  This identity
+    # avoids two additional ``(naux, nao, nao)`` transformed-density tensors.
+    metric = cp.einsum(
+        "pij,qij->pq", source, solved, optimize=True
+    )
+
+    return GammaPrimitiveAdjoint(
+        source=source,
+        metric=metric,
+    )
+
+
 def build_gamma_signed_density_source(
     cderi,
     reference_density,

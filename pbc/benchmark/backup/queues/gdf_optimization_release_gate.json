@@ -1,7 +1,7 @@
 {
-  "output_root": "results/gdf_optimization_release_gate_2026-07-16",
+  "output_root": "../results/gdf_optimization_release_gate_2026-07-16",
   "defaults": {
-    "atom_file": "structures/h2.xyz",
+    "atom_file": "../../structures/h2.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [8.0, 0.0, 0.0],
@@ -54,19 +54,19 @@
       "name": "h2o_full_fd_cpu_gamma",
       "device": "cpu",
       "df_backend": "gdf",
-      "atom_file": "structures/water1.xyz"
+      "atom_file": "../../structures/water1.xyz"
     },
     {
       "name": "h2o_full_fd_gpu_gamma",
       "device": "gpu",
       "df_backend": "gdf",
-      "atom_file": "structures/water1.xyz"
+      "atom_file": "../../structures/water1.xyz"
     },
     {
       "name": "water20_selected_fd_gpu_gamma",
       "device": "gpu",
       "df_backend": "gdf",
-      "atom_file": "structures/water20.xyz",
+      "atom_file": "../../structures/water20.xyz",
       "lattice_vectors": [
         [10.0, 0.0, 0.0],
         [0.0, 10.0, 0.0],

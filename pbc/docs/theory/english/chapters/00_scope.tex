@@ -60,11 +60,13 @@ scope:
   \item Gamma-point and general sampled k-point meshes,
   \item PBE, SCAN, and r2SCAN target DFAs,
   \item FFTDF, GDF, and RSDF two-electron representations,
+  \item GPU target multigrid XC or J+XC selected independently of source DF,
+  \item dense-reference and production matrix-free Z-vectors,
   \item CPU and GPU implementations, and
   \item energies and nuclear analytic gradients at fixed lattice vectors.
 \end{itemize}
 
-Stress and cell derivatives, target-only multigrid, the larger-angular-momentum
+Stress and cell derivatives, multigrid pseudopotentials, the larger-angular-momentum
 completion matrix, and open-shell/UHF response are excluded from the active
 scope and preserved in a separate archive.  Accordingly, ``analytic gradient''
 always denotes $\partial E/\partial R_{Ax}$ at fixed cell in this document.
@@ -78,7 +80,9 @@ Sec.~\ref{sec:fixed-density-energy} defines the target energy evaluated on a
 fixed HF density.  Sections~\ref{sec:orbital-response} and
 \ref{sec:dc-lagrangian} derive the nonvariational response and the total
 gradient.  Subsequent sections develop the explicit derivatives for GTH,
-FFTDF, GDF, MGGA, and RSDF, followed by numerical validation procedures.
+FFTDF, GDF, MGGA, and RSDF, followed by target-multigrid ownership,
+matrix-free and bounded-memory response algorithms, a worked workflow, and
+numerical validation procedures.
 
 The word ``exact'' must be interpreted at two distinct levels.  First, within
 a chosen finite basis, mesh, auxiliary basis, and k-point representation, the

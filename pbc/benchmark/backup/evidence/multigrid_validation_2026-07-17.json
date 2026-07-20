@@ -14,7 +14,7 @@
     "multigrid_pp": "deferred by profile"
   },
   "correctness": {
-    "queue": "multigrid_correctness_gate.json",
+    "queue": "pbc/benchmark/backup/queues/multigrid_correctness_gate.json",
     "case_count": 10,
     "failed_cases": 0,
     "coverage": [

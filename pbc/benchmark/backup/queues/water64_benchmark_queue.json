@@ -1,7 +1,7 @@
 {
-  "output_root": "results/water64_rsdf_benchmark_SZ",
+  "output_root": "../results/water64_benchmark_DZ",
   "defaults": {
-    "atom_file": "structures/water64.xyz",
+    "atom_file": "../../structures/water64.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [12.4139, 0.0, 0.0],
@@ -9,12 +9,13 @@
       [0.0, 0.0, 12.4139]
     ],
     "lattice_unit": "Angstrom",
-    "basis": "SZV-GTH",
+    "basis": "DZVP-GTH",
     "pseudo": {
       "H": "GTH-SCAN-q1",
       "O": "GTH-SCAN-q6"
     },
-    "auxbasis": "SZV-GTH",
+    "auxbasis": "DZVP-GTH",
+    "gdf_setup_mode": "native",
     "ke_cutoff_ha": 500.0,
     "precision": 1e-9,
     "kmesh": [1, 1, 1],
@@ -40,7 +41,7 @@
     {
       "name": "selected_fd_check",
       "device": "gpu",
-      "df_backend": "rsdf",
+      "df_backend": "gdf",
       "run_fd": false,
       "fd_atoms": [
         0, 1, 2,
