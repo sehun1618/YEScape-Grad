@@ -26,6 +26,7 @@ from ..gdf.jk_derivative import (
     pair_block,
 )
 from .packed_gamma import (
+    PackedGammaCDERIAdjoint,
     PackedGammaSourceAdjoint,
     pack_gamma_cderi_adjoint,
 )
@@ -266,6 +267,171 @@ def build_pair_fused_cderi_adjoint(
         memory_diagnostics.clear()
         memory_diagnostics.update({"plan": plan, "execution": execution})
     return fused
+
+
+def build_pair_fused_gamma_cderi_adjoint(
+    cderi,
+    pair,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    memory_fraction=DEFAULT_FUSED_ADJOINT_MEMORY_FRACTION,
+    minimum_reserve_bytes=DEFAULT_FUSED_ADJOINT_RESERVE_BYTES,
+    max_auxiliary_block=DEFAULT_FUSED_ADJOINT_MAX_AUX_BLOCK,
+    memory_diagnostics=None,
+) -> PackedGammaCDERIAdjoint:
+    """Build a real Gamma fused adjoint directly in lower-triangle storage.
+
+    Only one bounded auxiliary tile is dense at a time.  The production
+    output is allocated as ``(naux,npair)`` C-contiguous storage and exposed
+    as its zero-copy ``(npair,naux)`` transpose.  The following triangular
+    source solve can therefore overwrite the same allocation without making
+    another packed-sized right-hand-side copy.
+    """
+
+    canonical = (int(pair[0]), int(pair[1]))
+    if canonical != (0, 0) or len(reference) != 1:
+        raise ValueError(
+            "direct packed fused assembly is restricted to single-k Gamma"
+        )
+    central = pair_block(cderi, *canonical)
+    (
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        dtype,
+    ) = _prepare_adjoint_operands(
+        canonical,
+        central,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+    )
+    if cp.dtype(dtype).kind == "c":
+        raise ValueError(
+            "direct packed Gamma assembly requires a numerically real "
+            "CDERI and density response"
+        )
+
+    naux, nao, _unused = central.shape
+    pair_count = int(nao * (nao + 1) // 2)
+    storage = cp.empty((naux, pair_count), dtype=dtype)
+    row, column = cp.tril_indices(int(nao))
+    normalization = float(len(reference) ** 2)
+    plan = plan_fused_adjoint_auxiliary_blocks(
+        naux,
+        nao,
+        dtype,
+        memory_fraction=memory_fraction,
+        minimum_reserve_bytes=minimum_reserve_bytes,
+        maximum_block_size=max_auxiliary_block,
+    )
+    execution = _execute_fused_gamma_packed_blocks(
+        storage,
+        row,
+        column,
+        cderi,
+        canonical,
+        reference,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        normalization=normalization,
+        initial_block_size=plan["initial_block_size"],
+    )
+    packed_bytes = int(storage.nbytes)
+    dense_equivalent_bytes = int(naux * nao**2 * cp.dtype(dtype).itemsize)
+    if memory_diagnostics is not None:
+        memory_diagnostics.clear()
+        memory_diagnostics.update(
+            {
+                "plan": plan,
+                "execution": execution,
+                "storage": {
+                    "mode": "gamma_lower_triangle_from_origin",
+                    "packed_output_bytes": packed_bytes,
+                    "dense_output_equivalent_bytes": dense_equivalent_bytes,
+                    "dense_output_allocation_avoided_bytes": (
+                        dense_equivalent_bytes
+                    ),
+                    "resident_bytes_saved": (
+                        dense_equivalent_bytes - packed_bytes
+                    ),
+                    "resident_byte_reduction_fraction": (
+                        1.0 - packed_bytes / dense_equivalent_bytes
+                    ),
+                },
+            }
+        )
+    return PackedGammaCDERIAdjoint(values=storage.T, nao=int(nao))
+
+
+def _execute_fused_gamma_packed_blocks(
+    output,
+    row,
+    column,
+    cderi,
+    pair,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    normalization,
+    initial_block_size,
+):
+    """Assemble complete packed auxiliary tiles with transactional rebatch."""
+
+    naux = int(output.shape[0])
+    start = 0
+    block_size = max(1, min(naux, int(initial_block_size)))
+    minimum_block_size = block_size
+    block_count = 0
+    rebatch_count = 0
+    while start < naux:
+        stop = min(naux, start + block_size)
+        dense = None
+        packed = None
+        try:
+            dense = _build_fused_adjoint_block(
+                cderi,
+                pair,
+                reference,
+                response,
+                auxiliary_reference,
+                auxiliary_response,
+                start=start,
+                stop=stop,
+                normalization=normalization,
+                dtype=output.dtype,
+            )
+            packed = cp.ascontiguousarray(dense[:, row, column])
+        except Exception as error:
+            if not _is_gpu_out_of_memory(error) or stop - start <= 1:
+                raise
+            del dense, packed
+            block_size = max(1, (stop - start) // 2)
+            minimum_block_size = min(minimum_block_size, block_size)
+            rebatch_count += 1
+            _release_unused_gpu_memory()
+            continue
+        output[start:stop] = packed
+        del dense, packed
+        minimum_block_size = min(minimum_block_size, stop - start)
+        block_count += 1
+        start = stop
+    return {
+        "completed_auxiliary_count": naux,
+        "initial_block_size": int(initial_block_size),
+        "final_block_size": int(block_size),
+        "minimum_block_size": int(minimum_block_size),
+        "block_count": int(block_count),
+        "rebatch_count": int(rebatch_count),
+    }
 
 
 def plan_fused_adjoint_auxiliary_blocks(
@@ -645,8 +811,13 @@ def push_packed_gamma_adjoint_through_source(
 ) -> PackedGammaSourceAdjoint:
     """Pack a Gamma adjoint, then solve only unique AO-pair right sides."""
 
-    packed = pack_gamma_cderi_adjoint(cderi_adjoint)
-    rhs = cp.ascontiguousarray(packed.values.T)
+    if isinstance(cderi_adjoint, PackedGammaCDERIAdjoint):
+        packed = cderi_adjoint
+    else:
+        packed = pack_gamma_cderi_adjoint(cderi_adjoint)
+    rhs = packed.values.T
+    if not rhs.flags.c_contiguous:
+        rhs = cp.ascontiguousarray(rhs)
     solved = push_cderi_adjoint_through_source(
         factor,
         rhs,

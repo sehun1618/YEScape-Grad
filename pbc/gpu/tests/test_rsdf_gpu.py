@@ -49,10 +49,12 @@ from gpu4pyscf_pbc_dcdft.df.rsdf import (
 from gpu4pyscf_pbc_dcdft.df.rsdf.source_adjoint import (
     build_pair_cderi_adjoints,
     build_pair_fused_cderi_adjoint,
+    build_pair_fused_gamma_cderi_adjoint,
     build_pair_source_adjoints,
     contract_source_derivative,
     plan_fused_adjoint_auxiliary_blocks,
     push_cderi_adjoint_through_source,
+    push_packed_gamma_adjoint_through_source,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.metric_adjoint import (
     build_pair_metric_adjoints,
@@ -63,6 +65,7 @@ from gpu4pyscf_pbc_dcdft.df.rsdf.metric_native import (
     build_metric_contraction_context,
 )
 from gpu4pyscf_pbc_dcdft.df.rsdf.packed_gamma import (
+    PackedGammaCDERIAdjoint,
     pack_gamma_cderi_adjoint,
     transform_gamma_sources_to_sorted_packed,
     unpack_lower_triangle,
@@ -338,6 +341,150 @@ class RSDFGPUParityTest(unittest.TestCase):
             max_auxiliary_block=1,
         )
         self.assertEqual(retained.dtype, cp.complex128)
+
+    def test_fused_gamma_builds_packed_from_origin(self):
+        rng = np.random.default_rng(37)
+        naux, nao = 4, 5
+        central = {(0, 0): cp.asarray(rng.normal(size=(naux, nao, nao)))}
+        central[(0, 0)] += central[(0, 0)].transpose(0, 2, 1)
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        reference += reference.transpose(0, 2, 1)
+        response = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response += response.transpose(0, 2, 1)
+        auxiliary_reference = auxiliary_density_contraction(
+            central, reference
+        )
+        auxiliary_response = auxiliary_density_contraction(
+            central, response
+        )
+        dense = build_pair_fused_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+        )
+        diagnostics = {}
+        packed = build_pair_fused_gamma_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+            memory_diagnostics=diagnostics,
+        )
+        expected = pack_gamma_cderi_adjoint(dense)
+
+        self.assertIsInstance(packed, PackedGammaCDERIAdjoint)
+        self.assertTrue(packed.values.T.flags.c_contiguous)
+        np.testing.assert_allclose(
+            cp.asnumpy(packed.values),
+            cp.asnumpy(expected.values),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+        storage = diagnostics["storage"]
+        self.assertEqual(storage["mode"], "gamma_lower_triangle_from_origin")
+        self.assertLess(
+            storage["packed_output_bytes"],
+            storage["dense_output_equivalent_bytes"],
+        )
+
+    def test_prepacked_gamma_source_solve_reuses_storage(self):
+        rng = np.random.default_rng(38)
+        naux, nao = 4, 3
+        factor = np.tril(rng.normal(size=(naux, naux)))
+        factor[np.diag_indices(naux)] += 5.0
+        dense = cp.asarray(rng.normal(size=(naux, nao, nao)))
+        dense += dense.transpose(0, 2, 1)
+        expected = push_packed_gamma_adjoint_through_source(
+            cp.asarray(factor),
+            dense.copy(),
+        )
+        lower = pack_gamma_cderi_adjoint(dense)
+        storage = cp.ascontiguousarray(lower.values.T)
+        packed = PackedGammaCDERIAdjoint(values=storage.T, nao=nao)
+        pointer = packed.values.data.ptr
+        actual = push_packed_gamma_adjoint_through_source(
+            cp.asarray(factor),
+            packed,
+        )
+
+        self.assertEqual(actual.values.data.ptr, pointer)
+        np.testing.assert_allclose(
+            cp.asnumpy(actual.values),
+            cp.asnumpy(expected.values),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+
+    def test_fused_gamma_packed_oom_retries_without_partial_commit(self):
+        rng = np.random.default_rng(39)
+        naux, nao = 4, 3
+        central = {(0, 0): cp.asarray(rng.normal(size=(naux, nao, nao)))}
+        central[(0, 0)] += central[(0, 0)].transpose(0, 2, 1)
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        reference += reference.transpose(0, 2, 1)
+        response = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response += response.transpose(0, 2, 1)
+        auxiliary_reference = auxiliary_density_contraction(
+            central, reference
+        )
+        auxiliary_response = auxiliary_density_contraction(
+            central, response
+        )
+        expected = build_pair_fused_gamma_cderi_adjoint(
+            central,
+            (0, 0),
+            reference,
+            response,
+            auxiliary_reference,
+            auxiliary_response,
+            max_auxiliary_block=1,
+        )
+        original = source_adjoint_module._build_fused_adjoint_block
+        failed = False
+
+        def fail_first_large_block(*args, start, stop, **kwargs):
+            nonlocal failed
+            if not failed and stop - start > 1:
+                failed = True
+                raise RuntimeError("cudaErrorMemoryAllocation: out of memory")
+            return original(*args, start=start, stop=stop, **kwargs)
+
+        diagnostics = {}
+        with mock.patch.object(
+            source_adjoint_module,
+            "_build_fused_adjoint_block",
+            side_effect=fail_first_large_block,
+        ):
+            actual = build_pair_fused_gamma_cderi_adjoint(
+                central,
+                (0, 0),
+                reference,
+                response,
+                auxiliary_reference,
+                auxiliary_response,
+                memory_fraction=1.0,
+                minimum_reserve_bytes=0,
+                max_auxiliary_block=naux,
+                memory_diagnostics=diagnostics,
+            )
+
+        np.testing.assert_allclose(
+            cp.asnumpy(actual.values),
+            cp.asnumpy(expected.values),
+            atol=1.0e-11,
+            rtol=1.0e-11,
+        )
+        execution = diagnostics["execution"]
+        self.assertEqual(execution["rebatch_count"], 1)
+        self.assertEqual(execution["completed_auxiliary_count"], naux)
+        self.assertEqual(execution["final_block_size"], 2)
 
     def test_fused_adjoint_oom_retries_without_partial_commit(self):
         rng = np.random.default_rng(32)
@@ -1527,6 +1674,41 @@ class RSDFGPUParityTest(unittest.TestCase):
             rtol=1.0e-6,
         )
 
+    def test_packed_gamma_metric_adjoint_matches_dense(self):
+        rng = np.random.default_rng(45)
+        naux, nao = 5, 4
+        factor = np.tril(rng.normal(size=(naux, naux)))
+        factor[np.diag_indices(naux)] += 6.0
+        value = cp.asarray(rng.normal(size=(naux, nao, nao)))
+        value += value.transpose(0, 2, 1)
+        dense = cp.asarray(rng.normal(size=(naux, nao, nao)))
+        dense += dense.transpose(0, 2, 1)
+        factorization = CDERIFactorization(
+            factor=cp.asarray(factor),
+            value=value,
+            nao=nao,
+        )
+        lower = pack_gamma_cderi_adjoint(dense)
+        packed = PackedGammaCDERIAdjoint(
+            values=cp.ascontiguousarray(lower.values.T).T,
+            nao=nao,
+        )
+
+        actual = push_cderi_adjoint_through_metric(
+            factorization,
+            packed,
+        )
+        expected = push_cderi_adjoint_through_metric(
+            factorization,
+            dense,
+        )
+        np.testing.assert_allclose(
+            cp.asnumpy(actual),
+            cp.asnumpy(expected),
+            atol=1.0e-10,
+            rtol=1.0e-10,
+        )
+
     def test_native_metric_contraction_matches_cpu_primitives(self):
         rng = np.random.default_rng(47)
         for kmesh in ((1, 1, 1), (2, 1, 1)):
@@ -1801,6 +1983,20 @@ class RSDFGPUParityTest(unittest.TestCase):
                 "completed_auxiliary_count"
             ],
             int(method.with_df.auxcell.nao_nr()),
+        )
+        self.assertEqual(
+            fused_memory["pairs"][0]["storage"]["mode"],
+            "gamma_lower_triangle_from_origin",
+        )
+        self.assertTrue(
+            fused_memory["pairs"][0]["packed_gamma"][
+                "built_packed_from_origin"
+            ]
+        )
+        self.assertFalse(
+            fused_memory["pairs"][0]["packed_gamma_metric"][
+                "dense_cderi_adjoint_reconstructed"
+            ]
         )
         self.assertNotIn(
             "RSDF three-center source value",

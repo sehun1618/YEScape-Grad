@@ -33,6 +33,7 @@ from .metric_native import build_metric_contraction_context
 from .source_adjoint import (
     build_pair_cderi_adjoints,
     build_pair_fused_cderi_adjoint,
+    build_pair_fused_gamma_cderi_adjoint,
     push_cderi_adjoint_through_source,
     push_packed_gamma_adjoint_through_source,
 )
@@ -768,10 +769,21 @@ def _build_native_pair_adjoints(
     if not native_source and not native_metric:
         return None, None, None
     fused_adjoint_memory = None
+    packed_gamma = (
+        observable_mode == "fused"
+        and int(pair[0]) == 0
+        and int(pair[1]) == 0
+        and len(reference) == 1
+    )
     if observable_mode == "fused":
         fused_adjoint_memory = {}
+        builder = (
+            build_pair_fused_gamma_cderi_adjoint
+            if packed_gamma
+            else build_pair_fused_cderi_adjoint
+        )
         cderi_adjoints = (
-            build_pair_fused_cderi_adjoint(
+            builder(
                 central,
                 pair,
                 reference,
@@ -799,15 +811,18 @@ def _build_native_pair_adjoints(
             )
             for adjoint in cderi_adjoints
         )
+        if packed_gamma and fused_adjoint_memory is not None:
+            fused_adjoint_memory["packed_gamma_metric"] = {
+                "enabled": True,
+                "mode": "weighted_pair_block_contraction",
+                "dense_cderi_adjoint_reconstructed": False,
+            }
     source_adjoints = None
     if native_source:
-        packed_gamma = (
-            observable_mode == "fused"
-            and int(pair[0]) == 0
-            and int(pair[1]) == 0
-            and len(reference) == 1
-        )
         if packed_gamma:
+            packed_cderi_bytes = sum(
+                int(adjoint.nbytes) for adjoint in cderi_adjoints
+            )
             source_adjoints = tuple(
                 push_packed_gamma_adjoint_through_source(
                     factorization.factor,
@@ -816,18 +831,27 @@ def _build_native_pair_adjoints(
                 for adjoint in cderi_adjoints
             )
             if fused_adjoint_memory is not None:
-                dense_bytes = sum(
-                    int(adjoint.nbytes) for adjoint in cderi_adjoints
+                storage = fused_adjoint_memory.get("storage", {})
+                dense_equivalent_bytes = int(
+                    storage.get(
+                        "dense_output_equivalent_bytes",
+                        packed_cderi_bytes,
+                    )
                 )
                 packed_bytes = sum(
                     int(adjoint.nbytes) for adjoint in source_adjoints
                 )
                 fused_adjoint_memory["packed_gamma"] = {
                     "enabled": True,
-                    "dense_source_bytes": dense_bytes,
+                    "built_packed_from_origin": (
+                        storage.get("mode")
+                        == "gamma_lower_triangle_from_origin"
+                    ),
+                    "packed_cderi_bytes": packed_cderi_bytes,
+                    "dense_source_bytes": dense_equivalent_bytes,
                     "packed_source_bytes": packed_bytes,
                     "resident_byte_reduction_fraction": (
-                        1.0 - packed_bytes / dense_bytes
+                        1.0 - packed_bytes / dense_equivalent_bytes
                     ),
                 }
         else:

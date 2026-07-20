@@ -27,6 +27,12 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### GDF and RSDF GPU response
 
+- Build the production single-Gamma RSDF fused CDERI adjoint directly in
+  lower-triangle AO-pair storage.  Source reversal overwrites that allocation,
+  while the metric adjoint contracts weighted packed pairs in bounded blocks;
+  the former full `(naux,nao,nao)` adjoint and packed RHS copy are absent.
+  Add a paired Water64/DZ development queue for user-run GDF and RSDF memory
+  confirmation; the large calculation is not part of the automated gate.
 - Repair the Water64/DZ Gamma GDF reverse-adjoint high-water path: keep the
   metric solve real before allocating its AO-square stack, retire the
   zero-order primitive tensor before source assembly, reduce imaginary-part

@@ -20,6 +20,10 @@ from ..gdf.jk_derivative import (
     pair_block,
 )
 from .source_adjoint import build_pair_cderi_adjoints
+from .packed_gamma import (
+    PackedGammaCDERIAdjoint,
+    packed_pair_weights,
+)
 
 
 @dataclass(frozen=True)
@@ -105,15 +109,21 @@ def push_cderi_adjoint_through_metric(factorization, cderi_adjoint):
 
     factor_array = cp.asarray(factorization.factor)
     value = cp.asarray(factorization.value)
-    value_flat = value.reshape(value.shape[0], -1)
-    adjoint_flat = cp.asarray(cderi_adjoint).reshape(value.shape[0], -1)
+    if isinstance(cderi_adjoint, PackedGammaCDERIAdjoint):
+        gauge_adjoint = -_packed_gamma_metric_product(
+            cderi_adjoint,
+            value,
+        )
+    else:
+        value_flat = value.reshape(value.shape[0], -1)
+        adjoint_flat = cp.asarray(cderi_adjoint).reshape(value.shape[0], -1)
+
+        # Build only the small (naux,naux) mixed-dtype result.  Casting either
+        # large operand to a common complex dtype can add tens of GiB.
+        gauge_adjoint = -_plain_mixed_product(adjoint_flat, value_flat.T)
 
     # dC_metric = -Phi(L^-1 dM L^-H) C.  Phi retains the strict lower
     # triangle and half of the real diagonal in the Cholesky gauge.
-    # Build only the small (naux,naux) mixed-dtype result.  Casting either
-    # (naux,nao**2) operand to a common complex dtype can add tens of GiB for
-    # larger Gamma cells even though the final metric adjoint is small.
-    gauge_adjoint = -_plain_mixed_product(adjoint_flat, value_flat.T)
     reduced_adjoint = cp.tril(gauge_adjoint, k=-1)
     reduced_adjoint += cp.diag(0.5 * cp.diag(gauge_adjoint))
 
@@ -128,6 +138,54 @@ def push_cderi_adjoint_through_metric(factorization, cderi_adjoint):
         check_finite=False,
     )
     return inverse.T @ reduced_adjoint @ inverse.conj()
+
+
+def _packed_gamma_metric_product(
+    adjoint,
+    value,
+    *,
+    maximum_pair_block=DEFAULT_METRIC_PRODUCT_INNER_BLOCK,
+):
+    """Return the dense-pair product from unique real-symmetric AO pairs.
+
+    The dense contraction sums both ``(i,j)`` and ``(j,i)``.  Packed storage
+    therefore uses weight one on the diagonal and two off diagonal.  CDERI is
+    gathered from the already-resident dense central block only for the
+    current pair tile; no packed copy of the full central CDERI is retained.
+    """
+
+    if not isinstance(adjoint, PackedGammaCDERIAdjoint):
+        raise TypeError("adjoint must be PackedGammaCDERIAdjoint")
+    value = cp.asarray(value)
+    naux = int(value.shape[0])
+    nao = int(adjoint.nao)
+    expected_pairs = nao * (nao + 1) // 2
+    if value.shape != (naux, nao, nao):
+        raise ValueError(
+            "Gamma CDERI must have shape "
+            f"({naux},{nao},{nao}), got {value.shape}"
+        )
+    if adjoint.values.shape != (expected_pairs, naux):
+        raise ValueError(
+            "packed Gamma adjoint must have shape "
+            f"({expected_pairs},{naux}), got {adjoint.values.shape}"
+        )
+
+    dtype = cp.result_type(adjoint.dtype, value.dtype)
+    product = cp.zeros((naux, naux), dtype=dtype)
+    row, column = cp.tril_indices(nao)
+    weights = packed_pair_weights(nao, dtype=adjoint.dtype)
+    block_size = max(1, int(maximum_pair_block))
+    for start in range(0, expected_pairs, block_size):
+        stop = min(expected_pairs, start + block_size)
+        weighted_adjoint = (
+            adjoint.values[start:stop]
+            * weights[start:stop, None]
+        )
+        central = value[:, row[start:stop], column[start:stop]].T
+        product += _plain_mixed_product(weighted_adjoint.T, central)
+        del weighted_adjoint, central
+    return product
 
 
 def _plain_mixed_product(left, right):

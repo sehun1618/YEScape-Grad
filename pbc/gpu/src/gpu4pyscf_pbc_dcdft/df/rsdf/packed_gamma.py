@@ -11,6 +11,26 @@ DEFAULT_TRANSFORM_AUXILIARY_BLOCK = 32
 
 
 @dataclass(frozen=True)
+class PackedGammaCDERIAdjoint:
+    """Physical-basis lower-triangle CDERI adjoint before source solve."""
+
+    values: cp.ndarray
+    nao: int
+
+    @property
+    def nbytes(self) -> int:
+        return int(self.values.nbytes)
+
+    @property
+    def dtype(self):
+        return self.values.dtype
+
+    @property
+    def shape(self):
+        return self.values.shape
+
+
+@dataclass(frozen=True)
 class PackedGammaSourceAdjoint:
     """Physical-basis lower-triangle source with ``(npair,naux)`` storage."""
 

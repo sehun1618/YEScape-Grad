@@ -417,6 +417,29 @@ Water8/Water20에서 N3 gradient와의 최대 차이는 각각 $7.42\times10^{-1
 $6.18\times10^{-14}$ Ha/Bohr였다. RSDF 14개와 MGGA 4개 회귀가 모두 통과했으며
 Water64는 이 검증에서 실행하지 않았다.
 
+### 9.1 Gamma adjoint를 처음부터 packed로 만드는 경로
+
+Water64/DZ의 physical dimension은 `naux = nao = 1472`이다. 실수 dense fused CDERI
+adjoint 하나도 약 23.8 GiB이며, 이를 만든 뒤 하삼각으로 pack하면 peak에서는 dense와
+packed가 동시에 살아 있게 된다. 현재 single-Gamma production 경로는 이 순서를
+뒤집는다.
+
+1. 최종 배열을 `npair = nao(nao+1)/2`만 갖는 `(npair,naux)` 형태로 먼저 할당한다.
+2. auxiliary 최대 32개만 `(block,nao,nao)` dense로 계산한다.
+3. 각 block의 하삼각만 최종 배열에 commit하고 dense block은 즉시 해제한다.
+4. source reverse triangular solve는 packed 배열의 C-contiguous backing storage를
+   제자리에서 덮어쓴다.
+5. metric reverse는 대각 AO pair에 1, 비대각 pair에 2를 곱해 bounded pair block으로
+   contraction한다. 이는 dense `i,j`와 `j,i` 합을 정확히 재현한다.
+
+따라서 full dense adjoint와 별도 packed RHS copy가 모두 없어지고, 장기 resident
+adjoint는 dense의 거의 절반이다. Sampled-k 및 genuinely complex 경로는 AO 대칭을
+가정할 수 없으므로 기존 dense/blockwise 구현을 유지한다. Small-cell automatic gate는
+direct-packed CDERI, in-place source solve, packed metric adjoint 및 complete contracted
+gradient를 각각 기존 dense reference와 비교한다. 실제 Water64/DZ GDF/RSDF 실행은
+`benchmark/development/queues/current_water64_dz_gdf_rsdf_oom_repair.json`을 사용자가
+실행하는 release evidence로 남긴다.
+
 ## 10. Current limitations and failure policy
 
 - fixed three-dimensional lattice의 nuclear gradient만 지원한다.
