@@ -3,23 +3,7 @@
   "defaults": {
     "atom_file": "../../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
-    "lattice_vectors": [
-      [
-        16.2,
-        0.0,
-        0.0
-      ],
-      [
-        0.0,
-        16.2,
-        0.0
-      ],
-      [
-        0.0,
-        0.0,
-        16.2
-      ]
-    ],
+    "lattice_vectors": [[16.2, 0.0, 0.0], [0.0, 16.2, 0.0], [0.0, 0.0, 16.2]],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
     "pseudo": {
@@ -30,17 +14,9 @@
     "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
-    "mesh": [
-      240,
-      240,
-      240
-    ],
+    "mesh": [240, 240, 240],
     "precision": 1e-09,
-    "kmesh": [
-      1,
-      1,
-      1
-    ],
+    "kmesh": [1, 1, 1],
     "xc": "r2SCAN",
     "conv_tol": 1e-08,
     "conv_tol_grad": 1e-08,
@@ -73,11 +49,7 @@
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": [
-        240,
-        240,
-        240
-      ],
+      "target_multigrid_mesh": [240, 240, 240],
       "gdf_bilinear_mode": "optimized_fused"
     },
     {
@@ -91,11 +63,7 @@
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": [
-        240,
-        240,
-        240
-      ]
+      "target_multigrid_mesh": [240, 240, 240]
     }
   ],
   "benchmark_scope": "user"

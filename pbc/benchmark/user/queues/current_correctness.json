@@ -3,23 +3,7 @@
   "defaults": {
     "atom_file": "../../structures/water8.xyz",
     "atom_unit": "Angstrom",
-    "lattice_vectors": [
-      [
-        10.0,
-        0.0,
-        0.0
-      ],
-      [
-        0.0,
-        10.0,
-        0.0
-      ],
-      [
-        0.0,
-        0.0,
-        10.0
-      ]
-    ],
+    "lattice_vectors": [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
     "pseudo": {
@@ -31,11 +15,7 @@
     "rsdf_central_setup": "exact_gpu_source",
     "ke_cutoff_ha": 400.0,
     "precision": 1e-09,
-    "kmesh": [
-      1,
-      1,
-      1
-    ],
+    "kmesh": [1, 1, 1],
     "xc": "r2SCAN",
     "conv_tol": 1e-08,
     "conv_tol_grad": 1e-08,
@@ -52,12 +32,8 @@
     "z_nuclear_batch_memory_fraction": 0.05,
     "run_fd": true,
     "fd_step_bohr": 0.0001,
-    "fd_atoms": [
-      0
-    ],
-    "fd_axes": [
-      "z"
-    ],
+    "fd_atoms": [0],
+    "fd_axes": ["z"],
     "rsdf_compressed_device_cache": "host",
     "gdf_derivative_omega_scale": 1.0,
     "rsdf_derivative_omega_scale": 1.0
