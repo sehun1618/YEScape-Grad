@@ -178,6 +178,27 @@ class BenchmarkInputTest(unittest.TestCase):
                 job["df_backend"] == "gdf",
             )
 
+    def test_water64_dz_gdf_oom_repair_queue_is_guarded(self):
+        path = (
+            BENCHMARK_DIR
+            / "development"
+            / "queues"
+            / "current_water64_dz_gdf_oom_repair.json"
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        defaults = payload["defaults"]
+        self.assertEqual(payload["benchmark_scope"], "development")
+        self.assertEqual(defaults["basis"], "DZVP-GTH")
+        self.assertEqual(defaults["auxbasis"], "DZVP-GTH")
+        self.assertEqual(defaults["kmesh"], [1, 1, 1])
+        self.assertFalse(defaults["run_fd"])
+        enabled = [job for job in payload["jobs"] if job.get("enabled")]
+        self.assertEqual(len(enabled), 1)
+        self.assertEqual(enabled[0]["target_integrator"], "uniform")
+        for job in payload["jobs"]:
+            self.assertEqual(job["df_backend"], "gdf")
+            self.assertEqual(job["gdf_bilinear_mode"], "optimized_fused")
+
     def test_array_identity_is_compact_and_byte_sensitive(self):
         first = benchmark._array_identity(np.asarray([[1.0, 2.0]]))
         second = benchmark._array_identity(np.asarray([[1.0, 3.0]]))

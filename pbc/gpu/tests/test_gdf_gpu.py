@@ -69,12 +69,14 @@ from gpu4pyscf_pbc_dcdft.df.gdf.reverse_gamma_native import (
     gamma_reverse_adjoint_energy_derivative,
 )
 from gpu4pyscf_pbc_dcdft.df.gdf.signed_density import (
+    _max_abs_imaginary,
     build_gamma_signed_density_source,
     build_gamma_factorization_adjoint,
     build_gamma_primitive_adjoint,
     contract_gamma_signed_density_source,
     contract_kpoint_bilinear_cderi_derivative,
     ewald_restricted_hf_bilinear_derivative,
+    plan_gamma_primitive_source_blocks,
 )
 from gpu4pyscf_pbc_dcdft.grad.nonlocal_pseudo import (
     contract_nonlocal_pseudo_batch,
@@ -562,6 +564,16 @@ class GDFGPUAlgebraTest(unittest.TestCase):
         self.assertLess(float(cp.max(cp.abs(reverse - signed))), 1.0e-9)
         self.assertEqual(diagnostics["route"], "gamma_reverse_adjoint")
         self.assertFalse(diagnostics["include_target_j"])
+        self.assertTrue(
+            diagnostics["zero_order_source_released_before_adjoint"]
+        )
+        self.assertEqual(diagnostics["metric_solved_dtype"], "float64")
+        self.assertEqual(
+            diagnostics["primitive_source_blocking"]["execution"][
+                "completed_auxiliary_functions"
+            ],
+            diagnostics["primitive_source_blocking"]["plan"]["naux"],
+        )
 
     def test_native_gamma_reverse_adjoint_fused_matches_signed_fused(self):
         _cpu, gpu = _methods((1, 1, 1))
@@ -1205,11 +1217,14 @@ class GDFGPUAlgebraTest(unittest.TestCase):
         target_source, target_metric = quadratic_sources(
             reference, 1.0, 0.0
         )
+        memory_diagnostics = {}
         direct = build_gamma_primitive_adjoint(
             solved,
             reference,
             response,
             include_target_j=True,
+            max_auxiliary_block=2,
+            memory_diagnostics=memory_diagnostics,
         )
         expected_source = (
             plus_source + minus_source + target_source
@@ -1223,6 +1238,47 @@ class GDFGPUAlgebraTest(unittest.TestCase):
             float(cp.max(cp.abs(direct.metric - expected_metric))),
             1.0e-10,
         )
+        self.assertEqual(
+            memory_diagnostics["plan"]["initial_block_size"], 2
+        )
+        self.assertEqual(
+            memory_diagnostics["execution"][
+                "completed_auxiliary_functions"
+            ],
+            naux,
+        )
+        self.assertGreater(
+            memory_diagnostics["execution"]["block_count"], 1
+        )
+
+    def test_gamma_imaginary_reduction_matches_full_reduction(self):
+        rng = np.random.default_rng(153)
+        value = cp.asarray(
+            rng.normal(size=(7, 5, 5))
+            + 1j * rng.normal(size=(7, 5, 5))
+        )
+        expected = float(cp.max(cp.abs(value.imag)).item())
+        actual = _max_abs_imaginary(value, max_block_bytes=5 * 5 * 8)
+        self.assertAlmostEqual(actual, expected, places=13)
+        self.assertEqual(_max_abs_imaginary(value.real), 0.0)
+
+    def test_water64_dz_primitive_source_plan_is_bounded(self):
+        plan = plan_gamma_primitive_source_blocks(
+            1536,
+            1536,
+            cp.float64,
+            free_device_bytes=80 * 1024**3,
+        )
+        self.assertEqual(
+            plan["persistent_source_bytes"],
+            1536**3 * 8,
+        )
+        self.assertLessEqual(plan["initial_block_size"], 32)
+        working_set = (
+            plan["working_bytes_per_auxiliary"]
+            * plan["initial_block_size"]
+        )
+        self.assertLessEqual(working_set, 4 * 1024**3)
 
     def test_native_local_part1_contraction_matches_full_h1(self):
         cell = _cell()

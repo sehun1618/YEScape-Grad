@@ -13,7 +13,10 @@ from gpu4pyscf.pbc.grad.rhf import contract_h1e_dm
 from gpu4pyscf.pbc.gto import int1e
 from gpu4pyscf.pbc.tools.pbc import madelung
 
-from .signed_density import build_gamma_primitive_adjoint
+from .signed_density import (
+    _real_gamma_matrix,
+    build_gamma_primitive_adjoint,
+)
 from .reciprocal_memory import plan_gamma_reciprocal_blocks
 from .signed_gamma_native import (
     _DevicePhaseTimeline,
@@ -129,9 +132,16 @@ def gamma_reverse_adjoint_energy_derivative(
         max_block_size=max_reciprocal_block_size,
     )
     timeline.mark("reciprocal_zero_order")
-    metric_inverse = _metric_inverse_in_primitive_basis(
+    metric_inverse_raw = _metric_inverse_in_primitive_basis(
         auxcell, reciprocal.j2c
     )
+    metric_inverse = cp.ascontiguousarray(
+        _real_gamma_matrix(
+            metric_inverse_raw,
+            name="metric_inverse",
+        )
+    )
+    del metric_inverse_raw
     metric_solved_source = cp.einsum(
         "uv,vij->uij",
         metric_inverse,
@@ -139,15 +149,21 @@ def gamma_reverse_adjoint_energy_derivative(
         optimize=True,
     )
     primitive_bytes = int(metric_solved_source.nbytes)
+    metric_solved_dtype = str(metric_solved_source.dtype)
+    cp.cuda.Stream.null.synchronize()
+    primitive_state.j3c_oo = None
+    del metric_inverse
+    cp.get_default_memory_pool().free_all_blocks()
+    adjoint_memory = {}
     adjoint = build_gamma_primitive_adjoint(
         metric_solved_source,
         sorted_reference,
         sorted_response,
         include_target_j=include_target_j,
+        memory_diagnostics=adjoint_memory,
     )
     source_bytes = int(adjoint.source.nbytes)
-    primitive_state.j3c_oo = None
-    del metric_solved_source, metric_inverse, identity
+    del metric_solved_source, identity
     timeline.mark("reverse_adjoint_assembly")
 
     metric_derivative = -int2c2e_opt.energy_ip1_per_atom(adjoint.metric)
@@ -210,6 +226,9 @@ def gamma_reverse_adjoint_energy_derivative(
                 "short_range_omega": float(int3c2e_opt.omega),
                 "primitive_tensor_bytes": primitive_bytes,
                 "primitive_source_bytes": source_bytes,
+                "metric_solved_dtype": metric_solved_dtype,
+                "zero_order_source_released_before_adjoint": True,
+                "primitive_source_blocking": adjoint_memory,
                 "reciprocal_working_cap_bytes": (
                     _REVERSE_RECIPROCAL_MAX_WORKING_BYTES
                 ),

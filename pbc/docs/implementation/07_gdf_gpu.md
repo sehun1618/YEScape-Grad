@@ -288,6 +288,28 @@ Synthetic Water64/DZ dimension test는 planner가 예전 estimator보다 작은 
 $10^{-9}$ Ha/Bohr 이내이며, 전체 GDF GPU module의 35개 Gamma/sampled-k 회귀 test가
 통과했다. 실제 Water64 재실행은 사용자 release evidence로 남긴다.
 
+#### 6.2.1 Water64/DZ reverse-adjoint lifetime repair
+
+Water64/DZVP는 physical AO/auxiliary 차원이 각각 1472이고 GPU sorted Cartesian
+차원이 1536이다. 이전 reverse-adjoint는 수치적으로 실수인
+`metric_solved_source(naux,nao,nao)`를 complex128로 보관했다. Sorted 차원에서 이
+배열 하나가 54 GiB이고, `abs(array.imag)` 검사는 추가로 27 GiB 임시 배열을
+요구했다. 기록된 user run은 `gdf_bilinear_z_response`에서 약 11.4 GiB만 남은 상태라
+이 검사에서 OOM이 발생했다.
+
+현재 Gamma 경로는 metric inverse를 큰 AO-square solve 전에 float64로 고정한다.
+Metric solve가 완료되면 이전 zero-order primitive tensor를 동기화 후 즉시 해제한다.
+새 primitive source는 전체 식의 임시 배열을 만들지 않고 auxiliary block마다 Coulomb과
+두 exchange orientation을 완성한 뒤 output에 commit한다. Block allocation이 실패하면
+미완성 구간을 commit하지 않고 block을 절반으로 줄여 재시도한다. 허수 검증도 최대
+256 MiB slice reduction으로 수행한다.
+
+1536 차원의 persistent real source는 27 GiB이고 기본 32-auxiliary block의 명시적
+working allowance는 약 2.25 GiB다. Synthetic planner, forced-small-block algebra와 작은
+Gamma signed/reverse full-gradient parity가 자동 gate를 담당한다. Water64/DZ 실제
+완료 여부와 peak VRAM은 사용자가
+`development/queues/current_water64_dz_gdf_oom_repair.json`으로 확인한다.
+
 ### 6.3 Gamma derivative의 SR/LR workload balance
 
 GDF derivative의 range separation은 Coulomb operator를 바꾸는 근사가 아니다.

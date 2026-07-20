@@ -19,9 +19,16 @@ from dataclasses import dataclass
 import cupy as cp
 import numpy as np
 from cupyx.scipy.linalg import solve_triangular
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem
 from pyscf.pbc.tools import pbc as pbc_tools
 
 from .jk_derivative import derivative_pair_block, pair_block
+
+
+DEFAULT_PRIMITIVE_SOURCE_MEMORY_FRACTION = 0.25
+DEFAULT_PRIMITIVE_SOURCE_RESERVE_BYTES = 512 * 1024**2
+DEFAULT_PRIMITIVE_SOURCE_MAX_AUX_BLOCK = 32
+DEFAULT_IMAGINARY_REDUCTION_BLOCK_BYTES = 256 * 1024**2
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,8 @@ def build_gamma_primitive_adjoint(
     response_density,
     *,
     include_target_j=False,
+    max_auxiliary_block=None,
+    memory_diagnostics=None,
 ) -> GammaPrimitiveAdjoint:
     """Build direct Gamma ``dB``/``dM`` sources for target J and Z response.
 
@@ -123,31 +132,15 @@ def build_gamma_primitive_adjoint(
         "pij,ji->p", solved, response, optimize=True
     )
 
-    source = 2.0 * (
-        reference[:, :, None] * auxiliary_response[None, None, :]
-        + response[:, :, None] * auxiliary_reference[None, None, :]
-    )
-    source -= cp.einsum(
-        "ij,pjk,kl->ilp",
-        reference,
-        solved,
-        response,
-        optimize=True,
-    )
-    source -= cp.einsum(
-        "ij,pjk,kl->ilp",
-        response,
+    source, source_execution = _build_gamma_primitive_source_bounded(
         solved,
         reference,
-        optimize=True,
+        response,
+        auxiliary_reference,
+        auxiliary_response,
+        include_target_j=include_target_j,
+        max_auxiliary_block=max_auxiliary_block,
     )
-    if include_target_j:
-        source += (
-            reference[:, :, None]
-            * auxiliary_reference[None, None, :]
-        )
-
-    source = source.transpose(2, 0, 1)
     # For the inverse-metric representation, the complete metric source is
     # the contraction of the primitive-source adjoint with W.  This identity
     # avoids two additional ``(naux, nao, nao)`` transformed-density tensors.
@@ -155,10 +148,194 @@ def build_gamma_primitive_adjoint(
         "pij,qij->pq", source, solved, optimize=True
     )
 
+    if memory_diagnostics is not None:
+        memory_diagnostics.clear()
+        memory_diagnostics.update(source_execution)
+
     return GammaPrimitiveAdjoint(
         source=source,
         metric=metric,
     )
+
+
+def plan_gamma_primitive_source_blocks(
+    naux,
+    nao,
+    dtype,
+    *,
+    free_device_bytes=None,
+    memory_fraction=DEFAULT_PRIMITIVE_SOURCE_MEMORY_FRACTION,
+    reserve_bytes=DEFAULT_PRIMITIVE_SOURCE_RESERVE_BYTES,
+    max_auxiliary_block=DEFAULT_PRIMITIVE_SOURCE_MAX_AUX_BLOCK,
+):
+    """Plan bounded auxiliary blocks around one persistent source tensor."""
+
+    naux = int(naux)
+    nao = int(nao)
+    if naux < 1 or nao < 1:
+        raise ValueError("naux and nao must be positive")
+    fraction = float(memory_fraction)
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError("memory_fraction must be in (0, 1]")
+    if free_device_bytes is None:
+        free_device_bytes = int(
+            get_avail_mem(exclude_memory_pool=True)
+        )
+    itemsize = cp.dtype(dtype).itemsize
+    source_bytes = naux * nao**2 * itemsize
+    reserve = min(max(0, int(reserve_bytes)), int(free_device_bytes))
+    remaining = int(free_device_bytes) - source_bytes - reserve
+    if remaining <= 0:
+        raise MemoryError(
+            "insufficient device memory for persistent Gamma primitive "
+            f"source: free={int(free_device_bytes)} bytes, "
+            f"source={source_bytes} bytes, reserve={reserve} bytes"
+        )
+    # A transactional block and two reusable contraction temporaries are
+    # explicit.  A fourth block allowance covers contraction-engine workspace.
+    working_bytes_per_auxiliary = 4 * nao**2 * itemsize
+    budget = max(1, int(remaining * fraction))
+    block_size = max(1, budget // working_bytes_per_auxiliary)
+    block_size = min(
+        naux,
+        max(1, int(max_auxiliary_block)),
+        int(block_size),
+    )
+    return {
+        "naux": naux,
+        "nao": nao,
+        "dtype": cp.dtype(dtype).str,
+        "free_device_bytes_at_plan": int(free_device_bytes),
+        "persistent_source_bytes": int(source_bytes),
+        "reserve_bytes": int(reserve),
+        "temporary_budget_bytes": int(budget),
+        "working_bytes_per_auxiliary": int(working_bytes_per_auxiliary),
+        "initial_block_size": int(block_size),
+        "maximum_block_size": int(max_auxiliary_block),
+    }
+
+
+def _build_gamma_primitive_source_bounded(
+    solved,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    include_target_j,
+    max_auxiliary_block,
+):
+    naux, nao, _ = solved.shape
+    maximum = (
+        DEFAULT_PRIMITIVE_SOURCE_MAX_AUX_BLOCK
+        if max_auxiliary_block is None
+        else int(max_auxiliary_block)
+    )
+    plan = plan_gamma_primitive_source_blocks(
+        naux,
+        nao,
+        solved.dtype,
+        max_auxiliary_block=maximum,
+    )
+    source = cp.empty_like(solved)
+    start = 0
+    block_size = int(plan["initial_block_size"])
+    minimum_block_size = block_size
+    block_count = 0
+    rebatch_count = 0
+    while start < naux:
+        stop = min(naux, start + block_size)
+        try:
+            block = _gamma_primitive_source_block(
+                solved[start:stop],
+                reference,
+                response,
+                auxiliary_reference[start:stop],
+                auxiliary_response[start:stop],
+                include_target_j=include_target_j,
+            )
+        except Exception as error:
+            if not _is_gpu_out_of_memory(error) or stop - start <= 1:
+                raise
+            cp.get_default_memory_pool().free_all_blocks()
+            block_size = max(1, (stop - start) // 2)
+            rebatch_count += 1
+            continue
+        source[start:stop] = block
+        del block
+        block_count += 1
+        minimum_block_size = min(minimum_block_size, stop - start)
+        start = stop
+    return source, {
+        "plan": plan,
+        "execution": {
+            "final_block_size": int(block_size),
+            "minimum_block_size": int(minimum_block_size),
+            "block_count": int(block_count),
+            "rebatch_count": int(rebatch_count),
+            "completed_auxiliary_functions": int(naux),
+        },
+    }
+
+
+def _gamma_primitive_source_block(
+    solved,
+    reference,
+    response,
+    auxiliary_reference,
+    auxiliary_response,
+    *,
+    include_target_j,
+):
+    block = cp.empty_like(solved)
+    temporary = cp.empty_like(solved)
+    exchange = cp.empty_like(solved)
+    cp.multiply(
+        auxiliary_response[:, None, None],
+        reference[None],
+        out=block,
+    )
+    cp.multiply(
+        auxiliary_reference[:, None, None],
+        response[None],
+        out=temporary,
+    )
+    block += temporary
+    block *= 2.0
+    contract(
+        "ij,pjk->pik",
+        reference,
+        solved,
+        out=temporary,
+    )
+    contract(
+        "pik,kl->pil",
+        temporary,
+        response,
+        out=exchange,
+    )
+    block -= exchange
+    contract(
+        "ij,pjk->pik",
+        response,
+        solved,
+        out=temporary,
+    )
+    contract(
+        "pik,kl->pil",
+        temporary,
+        reference,
+        out=exchange,
+    )
+    block -= exchange
+    if include_target_j:
+        cp.multiply(
+            auxiliary_reference[:, None, None],
+            reference[None],
+            out=temporary,
+        )
+        block += temporary
+    return block
 
 
 def build_gamma_signed_density_source(
@@ -570,7 +747,7 @@ def _real_gamma_density(value, *, name):
         array = array[0]
     if array.ndim != 2 or array.shape[0] != array.shape[1]:
         raise ValueError(f"{name} must be a square Gamma matrix, got {array.shape}")
-    imaginary_max = float(cp.max(cp.abs(array.imag)).item())
+    imaginary_max = _max_abs_imaginary(array)
     if imaginary_max > 1.0e-10:
         raise NotImplementedError(
             f"{name} must be real at Gamma; max imaginary component is "
@@ -596,7 +773,7 @@ def _real_gamma_matrix_stack(value, *, name):
         raise ValueError(
             f"{name} must have shape (naux,nao,nao), got {array.shape}"
         )
-    imaginary_max = float(cp.max(cp.abs(array.imag)).item())
+    imaginary_max = _max_abs_imaginary(array)
     if imaginary_max > 1.0e-10:
         raise NotImplementedError(
             f"{name} must be real at Gamma; max imaginary component is "
@@ -609,13 +786,54 @@ def _real_gamma_matrix(value, *, name):
     array = cp.asarray(value)
     if array.ndim != 2 or array.shape[0] != array.shape[1]:
         raise ValueError(f"{name} must be square, got {array.shape}")
-    imaginary_max = float(cp.max(cp.abs(array.imag)).item())
+    imaginary_max = _max_abs_imaginary(array)
     if imaginary_max > 1.0e-10:
         raise NotImplementedError(
             f"{name} must be real at Gamma; max imaginary component is "
             f"{imaginary_max:.3e}"
         )
     return cp.asarray(array.real, dtype=cp.float64)
+
+
+def _max_abs_imaginary(
+    value,
+    *,
+    max_block_bytes=DEFAULT_IMAGINARY_REDUCTION_BLOCK_BYTES,
+):
+    """Return the imaginary maximum without a full-size ``abs`` temporary."""
+
+    array = cp.asarray(value)
+    if not cp.iscomplexobj(array):
+        return 0.0
+    if array.ndim == 0:
+        return float(cp.abs(array.imag).item())
+    elements_per_slice = int(np.prod(array.shape[1:], dtype=np.int64))
+    slices_per_block = max(
+        1,
+        int(max_block_bytes)
+        // max(1, elements_per_slice * array.real.dtype.itemsize),
+    )
+    maximum = 0.0
+    for start in range(0, array.shape[0], slices_per_block):
+        stop = min(array.shape[0], start + slices_per_block)
+        block_maximum = float(
+            cp.max(cp.abs(array[start:stop].imag)).item()
+        )
+        maximum = max(maximum, block_maximum)
+    return maximum
+
+
+def _is_gpu_out_of_memory(error):
+    if isinstance(error, cp.cuda.memory.OutOfMemoryError):
+        return True
+    message = str(error).lower()
+    return (
+        error.__class__.__name__ == "CUDARuntimeError"
+        and (
+            "out of memory" in message
+            or "cudaerrormemoryallocation" in message
+        )
+    )
 
 
 def _kpoint_density(value, nkpts, *, name):

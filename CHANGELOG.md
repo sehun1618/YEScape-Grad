@@ -27,6 +27,12 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### GDF and RSDF GPU response
 
+- Repair the Water64/DZ Gamma GDF reverse-adjoint high-water path: keep the
+  metric solve real before allocating its AO-square stack, retire the
+  zero-order primitive tensor before source assembly, reduce imaginary-part
+  diagnostics in bounded slices, and assemble the exact primitive source in
+  transactional auxiliary blocks.  Add a guarded development queue for the
+  user-run scaling confirmation; Water64 is not part of the automated gate.
 - Fuse the Gamma explicit and Z-vector GTH pseudopotential derivative through
   the exact linear source `D + 2 T_Z`.  Water20 PP time is halved; current GDF
   and RSDF workflows improve by 7.36% and 6.68% with maximum gradient changes
