@@ -92,5 +92,5 @@
       ]
     }
   ],
-  "benchmark_scope": "user"
+  "benchmark_scope": "development"
 }

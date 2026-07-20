@@ -12,6 +12,10 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   implementation and profiling benchmarks (`pbc/benchmark/development`).
   Managed queues declare their scope, and the runner rejects cross-scope
   output paths before starting a calculation.
+- Refresh every user queue for the current production profile: native
+  `optimized_fused` GDF, exact GPU-source RSDF with mapped-host compressed
+  CDERI, derivative omega scales fixed at 1.0, and matrix-free Z-vector.
+  Keep Water64/DZ RSDF disabled because its latest same-input runs still OOM.
 - Curate molecular CPU/GPU and periodic CPU/GPU DC-DFT gradient packages with
   reproducible examples, validation scripts, and benchmark inputs.
 - Align the repository and all four wheel distributions with the Apache-2.0

@@ -1,36 +1,39 @@
 {
-  "output_root": "../results/water_ethanol_gdf_rsdf_multigrid_SZ",
+  "output_root": "../results/current_water64_sz_eggbox_mesh240",
   "defaults": {
-    "atom_file": "../../structures/water_ethanol.xyz",
+    "atom_file": "../../structures/water64_shifted_qgrid_mesh240.xyz",
     "atom_unit": "Angstrom",
     "lattice_vectors": [
       [
-        16.2,
+        12.4139,
         0.0,
         0.0
       ],
       [
         0.0,
-        16.2,
+        12.4139,
         0.0
       ],
       [
         0.0,
         0.0,
-        16.2
+        12.4139
       ]
     ],
     "lattice_unit": "Angstrom",
     "basis": "SZV-GTH",
     "pseudo": {
       "H": "GTH-SCAN-q1",
-      "C": "GTH-SCAN-q4",
       "O": "GTH-SCAN-q6"
     },
     "auxbasis": "SZV-GTH",
     "gdf_setup_mode": "native",
     "rsdf_central_setup": "exact_gpu_source",
-    "ke_cutoff_ha": 500.0,
+    "mesh": [
+      240,
+      240,
+      240
+    ],
     "precision": 1e-09,
     "kmesh": [
       1,
@@ -50,30 +53,27 @@
     "z_tolerance": 1e-12,
     "z_residual_tolerance": 1e-08,
     "z_max_cycle": 80,
-    "gdf_bilinear_mode": "one_pass_fused",
-    "run_fd": false,
-    "fd_step_bohr": 0.0001,
-    "fd_atoms": "all",
-    "fd_axes": "all"
+    "z_nuclear_batch_memory_fraction": 0.05,
+    "gdf_derivative_omega_scale": 1.0,
+    "rsdf_derivative_omega_scale": 1.0,
+    "run_fd": false
   },
   "jobs": [
     {
-      "name": "gdf_only",
-      "enabled": false,
+      "name": "gdf_uniform_mesh240",
       "device": "gpu",
       "df_backend": "gdf",
-      "target_integrator": "uniform"
+      "target_integrator": "uniform",
+      "gdf_bilinear_mode": "one_pass_fused"
     },
     {
-      "name": "rsdf_only",
-      "enabled": false,
+      "name": "rsdf_uniform_mesh240",
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "uniform"
     },
     {
-      "name": "gdf_plus_multigrid_xc",
-      "enabled": false,
+      "name": "gdf_multigrid_xc_mesh240",
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
@@ -81,11 +81,11 @@
         240,
         240,
         240
-      ]
+      ],
+      "gdf_bilinear_mode": "one_pass_fused"
     },
     {
-      "name": "rsdf_plus_multigrid_xc",
-      "enabled": false,
+      "name": "rsdf_multigrid_xc_mesh240",
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
@@ -94,23 +94,7 @@
         240,
         240
       ]
-    },
-    {
-      "name": "gdf_plus_multigrid_xc",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "gdf",
-      "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": null
-    },
-    {
-      "name": "rsdf_plus_multigrid_xc",
-      "enabled": true,
-      "device": "gpu",
-      "df_backend": "rsdf",
-      "target_integrator": "multigrid_xc",
-      "target_multigrid_mesh": null
     }
   ],
-  "benchmark_scope": "user"
+  "benchmark_scope": "development"
 }

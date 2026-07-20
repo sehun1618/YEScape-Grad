@@ -50,7 +50,10 @@
     "z_residual_tolerance": 1e-08,
     "z_max_cycle": 80,
     "z_nuclear_batch_memory_fraction": 0.05,
-    "run_fd": false
+    "run_fd": false,
+    "rsdf_compressed_device_cache": "host",
+    "gdf_derivative_omega_scale": 1.0,
+    "rsdf_derivative_omega_scale": 1.0
   },
   "jobs": [
     {
@@ -58,7 +61,7 @@
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "uniform",
-      "gdf_bilinear_mode": "one_pass_fused"
+      "gdf_bilinear_mode": "optimized_fused"
     },
     {
       "name": "rsdf_uniform",
@@ -76,7 +79,7 @@
         240,
         240
       ],
-      "gdf_bilinear_mode": "one_pass_fused"
+      "gdf_bilinear_mode": "optimized_fused"
     },
     {
       "name": "rsdf_multigrid_xc_mesh240",

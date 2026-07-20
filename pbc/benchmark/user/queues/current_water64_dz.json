@@ -53,7 +53,8 @@
     "z_nuclear_batch_max_components": 4,
     "gdf_derivative_omega_scale": 1.0,
     "rsdf_derivative_omega_scale": 1.0,
-    "run_fd": false
+    "run_fd": false,
+    "rsdf_compressed_device_cache": "host"
   },
   "jobs": [
     {
@@ -62,11 +63,11 @@
       "device": "gpu",
       "df_backend": "gdf",
       "target_integrator": "uniform",
-      "gdf_bilinear_mode": "one_pass_fused"
+      "gdf_bilinear_mode": "optimized_fused"
     },
     {
       "name": "rsdf_uniform",
-      "enabled": true,
+      "enabled": false,
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "uniform"
@@ -82,11 +83,11 @@
         240,
         240
       ],
-      "gdf_bilinear_mode": "one_pass_fused"
+      "gdf_bilinear_mode": "optimized_fused"
     },
     {
       "name": "rsdf_multigrid_xc_mesh240",
-      "enabled": true,
+      "enabled": false,
       "device": "gpu",
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",

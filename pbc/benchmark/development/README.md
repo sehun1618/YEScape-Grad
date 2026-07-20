@@ -14,6 +14,10 @@ benchmark를 보관한다.
   `../user/queues/`에 복사한다.
 - 대형 Water64/DZ 계산은 사용자의 명시적 허용 없이는 실행하지 않는다.
 
+Water64의 `current_water64_sz_eggbox.json`과
+`current_water64_sz_ke1000.json`은 production 실행이 아니라 grid/cutoff 수렴 진단이므로
+development scope에 둔다.
+
 ## 실행
 
 ```bash

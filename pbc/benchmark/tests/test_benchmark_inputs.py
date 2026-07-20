@@ -138,6 +138,46 @@ class BenchmarkInputTest(unittest.TestCase):
                 development_output,
             )
 
+    def test_user_queues_follow_current_production_profile(self):
+        queues_dir = BENCHMARK_DIR / "user" / "queues"
+        forbidden_name_parts = ("probe", "release", "baseline", "eggbox")
+        for path in sorted(queues_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            defaults = payload["defaults"]
+            self.assertFalse(
+                any(part in path.stem for part in forbidden_name_parts),
+                path.name,
+            )
+            self.assertEqual(defaults["gdf_setup_mode"], "native")
+            self.assertEqual(
+                defaults["rsdf_central_setup"],
+                "exact_gpu_source",
+            )
+            self.assertEqual(
+                defaults["rsdf_compressed_device_cache"],
+                "host",
+            )
+            self.assertEqual(defaults["gdf_derivative_omega_scale"], 1.0)
+            self.assertEqual(defaults["rsdf_derivative_omega_scale"], 1.0)
+            for job in payload["jobs"]:
+                if job.get("df_backend") == "gdf":
+                    self.assertEqual(
+                        job.get("gdf_bilinear_mode"),
+                        "optimized_fused",
+                        path.name,
+                    )
+
+        water64_dz = json.loads(
+            (queues_dir / "current_water64_dz.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for job in water64_dz["jobs"]:
+            self.assertEqual(
+                bool(job.get("enabled")),
+                job["df_backend"] == "gdf",
+            )
+
     def test_array_identity_is_compact_and_byte_sensitive(self):
         first = benchmark._array_identity(np.asarray([[1.0, 2.0]]))
         second = benchmark._array_identity(np.asarray([[1.0, 3.0]]))
