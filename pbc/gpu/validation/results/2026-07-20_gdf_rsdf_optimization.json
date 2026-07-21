@@ -1,0 +1,67 @@
+{
+  "schema": "pbc_dcdft_optimization_evidence_v1",
+  "date": "2026-07-20",
+  "scope": "Water20 SZV-GTH Gamma r2SCAN multigrid-XC, exact gradients",
+  "omega_policy": {
+    "public_default_scale": 1.0,
+    "gdf_measured_opt_in_scale": 1.9,
+    "rsdf_measured_opt_in_scale": 1.1
+  },
+  "baseline": {
+    "queue": "benchmark/development/queues/current_gdf_rsdf_optimization_baseline.json",
+    "gdf_workflow_median_s": 10.7318,
+    "rsdf_workflow_median_s": 10.7931
+  },
+  "gdf": {
+    "route": "reverse_adjoint_fused + coupled pseudopotential",
+    "workflow_median_s": 8.2664,
+    "workflow_reduction_percent": 22.98,
+    "response_median_s": 3.4691,
+    "resolved_vs_coupled_gradient_max_abs_ha_per_bohr": 6.22e-14,
+    "selected_fd_max_abs_ha_per_bohr": 5.185e-9,
+    "peak_vram_gib": 10.5664
+  },
+  "rsdf": {
+    "route": "packed Gamma adjoint + omega scale 1.1 + coupled pseudopotential",
+    "workflow_median_s": 9.6962,
+    "workflow_reduction_percent": 10.16,
+    "response_median_s": 4.6835,
+    "packed_source_resident_byte_reduction_percent": 49.58,
+    "resolved_vs_coupled_gradient_max_abs_ha_per_bohr": 6.44e-14,
+    "selected_fd_max_abs_ha_per_bohr": 5.125e-9,
+    "peak_vram_gib": 5.2578
+  },
+  "shared_pseudopotential": {
+    "identity": "G_PP[D] + 2 G_PP[T_Z] = G_PP[D + 2 T_Z]",
+    "gdf_resolved_median_s": 1.3797,
+    "gdf_coupled_median_s": 0.6963,
+    "rsdf_resolved_median_s": 1.3787,
+    "rsdf_coupled_median_s": 0.6956
+  },
+  "rsdf_source_hf_profile": {
+    "scf_wall_median_s": 1.3712,
+    "central_build_median_s": 0.7160,
+    "jk_call_count": 19,
+    "jk_device_median_s": 0.1517,
+    "diagonalization_device_median_s": 0.0769,
+    "density_update_device_median_s": 0.0049,
+    "compressed_device_cache_promoted": false,
+    "compressed_device_cache_workflow_gain_percent": 0.16
+  },
+  "gates": {
+    "benchmark_unit_tests": "26 passed",
+    "targeted_gpu_tests": "9 passed",
+    "gamma_full_gradient": "passed for GDF and RSDF",
+    "sampled_k_full_gradient": "passed for GDF and RSDF",
+    "water8_selected_fd": "passed for GDF and RSDF",
+    "silent_cpu_fallback": false
+  },
+  "raw_result_directories": [
+    "benchmark/results/current_gdf_reverse_adjoint_release_bounded",
+    "benchmark/results/current_rsdf_packed_release",
+    "benchmark/results/current_rsdf_source_hf_profile",
+    "benchmark/results/current_rsdf_compressed_device_cache_gate",
+    "benchmark/results/current_pseudo_coupled_release",
+    "benchmark/results/current_pseudo_coupled_correctness"
+  ]
+}

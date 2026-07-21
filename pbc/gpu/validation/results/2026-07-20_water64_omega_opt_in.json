@@ -1,0 +1,48 @@
+{
+  "schema": "pbc_dcdft_omega_opt_in_evidence_v1",
+  "date": "2026-07-20",
+  "system": "Water64 SZV-GTH Gamma r2SCAN multigrid-XC mesh 240^3",
+  "queue": "benchmark/development/queues/current_water64_omega_opt_in_gate.json",
+  "public_default_scale": 1.0,
+  "gdf": {
+    "default": {
+      "scale": 1.0,
+      "workflow_s": 48.1736,
+      "gradient_s": 36.3998,
+      "response_s": 18.2233,
+      "selected_fd_max_abs_ha_per_bohr": 7.3155e-9,
+      "reciprocal_grid_points": 3375
+    },
+    "opt_in": {
+      "scale": 1.9,
+      "workflow_s": 56.2785,
+      "gradient_s": 44.5290,
+      "response_s": 26.3150,
+      "workflow_change_percent": 16.8244,
+      "gradient_max_abs_difference_from_default_ha_per_bohr": 1.0712e-11,
+      "reciprocal_grid_points": 15625
+    }
+  },
+  "rsdf": {
+    "default": {
+      "scale": 1.0,
+      "workflow_s": 54.6497,
+      "gradient_s": 39.1635,
+      "response_s": 20.9233,
+      "selected_fd_max_abs_ha_per_bohr": 6.3872e-9,
+      "source_omega": 0.30,
+      "source_mesh": [25, 25, 25]
+    },
+    "opt_in": {
+      "scale": 1.1,
+      "workflow_s": 57.5801,
+      "gradient_s": 42.1714,
+      "response_s": 23.9731,
+      "workflow_change_percent": 5.3623,
+      "gradient_max_abs_difference_from_default_ha_per_bohr": 6.3787e-12,
+      "source_omega": 0.33,
+      "source_mesh": [27, 27, 27]
+    }
+  },
+  "decision": "Keep scale 1.0 as the public and Water64 queue default; tuned scales remain explicit opt-in probes only."
+}
