@@ -6,7 +6,7 @@ response explicit.  Experimental modules from the earlier research workspace
 are deliberately not imported here.
 """
 
-from . import df, dft, grad, lib, pseudo, scf
+from . import df, dft, dispersion, grad, lib, pseudo, scf
 from ._version import __version__
 from .dft import DCKRKS, DCRKS
 
@@ -16,6 +16,7 @@ __all__ = [
     "__version__",
     "df",
     "dft",
+    "dispersion",
     "grad",
     "lib",
     "pseudo",

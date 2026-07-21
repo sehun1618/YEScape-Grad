@@ -202,6 +202,7 @@ def software_provenance(device: str) -> dict[str, Any]:
             "pyscf-pbc-dcdft": _package_version(
                 "pyscf-pbc-dcdft", "pyscf_pbc_dcdft"
             ),
+            "dftd4": _package_version("dftd4", "dftd4"),
         },
     }
     if str(device).lower() != "gpu":

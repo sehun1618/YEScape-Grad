@@ -20,6 +20,16 @@ FFTDF는 기본 provider이며 GDF/RSDF는 각각 `density_fit()`과
 `rs_density_fit()`으로 선택할 수 있다. GPU route는 CPU DC-DFT 계산으로 조용히
 fallback하지 않는다.
 
+D2C-D4를 추가하려면 energy kernel 전에 다음 opt-in을 사용한다.
+
+```python
+mf.set_dispersion("d2c")
+```
+
+전자구조와 DC response는 계속 GPU 경로를 사용하고, 작은 geometry-only DFT-D4
+energy/gradient 호출만 `dftd4` host library가 담당한다. 이 옵션은 기본적으로 꺼져
+있으며 `dftd4>=4.2`가 필요하다.
+
 Source HF는 GDF/RSDF를 유지하면서 fixed-density target DFA의 XC만 multigrid로
 바꾸려면 다음 explicit opt-in을 사용한다.
 

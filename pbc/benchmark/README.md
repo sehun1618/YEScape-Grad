@@ -8,6 +8,7 @@ energy와 analytic gradient의 계산 시간 및 정확성을 비교한다.
 - device: `cpu`, `gpu`
 - DF backend: `fftdf`, `gdf`, `rsdf`
 - target DFA: `PBE`, `SCAN`, `R2SCAN`
+- optional dispersion: published HF-DFT `D2C-D4`
 - sampling: Gamma-point 및 일반 `kmesh`
 - accuracy reference: 선택적으로 실행하는 full-energy central FD
 
@@ -188,6 +189,21 @@ product로 확장된다.
 
 현재 active package 범위에 맞춰 `charge=0`, `spin=0`인 restricted closed-shell
 계산만 허용한다. grid는 `ke_cutoff_ha` 또는 명시적 `mesh` 중 하나만 지정한다.
+
+### D2C-D4 dispersion
+
+HF-DFT에 맞춰 적합된 D4를 energy와 analytic gradient에 더하려면 defaults 또는
+job에 다음을 넣는다.
+
+```json
+"dispersion": "d2c"
+```
+
+생략하거나 `null`이면 기존 DC-DFT 결과가 그대로 유지된다. D2C energy는
+`report.json`의 `energy_components.components.dispersion`, gradient 정보는
+`gradient_metadata.dispersion`에 기록된다. FD를 켜면 변위된 모든 구조에도 같은
+D2C 파라미터가 적용되므로 전자적 DC-DFT와 dispersion을 합친 전체 gradient를
+검증한다. 실행 환경에는 optional dependency `dftd4>=4.2`가 필요하다.
 
 GPU GDF에서 `gdf_setup_mode`는 다음 두 값을 받는다.
 

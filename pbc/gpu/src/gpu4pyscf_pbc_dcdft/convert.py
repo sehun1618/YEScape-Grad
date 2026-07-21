@@ -76,6 +76,7 @@ def to_gpu(mf):
         "verbose",
         "stdout",
         "max_memory",
+        "dispersion",
     ):
         if hasattr(mf, name):
             setattr(gpu_mf, name, getattr(mf, name))

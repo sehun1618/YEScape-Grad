@@ -27,6 +27,18 @@ periodic density fitting, integral kernels, and gradient primitives. The
 one-pass native GDF derivative modules adapt GPU4PySCF periodic GDF derivative
 implementations and retain file-level attribution and modification notices.
 
+## DFT-D4
+
+- Project: https://github.com/dftd4/dftd4
+- License: LGPL-3.0-or-later
+
+The optional D2C route calls the separately installed DFT-D4 library for
+periodic dispersion energies, analytic gradients, and virials. No DFT-D4
+library source or binary is redistributed in this package.
+
+The bundled D2C damping parameter data cites Lee et al., JCTC 2024,
+DOI 10.1021/acs.jctc.4c00689, Supporting Information Table S1.
+
 ## Redistribution
 
 The repository root and each independently buildable Python package include:

@@ -20,6 +20,11 @@ from pyscf_pbc_dcdft.dft.target_integrator import (
     normalize_target_integrator,
     normalize_target_multigrid_mesh,
 )
+from pyscf_pbc_dcdft.dispersion import (
+    apply_d2c_energy,
+    evaluate_d2c,
+    normalize_dispersion,
+)
 
 from .. import df
 from ..scf import build_reference
@@ -36,6 +41,7 @@ class DCRestrictedBase(lib.StreamObject):
         "exxdiv", "verbose", "stdout", "max_memory",
         "progress_callback",
         "target_integrator", "target_multigrid_mesh",
+        "dispersion",
     }
     kpoint_mode = False
 
@@ -56,6 +62,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.max_memory = getattr(cell, "max_memory", 4000)
         self.target_integrator = UNIFORM
         self.target_multigrid_mesh = None
+        self.dispersion = None
         self.converged = False
         self.e_tot = None
         self.e_hf = None
@@ -66,6 +73,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.target_ks = None
         self.target_evaluation = None
         self.dc_energy_result = None
+        self.dispersion_result = None
         self.timings_s = {}
         self.source_hf_profile = None
         self.progress_callback = None
@@ -83,6 +91,13 @@ class DCRestrictedBase(lib.StreamObject):
             raise ValueError(
                 "target_multigrid_mesh requires a multigrid target_integrator"
             )
+        invalidate_computed_state(self)
+        return self
+
+    def set_dispersion(self, correction=None):
+        """Select the optional D2C-D4 correction for energy and gradient."""
+
+        self.dispersion = normalize_dispersion(correction)
         invalidate_computed_state(self)
         return self
 
@@ -131,6 +146,7 @@ class DCRestrictedBase(lib.StreamObject):
 
         if kwargs:
             self.set(**kwargs)
+        self.dispersion = normalize_dispersion(self.dispersion)
         invalidate_computed_state(self)
         validate_restricted_input(self)
         reference = build_reference(
@@ -189,8 +205,24 @@ class DCRestrictedBase(lib.StreamObject):
             xc=self.xc,
             wall_time_s=self.timings_s["target_pbe_energy"],
         )
+        if self.dispersion == "d2c":
+            self._progress("dispersion_d2c_energy", state="started")
+            self.dispersion_result = evaluate_d2c(
+                self.cell, self.xc, gradient=False
+            )
+            result = apply_d2c_energy(result, self.dispersion_result)
+            self.timings_s["dispersion_d2c_energy"] = (
+                self.dispersion_result.wall_time_s
+            )
+            self._progress(
+                "dispersion_d2c_energy",
+                state="complete",
+                wall_time_s=self.dispersion_result.wall_time_s,
+            )
         self.timings_s["energy_total"] = (
-            self.timings_s["hf_scf"] + self.timings_s["target_pbe_energy"]
+            self.timings_s["hf_scf"]
+            + self.timings_s["target_pbe_energy"]
+            + self.timings_s.get("dispersion_d2c_energy", 0.0)
         )
         self.source_scf = reference
         self.target_ks = target
@@ -252,7 +284,7 @@ class DCRestrictedBase(lib.StreamObject):
             )
         for name in (
             "conv_tol", "conv_tol_grad", "max_cycle", "exxdiv", "verbose",
-            "max_memory",
+            "max_memory", "dispersion",
         ):
             setattr(cpu_mf, name, getattr(self, name))
         return cpu_mf
@@ -276,6 +308,12 @@ class DCRestrictedBase(lib.StreamObject):
             ),
             "target_evaluation_workspace": (
                 self.target_evaluation is not None
+            ),
+            "dispersion": self.dispersion,
+            "dispersion_metadata": (
+                None
+                if self.dispersion_result is None
+                else self.dispersion_result.metadata()
             ),
             "mesh": [int(value) for value in self.cell.mesh],
             "ke_cutoff_ha": (

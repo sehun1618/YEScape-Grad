@@ -499,6 +499,7 @@ def _summary_row(
         "df_backend": report.get("df_backend"),
         "target_integrator": report.get("target_integrator", "uniform"),
         "xc": report.get("xc"),
+        "dispersion": report.get("dispersion"),
         "natoms": system.get("natoms"),
         "nkpts": settings.get("nkpts"),
         "energy_ha": report.get("energy_ha"),

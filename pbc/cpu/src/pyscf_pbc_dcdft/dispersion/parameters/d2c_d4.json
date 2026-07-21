@@ -1,0 +1,33 @@
+{
+  "schema": "pyscf_pbc_dcdft_d2c_d4_parameters_v1",
+  "model": "d4",
+  "damping": "rational_bj",
+  "global_parameters": {
+    "s6": 1.0,
+    "s9": 1.0,
+    "alp": 16.0
+  },
+  "source": {
+    "article": "Correcting Dispersion Corrections with Density-Corrected DFT",
+    "journal": "J. Chem. Theory Comput. 2024, 20, 7155-7167",
+    "doi": "10.1021/acs.jctc.4c00689",
+    "location": "Supporting Information, Table S1",
+    "note": "Published molecular D2C-DFT fit; periodic use is an extrapolation and should be validated for the target system."
+  },
+  "functionals": {
+    "pbe": {"label": "PBE", "s8": 1.78595387, "a1": 0.88511469, "a2": 2.32863362},
+    "pbe0": {"label": "PBE0", "s8": 1.53360351, "a1": 0.78689150, "a2": 3.25641582},
+    "revpbe": {"label": "revPBE", "s8": 1.80966761, "a1": 0.58558155, "a2": 2.71965468},
+    "revpbe0": {"label": "revPBE0", "s8": 1.74590783, "a1": 0.40385673, "a2": 4.26818294},
+    "blyp": {"label": "BLYP", "s8": 1.65244425, "a1": 0.56438878, "a2": 2.65715701},
+    "b3lyp": {"label": "B3LYP", "s8": 1.35513689, "a1": 0.41757850, "a2": 3.84594813},
+    "tpss": {"label": "TPSS", "s8": 1.54044984, "a1": 0.69473318, "a2": 2.51512802},
+    "tpss0": {"label": "TPSS0", "s8": 1.50843498, "a1": 0.60162555, "a2": 3.65500533},
+    "scan": {"label": "SCAN", "s8": 1.72616184, "a1": 0.06450398, "a2": 8.62911596},
+    "scan0": {"label": "SCAN0", "s8": 3.69655894, "a1": 0.16214976, "a2": 8.90158495},
+    "r2scan": {"label": "r2SCAN", "s8": 0.02734375, "a1": 0.74707031, "a2": 3.34667969},
+    "r2scan0": {"label": "r2SCAN0", "s8": 3.97877459, "a1": 0.75987648, "a2": 5.45977445},
+    "m06l": {"label": "M06L", "s8": 0.75781250, "a1": 0.81445313, "a2": 6.16992188},
+    "m06": {"label": "M06", "s8": 1.30522230, "a1": 0.83568617, "a2": 4.37780185}
+  }
+}

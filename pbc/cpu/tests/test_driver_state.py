@@ -106,6 +106,17 @@ class DriverStateTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "inputs changed"):
             method.make_rdm1()
 
+    def test_dispersion_modifier_invalidates_state(self):
+        method = dft.DCRKS(_h2_cell(), xc="PBE")
+        method.kernel()
+
+        returned = method.set_dispersion("d2c")
+
+        self.assertIs(returned, method)
+        self.assertEqual(method.dispersion, "d2c")
+        self.assertFalse(method.converged)
+        self.assertIsNone(method.e_tot)
+
 
 if __name__ == "__main__":
     unittest.main()

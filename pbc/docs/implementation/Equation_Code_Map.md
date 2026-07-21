@@ -28,6 +28,7 @@ route는 active public API가 아니다.
 | $B^{A_x}_{ai\mathbf{k}}$, Eq. `eq:cphf-source` | nuclear response source | `grad/nuclear_response.py::nuclear_response_source_vo` | `grad/nuclear_response.py::nuclear_response_source_vo_sets` + `grad/response.py::apply_hf_response_sets` | $(N_{\mathrm{atom}},3,n_v,n_o)$, Ha/Bohr, memory-bounded component batch | source-matrix FD and component/batch parity |
 | $E^{A_x}_{\mathrm{resp}}$, Eq. `eq:response-gradient` | Z-vector response contraction | `grad/assembly.py::assemble_gradient` | backend gradient assembly | $(N_{\mathrm{atom}},3)$, Ha/Bohr | full-energy FD |
 | $dE/dR_{A_x}$, Eq. `eq:final-gradient-assembly` | total nuclear gradient | `grad/fftdf.py`, `grad/gdf.py`, `grad/rsdf.py` | same paths in GPU package | $(N_{\mathrm{atom}},3)$, Ha/Bohr | Cartesian central FD |
+| $E_{\mathrm{D2C-D4}}$ and $dE_{\mathrm{D2C-D4}}/dR_{A_x}$ | optional geometry-only dispersion | `dispersion/d2c.py` | shared host-library boundary | scalar Ha and $(N_{\mathrm{atom}},3)$ Ha/Bohr | direct periodic D4 central FD |
 
 ## One-electron 및 GTH pseudopotential
 

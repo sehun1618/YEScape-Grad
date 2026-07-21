@@ -251,6 +251,26 @@ class BenchmarkInputTest(unittest.TestCase):
                 }
             )
 
+    def test_benchmark_accepts_only_explicit_d2c_dispersion(self):
+        self.assertEqual(
+            benchmark._validate_config(
+                {
+                    "device": "cpu",
+                    "df_backend": "fftdf",
+                    "dispersion": "d2c",
+                }
+            ),
+            ("cpu", "fftdf"),
+        )
+        with self.assertRaisesRegex(ValueError, "dispersion must"):
+            benchmark._validate_config(
+                {
+                    "device": "cpu",
+                    "df_backend": "fftdf",
+                    "dispersion": "d4",
+                }
+            )
+
     def test_translation_diagnostic_decomposes_component_sums(self):
         result = SimpleNamespace(
             one_electron=np.asarray([[1.0, 2.0, 3.0], [-1.0, 0.0, 1.0]]),

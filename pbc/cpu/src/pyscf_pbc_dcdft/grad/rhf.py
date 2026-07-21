@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from pyscf import lib
 
+from ..dispersion import apply_d2c_gradient, evaluate_d2c
 from .fftdf import fftdf_cpu_gradient
 from .gdf import gdf_cpu_gradient
 from .rsdf import rsdf_cpu_gradient
@@ -42,6 +43,7 @@ class DCGradients(lib.StreamObject):
         self.z_equation = "adjoint"
         self.de = None
         self.result = None
+        self.dispersion_result = None
         self.atmlst = None
 
     def kernel(self, atmlst=None, **kwargs):
@@ -63,10 +65,19 @@ class DCGradients(lib.StreamObject):
             raise NotImplementedError(
                 f"no restricted analytic gradient for DF backend {backend!r}"
             ) from exc
-        self.result = gradient_kernel(
+        electronic_result = gradient_kernel(
             self.base,
             z_equation=self.z_equation,
         )
+        if self.base.dispersion == "d2c":
+            self.dispersion_result = evaluate_d2c(
+                self.cell, self.base.xc, gradient=True
+            )
+            self.result = apply_d2c_gradient(
+                electronic_result, self.dispersion_result
+            )
+        else:
+            self.result = electronic_result
         full_gradient = np.asarray(self.result.gradient)
         if atmlst is None:
             self.atmlst = list(range(self.cell.natm))

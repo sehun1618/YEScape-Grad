@@ -28,6 +28,15 @@ def capability() -> dict[str, object]:
         "r2scan_analytic_gradient": True,
         "validated_target_functionals": ["PBE", "SCAN", "R2SCAN"],
         "validated_df_backends": ["FFTDF", "GDF", "RSDF"],
+        "optional_dispersion": {
+            "d2c_d4": {
+                "energy": True,
+                "analytic_gradient": True,
+                "electronic_structure_device": "gpu",
+                "dispersion_library_device": "cpu",
+                "density_response": False,
+            }
+        },
         "target_integrators": {
             "uniform": {
                 "energy": True,
@@ -66,6 +75,7 @@ def capability() -> dict[str, object]:
             "small GTH radial/projector table setup",
             "Ewald nuclear-repulsion gradient",
             "final scalar/array reporting",
+            "optional periodic D2C-D4 energy/gradient library",
         ],
         "route_ownership": {
             "hf_scf": "GPU4PySCF RHF/KRHF with project-local GPU FFTDF/GDF/RSDF J/K",
@@ -94,5 +104,6 @@ def capability() -> dict[str, object]:
             "nonlocal_gth_derivative": "gpu4pyscf_pbc_dcdft.pseudo",
             "hf_ax_zvector": "gpu4pyscf_pbc_dcdft.grad",
             "final_gradient": "gpu4pyscf_pbc_dcdft.grad.fftdf/gdf/rsdf",
+            "d2c_d4": "pyscf_pbc_dcdft.dispersion host library boundary",
         },
     }

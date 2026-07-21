@@ -12,7 +12,8 @@ class DCEnergyComponents:
 
     ``one_electron`` contains kinetic plus electron-ion pseudopotential energy.
     ``coulomb`` and ``xc`` are the tags returned by the target PySCF KS
-    effective potential.  Their sum with ``nuclear`` must reproduce ``total``.
+    effective potential. ``dispersion`` is an optional geometry-only term.
+    Their sum with ``nuclear`` must reproduce ``total``.
     """
 
     one_electron: float
@@ -20,10 +21,17 @@ class DCEnergyComponents:
     xc: float
     nuclear: float
     total: float
+    dispersion: float = 0.0
 
     @property
     def reconstructed_total(self) -> float:
-        return self.one_electron + self.coulomb + self.xc + self.nuclear
+        return (
+            self.one_electron
+            + self.coulomb
+            + self.xc
+            + self.nuclear
+            + self.dispersion
+        )
 
 
 @dataclass(frozen=True)

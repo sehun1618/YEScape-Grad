@@ -42,6 +42,7 @@ from pyscf_pbc_dcdft.dft.target_integrator import (  # noqa: E402
     UNIFORM,
     normalize_target_integrator,
 )
+from pyscf_pbc_dcdft.dispersion import normalize_dispersion  # noqa: E402
 
 
 AXIS_NAMES = ("x", "y", "z")
@@ -341,6 +342,7 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[str, str]:
     target_integrator = normalize_target_integrator(
         config.get("target_integrator", UNIFORM)
     )
+    normalize_dispersion(config.get("dispersion"))
     if device not in SUPPORTED_DEVICES:
         raise ValueError(f"device must be one of {sorted(SUPPORTED_DEVICES)}")
     if backend not in SUPPORTED_DF_BACKENDS:
@@ -496,6 +498,7 @@ def build_method(config: Mapping[str, Any], cell, device: str, backend: str):
         config.get("target_integrator", UNIFORM),
         mesh=config.get("target_multigrid_mesh"),
     )
+    method.set_dispersion(config.get("dispersion"))
     return method, kpts
 
 
@@ -1315,7 +1318,9 @@ def run_benchmark(
             config.get("target_integrator", UNIFORM)
         ).lower(),
         "xc": str(config.get("xc", "PBE")),
+        "dispersion": normalize_dispersion(config.get("dispersion")),
         "energy_ha": energy,
+        "energy_components": method.dc_energy_result.as_dict(),
         "source_hf": source_hf_identity,
         "units": {
             "energy": "Ha",
@@ -1356,6 +1361,9 @@ def run_benchmark(
             ).lower(),
             "target_multigrid_mesh": config.get(
                 "target_multigrid_mesh"
+            ),
+            "dispersion": normalize_dispersion(
+                config.get("dispersion")
             ),
             "kmesh": list(_normalize_kmesh(config)),
             "nkpts": len(kpts),

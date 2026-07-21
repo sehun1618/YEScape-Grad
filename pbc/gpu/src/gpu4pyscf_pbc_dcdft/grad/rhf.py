@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from pyscf import lib
+from pyscf_pbc_dcdft.dispersion import apply_d2c_gradient, evaluate_d2c
 
 from .fftdf import fftdf_gpu_gradient
 from .gdf import gdf_gpu_gradient
@@ -54,6 +55,7 @@ class DCGradients(lib.StreamObject):
         self.rsdf_derivative_omega_scale = 1.0
         self.de = None
         self.result = None
+        self.dispersion_result = None
         self.atmlst = None
         self.progress_callback = None
 
@@ -64,7 +66,7 @@ class DCGradients(lib.StreamObject):
             self.set(**kwargs)
         backend = getattr(self.base.with_df, "backend_name", None)
         if backend == "fftdf":
-            self.result = fftdf_gpu_gradient(
+            electronic_result = fftdf_gpu_gradient(
                 self.base,
                 z_equation=self.z_equation,
                 z_solver=self.z_solver,
@@ -75,7 +77,7 @@ class DCGradients(lib.StreamObject):
                 progress_callback=self.progress_callback,
             )
         elif backend == "gdf":
-            self.result = gdf_gpu_gradient(
+            electronic_result = gdf_gpu_gradient(
                 self.base,
                 z_equation=self.z_equation,
                 z_solver=self.z_solver,
@@ -96,7 +98,7 @@ class DCGradients(lib.StreamObject):
                 progress_callback=self.progress_callback,
             )
         elif backend == "rsdf":
-            self.result = rsdf_gpu_gradient(
+            electronic_result = rsdf_gpu_gradient(
                 self.base,
                 z_equation=self.z_equation,
                 z_solver=self.z_solver,
@@ -113,6 +115,25 @@ class DCGradients(lib.StreamObject):
             raise NotImplementedError(
                 f"GPU analytic gradient does not support {backend!r}"
             )
+        if self.base.dispersion == "d2c":
+            if self.progress_callback is not None:
+                self.progress_callback(
+                    "gradient_dispersion_d2c", state="started"
+                )
+            self.dispersion_result = evaluate_d2c(
+                self.cell, self.base.xc, gradient=True
+            )
+            self.result = apply_d2c_gradient(
+                electronic_result, self.dispersion_result
+            )
+            if self.progress_callback is not None:
+                self.progress_callback(
+                    "gradient_dispersion_d2c",
+                    state="complete",
+                    wall_time_s=self.dispersion_result.wall_time_s,
+                )
+        else:
+            self.result = electronic_result
         full_gradient = np.asarray(self.result.gradient)
         if atmlst is None:
             self.atmlst = list(range(self.cell.natm))

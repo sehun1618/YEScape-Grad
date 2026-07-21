@@ -18,6 +18,7 @@ _COMPUTED_FIELDS = (
     "target_ks",
     "target_evaluation",
     "dc_energy_result",
+    "dispersion_result",
 )
 _PROVIDER_SETTINGS = (
     "backend_name",
@@ -29,6 +30,7 @@ _PROVIDER_SETTINGS = (
 _TARGET_SETTINGS = (
     "target_integrator",
     "target_multigrid_mesh",
+    "dispersion",
 )
 
 

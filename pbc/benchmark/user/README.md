@@ -40,3 +40,5 @@ python run_benchmark_queue.py --queue user/queues/current_water64_sz.json
   RSDF 두 경로는 현재 OOM 이력 때문에 `enabled: false`다.
 - `current_water64_sz_uniform_vs_multigrid.json`: 동일 mesh의 적분 경로 비교
 - `current_water_ethanol_sz_uniform_vs_multigrid.json`: 혼합 원소계 비교
+- `current_water_ethanol_sz_d2c.json`: 같은 혼합 원소계의 r2SCAN+D2C-D4
+  GDF/RSDF uniform/multigrid-XC 비교

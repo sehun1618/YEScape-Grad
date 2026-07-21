@@ -7,6 +7,11 @@ from typing import Any
 from pyscf import lib
 
 from .. import df
+from ..dispersion import (
+    apply_d2c_energy,
+    evaluate_d2c,
+    normalize_dispersion,
+)
 from ..lib.kpoints import is_gamma, normalize_kpts
 from ..scf import build_reference
 from .fixed_density import evaluate_energy
@@ -43,6 +48,7 @@ class DCRestrictedBase(lib.StreamObject):
         "max_memory",
         "target_integrator",
         "target_multigrid_mesh",
+        "dispersion",
     }
     kpoint_mode = False
 
@@ -63,6 +69,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.max_memory = getattr(cell, "max_memory", 4000)
         self.target_integrator = UNIFORM
         self.target_multigrid_mesh = None
+        self.dispersion = None
 
         self.converged = False
         self.e_tot = None
@@ -73,6 +80,7 @@ class DCRestrictedBase(lib.StreamObject):
         self.source_scf = None
         self.target_ks = None
         self.dc_energy_result = None
+        self.dispersion_result = None
         self._dcdft_input_signature = None
 
     def set_target_integrator(self, mode=UNIFORM, *, mesh=None):
@@ -92,6 +100,18 @@ class DCRestrictedBase(lib.StreamObject):
             )
         self.target_integrator = mode
         self.target_multigrid_mesh = normalize_target_multigrid_mesh(mesh)
+        invalidate_computed_state(self)
+        return self
+
+    def set_dispersion(self, correction=None):
+        """Select an additive geometry-only dispersion correction.
+
+        ``"d2c"`` uses the functional-specific parameters published for
+        HF-DFT.  The default is ``None`` so existing calculations are
+        unchanged.
+        """
+
+        self.dispersion = normalize_dispersion(correction)
         invalidate_computed_state(self)
         return self
 
@@ -140,6 +160,7 @@ class DCRestrictedBase(lib.StreamObject):
 
         if kwargs:
             self.set(**kwargs)
+        self.dispersion = normalize_dispersion(self.dispersion)
         invalidate_computed_state(self)
         validate_restricted_input(self)
         reference = self._build_reference()
@@ -162,6 +183,11 @@ class DCRestrictedBase(lib.StreamObject):
             target_integrator=self.target_integrator,
             target_multigrid_mesh=self.target_multigrid_mesh,
         )
+        if self.dispersion == "d2c":
+            self.dispersion_result = evaluate_d2c(
+                self.cell, self.xc, gradient=False
+            )
+            result = apply_d2c_energy(result, self.dispersion_result)
         self.source_scf = reference
         self.target_ks = target
         self.dc_energy_result = result
@@ -218,6 +244,12 @@ class DCRestrictedBase(lib.StreamObject):
                 None
                 if self.target_multigrid_mesh is None
                 else [int(value) for value in self.target_multigrid_mesh]
+            ),
+            "dispersion": self.dispersion,
+            "dispersion_metadata": (
+                None
+                if self.dispersion_result is None
+                else self.dispersion_result.metadata()
             ),
             "mesh": [int(value) for value in self.cell.mesh],
             "ke_cutoff_ha": (
