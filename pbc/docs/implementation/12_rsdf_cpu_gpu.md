@@ -440,6 +440,19 @@ gradient를 각각 기존 dense reference와 비교한다. 실제 Water64/DZ GDF
 `benchmark/development/queues/current_water64_dz_gdf_rsdf_oom_repair.json`을 사용자가
 실행하는 release evidence로 남긴다.
 
+첫 Water64/DZ 실행은 packed builder에 도달하기 전
+`auxiliary_density_contraction`에서 실패했다. Canonical CDERI가 strided storage일 때
+기존 full-array `einsum("pij,ji->p")`이 전체 CDERI 크기의 contiguous 입력을 추가로
+요청했기 때문이다. 당시 sampled device use는 약 73.64 GiB였고 남은 VRAM으로 이
+복사본을 만들 수 없었다.
+
+현재 경로는 reference density와 Z-response density를 함께 받아 auxiliary 최대 32개씩
+한 번만 순회한다. 각 tile은 commit 전까지 임시로 유지되므로 OOM이면 결과를 중복
+누적하지 않고 tile만 절반으로 줄여 재시도한다. 실수 CDERI와 complex density를
+수축할 때도 CDERI 전체를 complex로 승격하지 않고 실수부와 허수부 matvec를 분리한다.
+Gamma density의 허수부가 `1e-10` 이하인 경우에는 실수 view를 사용한다. 이 수정은
+뒤쪽 direct-packed adjoint와 독립적인 앞단 peak를 제거한다.
+
 ## 10. Current limitations and failure policy
 
 - fixed three-dimensional lattice의 nuclear gradient만 지원한다.

@@ -31,6 +31,11 @@ This development branch is compared against GitHub `main` at `0f286a1`.
   lower-triangle AO-pair storage.  Source reversal overwrites that allocation,
   while the metric adjoint contracts weighted packed pairs in bounded blocks;
   the former full `(naux,nao,nao)` adjoint and packed RHS copy are absent.
+  The first Water64/DZ rerun then exposed an earlier whole-CDERI contiguous
+  copy in the auxiliary-density `einsum`.  Reference and response auxiliary
+  densities now share one transactional auxiliary-block traversal, mixed
+  real/complex products avoid promoting the CDERI tile, and OOM retries halve
+  only the uncommitted tile.
   Add a paired Water64/DZ development queue for user-run GDF and RSDF memory
   confirmation; the large calculation is not part of the automated gate.
 - Repair the Water64/DZ Gamma GDF reverse-adjoint high-water path: keep the

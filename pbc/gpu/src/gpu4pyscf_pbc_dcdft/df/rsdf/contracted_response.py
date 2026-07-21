@@ -14,7 +14,7 @@ from pyscf_pbc_dcdft.df.rsdf.parameters import (
 )
 
 from ..gdf.cholesky import CDERIFactorization
-from ..gdf.jk_derivative import auxiliary_density_contraction
+from ..gdf.jk_derivative import auxiliary_density_contractions
 from .component_stream import (
     DEFAULT_COMPONENT_MEMORY_FRACTION,
     DEFAULT_COMPONENT_RESERVE_BYTES,
@@ -113,8 +113,12 @@ def build_rsdf_contracted_response(
             f"got {reference.shape} and {response.shape}"
         )
     central = provider.central_cderi_blocks
-    auxiliary_reference = auxiliary_density_contraction(central, reference)
-    auxiliary_response = auxiliary_density_contraction(central, response)
+    auxiliary_density_memory = {}
+    auxiliary_reference, auxiliary_response = auxiliary_density_contractions(
+        central,
+        (reference, response),
+        memory_diagnostics=auxiliary_density_memory,
+    )
     natm = int(provider.cell.natm)
     output_shape = (natm, 3)
     if observable_mode == "fused":
@@ -342,8 +346,13 @@ def build_rsdf_contracted_response(
             {
                 "pairs": fused_adjoint_memory,
                 "central_release": central_release_memory,
+                "auxiliary_density_contraction": auxiliary_density_memory,
             }
-            if fused_adjoint_memory or central_release_memory is not None
+            if (
+                fused_adjoint_memory
+                or central_release_memory is not None
+                or auxiliary_density_memory
+            )
             else None
         ),
     )

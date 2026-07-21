@@ -17,6 +17,12 @@ from pyscf.pbc.tools import pbc as pbc_tools
 from pyscf_pbc_dcdft.df.gdf.storage import Pair
 
 
+DEFAULT_AUXILIARY_DENSITY_MEMORY_FRACTION = 0.10
+DEFAULT_AUXILIARY_DENSITY_RESERVE_BYTES = 2 * 1024**3
+DEFAULT_AUXILIARY_DENSITY_MAX_BLOCK = 32
+DEFAULT_AUXILIARY_DENSITY_IMAGINARY_TOLERANCE = 1.0e-10
+
+
 @dataclass(frozen=True)
 class GDFJKDerivatives:
     """Device J/K derivatives with ``(atom,k,xyz,AO,AO)`` ordering."""
@@ -140,7 +146,7 @@ def contract_restricted_hf_bilinear_energy_derivative(
     return value.real / len(reference)
 
 
-def auxiliary_density_contraction(cderi, density):
+def auxiliary_density_contraction(cderi, density, **kwargs):
     """Return ``sum_k Tr[C_kk D_k]`` for a periodic CDERI mapping.
 
     The auxiliary vector is shared by every nuclear component.  Building it
@@ -148,17 +154,210 @@ def auxiliary_density_contraction(cderi, density):
     a time without retaining ``dCDERI`` blocks from earlier pairs.
     """
 
-    dm = _density_array(density)
+    return auxiliary_density_contractions(cderi, (density,), **kwargs)[0]
+
+
+def auxiliary_density_contractions(
+    cderi,
+    densities,
+    *,
+    memory_fraction=DEFAULT_AUXILIARY_DENSITY_MEMORY_FRACTION,
+    minimum_reserve_bytes=DEFAULT_AUXILIARY_DENSITY_RESERVE_BYTES,
+    max_auxiliary_block=DEFAULT_AUXILIARY_DENSITY_MAX_BLOCK,
+    memory_diagnostics=None,
+):
+    """Contract several densities through one bounded CDERI traversal.
+
+    GPU4PySCF may expose canonical CDERI with auxiliary-fast or otherwise
+    strided storage.  A whole-array ``einsum`` can then request a contiguous
+    copy as large as the complete CDERI.  This route copies at most one
+    planned auxiliary tile and reuses it for every supplied density.
+    """
+
+    density_arrays = tuple(_density_array(value) for value in densities)
+    if not density_arrays:
+        raise ValueError("at least one density is required")
+    shape = density_arrays[0].shape
+    if any(value.shape != shape for value in density_arrays[1:]):
+        raise ValueError("all densities must have the same shape")
+
     first = pair_block(cderi, 0, 0)
-    result = cp.zeros(first.shape[0], dtype=cp.complex128)
-    for kpoint_id in range(len(dm)):
-        result += cp.einsum(
-            "pij,ji->p",
-            pair_block(cderi, kpoint_id, kpoint_id),
-            dm[kpoint_id],
-            optimize=True,
+    naux, nao, nao2 = first.shape
+    if (nao, nao2) != tuple(shape[1:]):
+        raise ValueError(
+            f"CDERI AO shape {(nao, nao2)} does not match {shape[1:]}"
         )
-    return result
+    result = cp.zeros((len(density_arrays), naux), dtype=cp.complex128)
+    plan = plan_auxiliary_density_blocks(
+        naux,
+        nao,
+        first.dtype,
+        memory_fraction=memory_fraction,
+        minimum_reserve_bytes=minimum_reserve_bytes,
+        maximum_block_size=max_auxiliary_block,
+    )
+    execution = _execute_auxiliary_density_blocks(
+        result,
+        cderi,
+        density_arrays,
+        initial_block_size=plan["initial_block_size"],
+    )
+    if memory_diagnostics is not None:
+        memory_diagnostics.clear()
+        memory_diagnostics.update(
+            {
+                "density_count": len(density_arrays),
+                "plan": plan,
+                "execution": execution,
+            }
+        )
+    return tuple(result[index] for index in range(len(result)))
+
+
+def plan_auxiliary_density_blocks(
+    naux,
+    nao,
+    dtype,
+    *,
+    memory_fraction=DEFAULT_AUXILIARY_DENSITY_MEMORY_FRACTION,
+    minimum_reserve_bytes=DEFAULT_AUXILIARY_DENSITY_RESERVE_BYTES,
+    maximum_block_size=DEFAULT_AUXILIARY_DENSITY_MAX_BLOCK,
+    free_device_bytes=None,
+):
+    """Plan the largest bounded auxiliary tile allowed by current VRAM."""
+
+    naux = int(naux)
+    nao = int(nao)
+    fraction = float(memory_fraction)
+    if naux < 1 or nao < 1:
+        raise ValueError("naux and nao must be positive")
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError("memory_fraction must be in (0, 1]")
+    if free_device_bytes is None:
+        free_device_bytes = int(cp.cuda.runtime.memGetInfo()[0])
+    reserve = min(int(minimum_reserve_bytes), int(free_device_bytes))
+    budget = max(1, int((int(free_device_bytes) - reserve) * fraction))
+    bytes_per_auxiliary = nao**2 * cp.dtype(dtype).itemsize
+    # A contiguous CDERI tile plus contraction-engine workspace.  The output
+    # vectors are only O(naux) and do not affect this bound.
+    working_bytes_per_auxiliary = 2 * bytes_per_auxiliary
+    block_size = max(1, budget // working_bytes_per_auxiliary)
+    block_size = min(naux, max(1, int(maximum_block_size)), int(block_size))
+    return {
+        "naux": naux,
+        "nao": nao,
+        "dtype": cp.dtype(dtype).str,
+        "free_device_bytes_at_plan": int(free_device_bytes),
+        "memory_fraction": fraction,
+        "reserve_bytes": reserve,
+        "budget_bytes": budget,
+        "bytes_per_auxiliary": int(bytes_per_auxiliary),
+        "working_bytes_per_auxiliary": int(working_bytes_per_auxiliary),
+        "initial_block_size": int(block_size),
+        "maximum_block_size": max(1, int(maximum_block_size)),
+    }
+
+
+def _execute_auxiliary_density_blocks(
+    output,
+    cderi,
+    densities,
+    *,
+    initial_block_size,
+):
+    """Contract complete auxiliary tiles and retry OOMs before committing."""
+
+    naux = int(output.shape[1])
+    block_size = max(1, min(naux, int(initial_block_size)))
+    minimum_block_size = block_size
+    block_count = 0
+    rebatch_count = 0
+    for kpoint_id in range(densities[0].shape[0]):
+        factor = pair_block(cderi, kpoint_id, kpoint_id)
+        vectors = tuple(
+            _auxiliary_density_vector(density[kpoint_id])
+            for density in densities
+        )
+        start = 0
+        while start < naux:
+            stop = min(naux, start + block_size)
+            block = None
+            values = None
+            try:
+                block = cp.ascontiguousarray(factor[start:stop]).reshape(
+                    stop - start,
+                    -1,
+                )
+                values = cp.stack(
+                    [_plain_matrix_vector(block, vector) for vector in vectors]
+                )
+            except Exception as error:
+                if not _is_gpu_out_of_memory(error) or stop - start <= 1:
+                    raise
+                del block, values
+                block_size = max(1, (stop - start) // 2)
+                minimum_block_size = min(minimum_block_size, block_size)
+                rebatch_count += 1
+                _release_unused_gpu_memory()
+                continue
+            output[:, start:stop] += values
+            del block, values
+            minimum_block_size = min(minimum_block_size, stop - start)
+            block_count += 1
+            start = stop
+    return {
+        "completed_auxiliary_count": naux,
+        "kpoint_count": int(densities[0].shape[0]),
+        "initial_block_size": int(initial_block_size),
+        "final_block_size": int(block_size),
+        "minimum_block_size": int(minimum_block_size),
+        "block_count": int(block_count),
+        "rebatch_count": int(rebatch_count),
+    }
+
+
+def _auxiliary_density_vector(density):
+    """Flatten one transposed density, discarding only Gamma roundoff."""
+
+    value = cp.asarray(density)
+    if value.dtype.kind == "c" and value.size:
+        imaginary = float(cp.max(cp.abs(value.imag)).get())
+        if imaginary <= DEFAULT_AUXILIARY_DENSITY_IMAGINARY_TOLERANCE:
+            value = value.real
+    return cp.ascontiguousarray(value.T).reshape(-1)
+
+
+def _plain_matrix_vector(matrix, vector):
+    """Multiply mixed real/complex operands without promoting the matrix."""
+
+    matrix = cp.asarray(matrix)
+    vector = cp.asarray(vector)
+    if matrix.dtype.kind != "c" and vector.dtype.kind != "c":
+        return matrix @ vector
+    real = matrix.real @ vector.real
+    if matrix.dtype.kind == "c" and vector.dtype.kind == "c":
+        real -= matrix.imag @ vector.imag
+        imaginary = matrix.real @ vector.imag
+        imaginary += matrix.imag @ vector.real
+    elif matrix.dtype.kind == "c":
+        imaginary = matrix.imag @ vector
+    else:
+        imaginary = matrix @ vector.imag
+    return real + 1j * imaginary
+
+
+def _is_gpu_out_of_memory(error):
+    if isinstance(error, cp.cuda.memory.OutOfMemoryError):
+        return True
+    message = str(error).lower()
+    return "out of memory" in message or "memoryallocation" in message
+
+
+def _release_unused_gpu_memory():
+    cp.get_default_memory_pool().free_all_blocks()
+    pinned = cp.get_default_pinned_memory_pool()
+    if hasattr(pinned, "free_all_blocks"):
+        pinned.free_all_blocks()
 
 
 def contract_canonical_pair_derivative(

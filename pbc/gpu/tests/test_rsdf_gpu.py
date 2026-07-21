@@ -34,6 +34,9 @@ from gpu4pyscf_pbc_dcdft.df.rsdf.central_exact import (
     _source_builder_memory_plan,
 )
 from gpu4pyscf_pbc_dcdft.df.gdf import gdf as gdf_provider_module
+from gpu4pyscf_pbc_dcdft.df.gdf import (
+    jk_derivative as gdf_jk_derivative_module,
+)
 from gpu4pyscf_pbc_dcdft.df.rsdf import rsdf as rsdf_provider_module
 from gpu4pyscf_pbc_dcdft.df.rsdf import (
     source_reciprocal as source_reciprocal_module,
@@ -83,10 +86,12 @@ from gpu4pyscf_pbc_dcdft.df.gdf.cholesky import CDERIFactorization
 from gpu4pyscf_pbc_dcdft.df.rsdf.response import _host_pair_primitives
 from gpu4pyscf_pbc_dcdft.df.gdf.jk_derivative import (
     auxiliary_density_contraction,
+    auxiliary_density_contractions,
     contract_canonical_pair_derivative,
     contract_coulomb_energy_derivative,
     contract_restricted_hf_bilinear_energy_derivative,
     gdf_jk_derivative,
+    plan_auxiliary_density_blocks,
 )
 from gpu4pyscf_pbc_dcdft.grad import gdf as gdf_gradient_module
 
@@ -235,6 +240,123 @@ class RSDFGPUParityTest(unittest.TestCase):
         self.assertEqual(
             packed.nbytes,
             source_order.nbytes * (nao + 1) // (2 * nao),
+        )
+
+    def test_blocked_auxiliary_density_matches_strided_einsum(self):
+        rng = np.random.default_rng(30)
+        naux, nao = 5, 4
+        storage = cp.asarray(
+            rng.normal(size=(nao, 1, nao, naux)),
+            dtype=cp.float64,
+        )
+        factor = storage.transpose(1, 3, 0, 2)[0]
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response = cp.asarray(
+            rng.normal(size=(1, nao, nao))
+            + 1j * rng.normal(size=(1, nao, nao))
+        )
+        diagnostics = {}
+        actual = auxiliary_density_contractions(
+            {(0, 0): factor},
+            (reference, response),
+            max_auxiliary_block=2,
+            memory_diagnostics=diagnostics,
+        )
+        expected = tuple(
+            cp.einsum("pij,ji->p", factor, density[0], optimize=True)
+            for density in (reference, response)
+        )
+
+        for value, witness in zip(actual, expected, strict=True):
+            np.testing.assert_allclose(
+                cp.asnumpy(value),
+                cp.asnumpy(witness),
+                atol=1.0e-11,
+                rtol=1.0e-11,
+            )
+        self.assertEqual(diagnostics["density_count"], 2)
+        self.assertEqual(diagnostics["execution"]["block_count"], 3)
+
+    def test_auxiliary_density_oom_retries_without_partial_commit(self):
+        rng = np.random.default_rng(33)
+        naux, nao = 4, 3
+        factor = cp.asarray(rng.normal(size=(naux, nao, nao)))
+        reference = cp.asarray(rng.normal(size=(1, nao, nao)))
+        response = cp.asarray(rng.normal(size=(1, nao, nao)))
+        expected = auxiliary_density_contractions(
+            {(0, 0): factor},
+            (reference, response),
+            max_auxiliary_block=1,
+        )
+        original = gdf_jk_derivative_module._plain_matrix_vector
+        failed = False
+
+        def fail_first_large_block(matrix, vector):
+            nonlocal failed
+            if not failed and matrix.shape[0] > 1:
+                failed = True
+                raise RuntimeError("cudaErrorMemoryAllocation: out of memory")
+            return original(matrix, vector)
+
+        diagnostics = {}
+        with mock.patch.object(
+            gdf_jk_derivative_module,
+            "_plain_matrix_vector",
+            side_effect=fail_first_large_block,
+        ):
+            actual = auxiliary_density_contractions(
+                {(0, 0): factor},
+                (reference, response),
+                memory_fraction=1.0,
+                minimum_reserve_bytes=0,
+                max_auxiliary_block=naux,
+                memory_diagnostics=diagnostics,
+            )
+
+        for value, witness in zip(actual, expected, strict=True):
+            np.testing.assert_allclose(
+                cp.asnumpy(value),
+                cp.asnumpy(witness),
+                atol=1.0e-11,
+                rtol=1.0e-11,
+            )
+        execution = diagnostics["execution"]
+        self.assertEqual(execution["rebatch_count"], 1)
+        self.assertEqual(execution["completed_auxiliary_count"], naux)
+        self.assertEqual(execution["final_block_size"], 2)
+
+    def test_water64_dz_auxiliary_density_plan_is_bounded(self):
+        plan = plan_auxiliary_density_blocks(
+            1472,
+            1472,
+            np.float64,
+            free_device_bytes=int(22 * 1024**3),
+        )
+
+        self.assertLessEqual(plan["initial_block_size"], 32)
+        self.assertGreaterEqual(plan["reserve_bytes"], 2 * 1024**3)
+        self.assertLessEqual(
+            plan["initial_block_size"]
+            * plan["working_bytes_per_auxiliary"],
+            plan["budget_bytes"],
+        )
+
+    def test_auxiliary_density_vector_discards_only_roundoff_imaginary(self):
+        real = cp.arange(9, dtype=cp.float64).reshape(3, 3)
+        roundoff = real.astype(cp.complex128) + 1.0e-13j
+        genuine = real.astype(cp.complex128) + 1.0e-6j
+
+        real_vector = gdf_jk_derivative_module._auxiliary_density_vector(
+            roundoff
+        )
+        complex_vector = gdf_jk_derivative_module._auxiliary_density_vector(
+            genuine
+        )
+        self.assertEqual(real_vector.dtype, cp.float64)
+        self.assertEqual(complex_vector.dtype, cp.complex128)
+        np.testing.assert_allclose(
+            cp.asnumpy(real_vector),
+            cp.asnumpy(real.T.reshape(-1)),
         )
 
     def test_fused_gamma_adjoint_matches_resolved_and_stays_real(self):
