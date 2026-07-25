@@ -1,0 +1,58 @@
+{
+  "schema": "pbc_dcdft_stress_scaling_repair_v1",
+  "date": "2026-07-23",
+  "system": "water20",
+  "basis": "SZV-GTH",
+  "kmesh": [1, 1, 1],
+  "mesh": [239, 239, 239],
+  "status": "repair_closed_by_successful_water20_scaling_gate",
+  "failed_user_attempt": {
+    "result_root": "benchmark/user/results/current_water20_sz_stress_scaling",
+    "common_error": "CUDA_ERROR_ILLEGAL_ADDRESS",
+    "common_failed_stage": "stress_df_host_primitives",
+    "gdf": {
+      "attempt_id": "0033f0744a5c4c3cbcc42dc37633ab76",
+      "elapsed_s": 60.85589053668082,
+      "sampled_vram_delta_gib": 15.92578125
+    },
+    "rsdf": {
+      "attempt_id": "5c673eebf2c14b39b41e71658e50c18b",
+      "elapsed_s": 58.723035287112,
+      "sampled_vram_delta_gib": 15.3359375
+    },
+    "oom": false
+  },
+  "repairs": {
+    "gamma_dispatch": {
+      "before": "sampled_k_bvk_layout",
+      "after": "dedicated_gamma_layout",
+      "changes_equations": false
+    },
+    "automatic_reciprocal_block": {
+      "ao_count": 120,
+      "auxiliary_count": 120,
+      "before_block_points": 16384,
+      "after_block_points": 4656,
+      "before_estimated_active_gib": 21.328125,
+      "after_estimated_active_gib": 6.0610198974609375,
+      "two_ao_pair_work_budget_bytes": 2147483648,
+      "changes_equations": false,
+      "applies_to_explicit_user_block": false
+    }
+  },
+  "post_repair_verification": {
+    "gpu_unit_tests": 21,
+    "benchmark_tests": 10,
+    "h2_dispatch_fd_max_ha_per_bohr3": 2.825665288e-11,
+    "water8_gdf_gamma": {
+      "fd_max_abs_ha_per_bohr3": 6.910854408268691e-11,
+      "stress_wall_s": 12.46889212820679
+    },
+    "water8_rsdf_gamma": {
+      "fd_max_abs_ha_per_bohr3": 6.897884016364084e-11,
+      "stress_wall_s": 9.582565182819963
+    }
+  },
+  "closure_evidence": "2026-07-23_water20_scaling_gate.json",
+  "remaining_gate": null
+}

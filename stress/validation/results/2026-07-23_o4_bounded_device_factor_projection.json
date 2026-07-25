@@ -1,0 +1,67 @@
+{
+  "schema": "pbc_dcdft_stress_optimization_evidence_v1",
+  "date": "2026-07-23",
+  "stage": "O4_bounded_device_factor_projection",
+  "algorithm": {
+    "kind": "exact_blocked_contraction_reassociation",
+    "transfer_block_bytes": 536870912,
+    "changes_numerical_parameters": false,
+    "changes_screening": false,
+    "device_memory_preflight": true,
+    "status": "explicit_production_capable_opt_in"
+  },
+  "h2_component_gates": {
+    "gdf_gamma_fd_max_abs_ha_per_bohr3": 2.805968402509046e-11,
+    "rsdf_gamma_fd_max_abs_ha_per_bohr3": 2.825555447168865e-11,
+    "gdf_k211_fd_max_abs_ha_per_bohr3": 1.982243633558839e-11,
+    "rsdf_k211_fd_max_abs_ha_per_bohr3": 1.9778443856657835e-11,
+    "passed": true,
+    "result_root": "stress/benchmark/development/results/optimization_o4_h2_factorized_device_bounded"
+  },
+  "water8_rsdf": {
+    "host_factorized": {
+      "source_wall_s": 79.73465021885931,
+      "stress_wall_s": 87.10589367430657,
+      "host_peak_rss_gib": 8.39249038696289
+    },
+    "bounded_device": {
+      "source_wall_s": 32.619866359978914,
+      "stress_wall_s": 40.004361976869404,
+      "projection_wall_s": 7.820782828144729,
+      "host_peak_rss_gib": 8.869773864746094,
+      "df_stage_device_used_gib": 3.22674560546875,
+      "fd_max_abs_ha_per_bohr3": 6.899472204495438e-11,
+      "stress_max_abs_difference_ha_per_bohr3": 2.8080836267374565e-17
+    },
+    "change_percent": {
+      "source_wall": -59.089472054567985,
+      "stress_wall": -54.07387458023475,
+      "host_peak_rss": 5.687030378070235
+    }
+  },
+  "water8_gdf": {
+    "host_factorized": {
+      "source_wall_s": 396.20431942120194,
+      "stress_wall_s": 404.830063264817,
+      "host_peak_rss_gib": 11.947010040283203
+    },
+    "bounded_device": {
+      "source_wall_s": 262.498775084503,
+      "stress_wall_s": 271.1094367587939,
+      "projection_wall_s": 128.1192476376891,
+      "host_peak_rss_gib": 12.44134521484375,
+      "df_stage_device_used_gib": 3.12713623046875,
+      "stress_max_abs_difference_ha_per_bohr3": 1.6588293239028218e-17
+    },
+    "change_percent": {
+      "source_wall": -33.74661450738945,
+      "stress_wall": -33.03129847314492,
+      "host_peak_rss": 4.137731305939618
+    }
+  },
+  "limitations": [
+    "Water8 timings are single detailed-profile runs, not profiler-off three-repeat medians.",
+    "The Water8 GDF bounded run uses stress parity against the prior FD-passed exact route rather than repeating the expensive FD calculation.",
+    "Large sampled-k and Water20/64 projected-output memory scaling remain open."
+  ]
+}

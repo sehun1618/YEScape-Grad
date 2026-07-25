@@ -1,0 +1,698 @@
+{
+  "analytic_s": 6.947413416579366,
+  "fd_s": 1.778513322584331,
+  "max_error": 2.1956859540175205e-10,
+  "z_residual": 0.0,
+  "orbital_response_max": 1.3877915649657645e-19,
+  "analytic": {
+    "component_derivatives_ha": {
+      "kinetic": [
+        0.030364887469384625,
+        0.17848307186271964,
+        0.03237679396455602,
+        -0.062949516346474,
+        -0.11484805546757468,
+        -0.05076118755733595
+      ],
+      "pseudopotential": [
+        0.3935418425687598,
+        -0.29628449045644967,
+        0.011854744727391378,
+        0.20832184714855648,
+        0.34788917094821475,
+        0.16214965814587123
+      ],
+      "one_electron": [
+        0.42390673003814444,
+        -0.11780141859373003,
+        0.044231538691947396,
+        0.14537233080208248,
+        0.23304111548064008,
+        0.1113884705885353
+      ],
+      "target_coulomb": [
+        -0.16285807161937924,
+        0.07628505290252964,
+        0.04454269552407628,
+        -0.0497938340929468,
+        -0.07258978884565515,
+        -0.03692116867397227
+      ],
+      "target_xc": [
+        0.5432125340950583,
+        0.32158104592125614,
+        0.38879553370521225,
+        0.049600173748218894,
+        0.07459355923309344,
+        0.037698379242347375
+      ],
+      "target_overlap": [
+        -0.6171061429644858,
+        -0.4196458557786308,
+        -0.4611569705406648,
+        -0.03740118158786711,
+        -0.051014095728732035,
+        -0.027728794820557606
+      ],
+      "nuclear": [
+        0.014773860075754576,
+        0.29467393844748446,
+        0.07555770057185793,
+        -0.1257712824645585,
+        -0.23020431948377135,
+        -0.10105021848977495
+      ],
+      "explicit": [
+        0.20192890962509227,
+        0.15509276289890944,
+        0.09197049795242909,
+        -0.017993793595071014,
+        -0.04617352934442501,
+        -0.016613332153422172
+      ],
+      "orbital_response": [
+        2.0623116893769822e-18,
+        1.0913288481747482e-17,
+        2.2891760643266784e-17,
+        -9.966591280153264e-19,
+        -6.090652181823947e-19,
+        -4.005243183132422e-19
+      ],
+      "total": [
+        0.20192890962509227,
+        0.15509276289890944,
+        0.09197049795242912,
+        -0.017993793595071014,
+        -0.04617352934442501,
+        -0.016613332153422172
+      ]
+    },
+    "component_stress_ha_per_bohr3": {
+      "kinetic": [
+        0.00018408428848194083,
+        0.0010820369192227973,
+        0.00019628128331780962,
+        -0.0003816255515060472,
+        -0.0006962555878265343,
+        -0.00030773494890807537
+      ],
+      "pseudopotential": [
+        0.002385810589622129,
+        -0.0017961969946011216,
+        7.186828044323088e-05,
+        0.0012629317018299764,
+        0.0021090455404830202,
+        0.0009830171271824433
+      ],
+      "one_electron": [
+        0.0025698948781040696,
+        -0.0007141600753783246,
+        0.0002681495637610405,
+        0.0008813061503239293,
+        0.001412789952656486,
+        0.0006752821782743681
+      ],
+      "target_coulomb": [
+        -0.000987311817566303,
+        0.0004624709938256187,
+        0.0002700359229351521,
+        -0.00030187045906327815,
+        -0.000440068801314664,
+        -0.00022383112969289224
+      ],
+      "target_xc": [
+        0.0032931751495599193,
+        0.0019495549946423852,
+        0.0023570365363363194,
+        0.0003006964113477268,
+        0.00045221647175884615,
+        0.00022854289602577352
+      ],
+      "target_overlap": [
+        -0.0037411482377462746,
+        -0.0025440637266741684,
+        -0.002795720974960229,
+        -0.00022674116305973957,
+        -0.0003092681810278933,
+        -0.0001681032235061176
+      ],
+      "nuclear": [
+        8.956514404735087e-05,
+        0.0017864331737757542,
+        0.00045806148839266155,
+        -0.0007624766292084223,
+        -0.001395592142416665,
+        -0.0006126074924660956
+      ],
+      "explicit": [
+        0.0012241751163987622,
+        0.0009402353601912654,
+        0.0005575625364649446,
+        -0.00010908568965978389,
+        -0.00027992270034389,
+        -0.00010071677136496396
+      ],
+      "orbital_response": [
+        1.2502571608398748e-20,
+        6.61607900633975e-20,
+        1.3877915649657645e-19,
+        -6.0421526878607966e-21,
+        -3.692400883792124e-21,
+        -2.4281411953443272e-21
+      ],
+      "total": [
+        0.0012241751163987622,
+        0.0009402353601912654,
+        0.0005575625364649448,
+        -0.00010908568965978389,
+        -0.00027992270034389,
+        -0.00010071677136496396
+      ]
+    },
+    "stress_voigt_ha_per_bohr3": [
+      0.0012241751163987622,
+      0.0009402353601912654,
+      0.0005575625364649448,
+      -0.00010908568965978389,
+      -0.00027992270034389,
+      -0.00010071677136496396
+    ],
+    "stress_tensor_ha_per_bohr3": [
+      [
+        0.0012241751163987622,
+        -0.00010071677136496396,
+        -0.00027992270034389
+      ],
+      [
+        -0.00010071677136496396,
+        0.0009402353601912654,
+        -0.00010908568965978389
+      ],
+      [
+        -0.00027992270034389,
+        -0.00010908568965978389,
+        0.0005575625364649448
+      ]
+    ],
+    "volume_bohr3": 164.95100000000002,
+    "z_vector": {
+      "dimension": 2,
+      "residual_max_abs": 0.0,
+      "equation": "adjoint"
+    },
+    "timings_s": {
+      "z_vector_and_target_state": 0.04129363503307104,
+      "analytic_one_electron_xc_ewald_primitives": 0.08816084917634726,
+      "analytic_gdf_pseudopotential": 1.7194234756752849,
+      "analytic_gdf_cderi_jk": 5.0747621320188046,
+      "lagrangian_assembly": 0.023493248969316483,
+      "total": 6.947139686904848
+    },
+    "metadata": {
+      "stage": "S4_gamma_gdf_mgga_analytic",
+      "production": true,
+      "source_hf_rerun": false,
+      "df_backend": "gdf",
+      "target_integrator": "uniform",
+      "target_xc": "r2SCAN",
+      "target_xctype": "MGGA",
+      "tau_channel": true,
+      "low_level_numerical_components": [],
+      "analytic_components": [
+        "kinetic_matrix",
+        "overlap_matrix",
+        "ewald_ion_ion",
+        "target_xc",
+        "gdf_metric",
+        "gdf_three_center_source",
+        "gdf_coulomb_matrix",
+        "gdf_exchange_matrix",
+        "gdf_gth_local_part1_matrix",
+        "gdf_gth_local_part2_matrix",
+        "gdf_gth_nonlocal_matrix",
+        "ewald_exchange_madelung",
+        "dc_lagrangian_assembly"
+      ],
+      "gdf_parameters": {
+        "omega": 0.9474937718516555,
+        "source_mesh": [
+          17,
+          19,
+          21
+        ],
+        "metric_mesh": [
+          19,
+          21,
+          21
+        ]
+      }
+    }
+  },
+  "fd": {
+    "stress_tensor_ha_per_bohr3": [
+      [
+        0.0012241749055002093,
+        -0.00010071679860846114,
+        -0.0002799227021504793
+      ],
+      [
+        -0.00010071679860846114,
+        0.0009402352245000319,
+        -0.00010908571339769109
+      ],
+      [
+        -0.0002799227021504793,
+        -0.00010908571339769109,
+        0.0005575623168963494
+      ]
+    ],
+    "stress_voigt_ha_per_bohr3": [
+      0.0012241749055002093,
+      0.0009402352245000319,
+      0.0005575623168963494,
+      -0.00010908571339769109,
+      -0.0002799227021504793,
+      -0.00010071679860846114
+    ],
+    "stress_tensor_gpa": [
+      [
+        36.016469110010114,
+        -2.9631905127629903,
+        -8.235610213782133
+      ],
+      [
+        -2.9631905127629903,
+        27.66267529843842,
+        -3.209412486139781
+      ],
+      [
+        -8.235610213782133,
+        -3.209412486139781,
+        16.404049677196724
+      ]
+    ],
+    "pressure_ha_per_bohr3": -0.0009073241489655302,
+    "virial_ha": [
+      [
+        -0.20192887483716504,
+        0.016613336647264276,
+        0.046173529642423716
+      ],
+      [
+        0.016613336647264276,
+        -0.1550927405165048,
+        0.017993797510662546
+      ],
+      [
+        0.046173529642423716,
+        0.017993797510662546,
+        -0.09197046173436974
+      ]
+    ],
+    "volume_bohr3": 164.95100000000002,
+    "center": {
+      "energy_ha": -1.289636768317734,
+      "wall_seconds": 0.1420542737469077,
+      "converged": true,
+      "metadata": {
+        "driver": "DCRKS",
+        "xc": "r2SCAN",
+        "df_backend": "gdf",
+        "auxbasis": "gth-szv",
+        "mesh": [
+          15,
+          15,
+          15
+        ],
+        "ke_cutoff_ha": null,
+        "reference_energy_ha": -1.3292542119047863
+      }
+    },
+    "pairs": [
+      {
+        "component": "xx",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.289586304297825,
+          "wall_seconds": 0.1362339686602354,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3291922237094733
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896872687352436,
+          "wall_seconds": 0.13671286683529615,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.32931622308701
+          }
+        },
+        "derivative_ha": 0.20192887483716504,
+        "plus_volume_bohr3": 164.99223774999993,
+        "minus_volume_bohr3": 164.90976225,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      },
+      {
+        "component": "yy",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.2895980181966766,
+          "wall_seconds": 0.13534516841173172,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3291968873115116
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896755645669349,
+          "wall_seconds": 0.13629257213324308,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3293115777116105
+          }
+        },
+        "derivative_ha": 0.1550927405165048,
+        "plus_volume_bohr3": 164.99223774999993,
+        "minus_volume_bohr3": 164.90976225,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      },
+      {
+        "component": "zz",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.2896137861475263,
+          "wall_seconds": 0.13570985198020935,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292074113407932
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896597713783935,
+          "wall_seconds": 0.13455138262361288,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3293010322542924
+          }
+        },
+        "derivative_ha": 0.09197046173436974,
+        "plus_volume_bohr3": 164.99223774999993,
+        "minus_volume_bohr3": 164.90976225,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      },
+      {
+        "component": "yz",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.2896412663124628,
+          "wall_seconds": 0.13614140916615725,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292602585927524
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896322694137075,
+          "wall_seconds": 0.13583620078861713,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292481694542548
+          }
+        },
+        "derivative_ha": -0.017993797510662546,
+        "plus_volume_bohr3": 164.95099742264065,
+        "minus_volume_bohr3": 164.9509974226405,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      },
+      {
+        "component": "xz",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.2896483081918846,
+          "wall_seconds": 0.13532272540032864,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292680364062859
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896252214270634,
+          "wall_seconds": 0.13638287223875523,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292403853636463
+          }
+        },
+        "derivative_ha": -0.046173529642423716,
+        "plus_volume_bohr3": 164.9509974226405,
+        "minus_volume_bohr3": 164.95099742264065,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      },
+      {
+        "component": "xy",
+        "step": 0.00025,
+        "plus": {
+          "energy_ha": -1.2896409222818395,
+          "wall_seconds": 0.13533849641680717,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292597021335544
+          }
+        },
+        "minus": {
+          "energy_ha": -1.2896326156135158,
+          "wall_seconds": 0.1344758002087474,
+          "converged": true,
+          "metadata": {
+            "driver": "DCRKS",
+            "xc": "r2SCAN",
+            "df_backend": "gdf",
+            "auxbasis": "gth-szv",
+            "mesh": [
+              15,
+              15,
+              15
+            ],
+            "ke_cutoff_ha": null,
+            "reference_energy_ha": -1.3292487274720024
+          }
+        },
+        "derivative_ha": -0.016613336647264276,
+        "plus_volume_bohr3": 164.9509974226405,
+        "minus_volume_bohr3": 164.9509974226405,
+        "plus_mesh": [
+          15,
+          15,
+          15
+        ],
+        "minus_mesh": [
+          15,
+          15,
+          15
+        ]
+      }
+    ],
+    "complete": true,
+    "convention": {
+      "stress_sign": "tensile_positive",
+      "pressure_definition": "-trace(stress)/3",
+      "virial_definition": "-volume*stress",
+      "voigt_order": [
+        "xx",
+        "yy",
+        "zz",
+        "yz",
+        "xz",
+        "xy"
+      ],
+      "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+      "internal_unit": "Eh/Bohr^3"
+    },
+    "metadata": {
+      "method": "central_finite_difference",
+      "production": false,
+      "fixed_fractional_coordinates": true,
+      "fixed_integer_mesh": true,
+      "warm_start": false,
+      "components": [
+        "xx",
+        "yy",
+        "zz",
+        "yz",
+        "xz",
+        "xy"
+      ],
+      "convention": {
+        "stress_sign": "tensile_positive",
+        "pressure_definition": "-trace(stress)/3",
+        "virial_definition": "-volume*stress",
+        "voigt_order": [
+          "xx",
+          "yy",
+          "zz",
+          "yz",
+          "xz",
+          "xy"
+        ],
+        "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+        "internal_unit": "Eh/Bohr^3"
+      }
+    }
+  }
+}

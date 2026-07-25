@@ -1,0 +1,41 @@
+{
+  "output_root": "../results/current_water20_sz",
+  "defaults": {
+    "atom_file": "../../structures/water20.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[12.4139, 0.0, 0.0], [0.0, 12.4139, 0.0], [0.0, 0.0, 12.4139]],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {"H": "GTH-SCAN-q1", "O": "GTH-SCAN-q6"},
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 500.0,
+    "precision": 1e-09,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "device_warmup": true,
+    "checkpoint_resume": true,
+    "z_solver": "matrix_free",
+    "stress_pp_response_backend": "gpu4pyscf_native_contracted_analytic_nonlocal_device",
+    "stress_df_response_backend": "host_analytic_source_adjoint_gpu_ft",
+    "stress_df_device_memory_fraction": 0.85,
+    "target_integrator": "uniform",
+    "run_stress_fd": false
+  },
+  "jobs": [
+    {
+      "name": "production",
+      "device": "gpu",
+      "df_backends": ["gdf", "rsdf"],
+      "calculation_modes": ["stress_only", "gradient_and_stress"]
+    }
+  ],
+  "benchmark_scope": "user"
+}

@@ -1,0 +1,83 @@
+{
+  "schema": "pbc_dcdft_stress_optimization_evidence_v1",
+  "date": "2026-07-23",
+  "stage": "O4_factorized_ao_pair_source",
+  "algorithm": {
+    "kind": "exact_contraction_reassociation",
+    "assembled_image_threshold_bytes": 268435456,
+    "small_image_mode": "assembled",
+    "large_image_mode": "factorized_center_and_moment_projection",
+    "changes_numerical_parameters": false,
+    "changes_screening": false
+  },
+  "h2_component_gates": {
+    "gdf_gamma_fd_max_abs_ha_per_bohr3": 2.805968402509046e-11,
+    "rsdf_gamma_fd_max_abs_ha_per_bohr3": 2.825555447168865e-11,
+    "gdf_k211_fd_max_abs_ha_per_bohr3": 1.982243633558839e-11,
+    "rsdf_k211_fd_max_abs_ha_per_bohr3": 1.9776708916341423e-11,
+    "passed": true,
+    "result_root": "stress/benchmark/development/results/optimization_o4_h2_factorized_source"
+  },
+  "water8_rsdf": {
+    "assembled": {
+      "source_wall_s": 109.24098203610629,
+      "stress_wall_s": 116.69663276709616,
+      "host_peak_rss_gib": 8.662483215332031
+    },
+    "factorized": {
+      "source_wall_s": 79.73465021885931,
+      "stress_wall_s": 87.10589367430657,
+      "host_peak_rss_gib": 8.39249038696289,
+      "fd_max_abs_ha_per_bohr3": 6.89947184128771e-11
+    },
+    "change_percent": {
+      "source_wall": -27.01031359045688,
+      "stress_wall": -25.35697765320013,
+      "host_peak_rss": -3.116806366692526
+    },
+    "result_root": "stress/benchmark/development/results/optimization_o4_water8_factorized_source"
+  },
+  "water8_gdf": {
+    "assembled_fd_passed": {
+      "source_wall_s": 591.0126137379557,
+      "stress_wall_s": 605.2100934218615,
+      "host_peak_rss_gib": 12.378559112548828,
+      "fd_max_abs_ha_per_bohr3": 6.882686234095312e-11
+    },
+    "factorized": {
+      "source_wall_s": 396.20431942120194,
+      "stress_wall_s": 404.830063264817,
+      "host_peak_rss_gib": 11.947010040283203,
+      "target_j_raw_max_abs_difference_ha": 7.105427357601002e-15,
+      "adjoint_rhf_raw_max_abs_difference_ha": 1.2212453270876722e-15
+    },
+    "change_percent": {
+      "source_wall": -32.9617828432894,
+      "stress_wall": -33.109168590380676,
+      "host_peak_rss": -3.486262563694831
+    },
+    "result_root": "stress/benchmark/development/results/optimization_o4_water8_gdf_factorized_source"
+  },
+  "rejected_experiments": {
+    "host_source_adjoint_full_grid": {
+      "reason": "large_nadjoint_nG_nao2_projection",
+      "water8_rsdf_stress_wall_s": 139.79782140813768,
+      "water8_rsdf_host_peak_rss_gib": 9.288440704345703
+    },
+    "host_source_adjoint_block1024": {
+      "status": "memory_only_opt_in",
+      "water8_rsdf_stress_wall_s": 174.175,
+      "water8_rsdf_host_peak_rss_gib": 3.559
+    },
+    "device_gemm_only": {
+      "reason": "host_image_assembly_remains_dominant",
+      "water8_rsdf_stress_wall_s": 118.76812479272485,
+      "water8_rsdf_host_peak_rss_gib": 9.161067962646484
+    }
+  },
+  "limitations": [
+    "Water8 timings are single detailed-profile runs, not profiler-off three-repeat medians.",
+    "The Water8 GDF factorized run uses raw component parity against an earlier selected-FD-passed run instead of repeating the expensive FD calculation.",
+    "Full sampled-k end-to-end Water8 timing remains open; H2 sampled-k FD passed."
+  ]
+}

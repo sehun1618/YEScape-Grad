@@ -1,0 +1,40 @@
+{
+  "output_root": "../results/optimization_o4_h2_dz_gpu_ft_source_adjoint",
+  "defaults": {
+    "atom_file": "../../structures/h2.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[8.0, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]],
+    "lattice_unit": "Bohr",
+    "basis": "DZVP-GTH",
+    "pseudo": "gth-hf",
+    "auxbasis": "DZVP-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 400.0,
+    "precision": 1e-10,
+    "xc": "PBE",
+    "conv_tol": 1e-10,
+    "max_cycle": 80,
+    "num_threads": 8,
+    "gpu_id": 0,
+    "device": "gpu",
+    "target_integrator": "uniform",
+    "calculation_mode": "stress_only",
+    "stress_pp_response_backend": "gpu4pyscf_native_contracted_analytic_nonlocal_device",
+    "stress_df_response_backend": "host_analytic_source_adjoint_gpu_ft",
+    "run_stress_fd": true,
+    "stress_fd_components": ["xx"],
+    "stress_fd_step": 0.00025,
+    "stress_fd_tolerance_ha_per_bohr3": 1e-08,
+    "checkpoint_resume": true,
+    "track_vram_peak": true,
+    "z_solver": "matrix_free"
+  },
+  "jobs": [
+    {"name": "h2_dz_gamma_gdf", "df_backend": "gdf", "kmesh": [1, 1, 1]},
+    {"name": "h2_dz_gamma_rsdf", "df_backend": "rsdf", "kmesh": [1, 1, 1]},
+    {"name": "h2_dz_k211_gdf", "df_backend": "gdf", "kmesh": [2, 1, 1]},
+    {"name": "h2_dz_k211_rsdf", "df_backend": "rsdf", "kmesh": [2, 1, 1]}
+  ],
+  "benchmark_scope": "development"
+}

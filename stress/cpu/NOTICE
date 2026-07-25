@@ -1,0 +1,21 @@
+DC-DFT Analytic Stress
+=======================
+
+Copyright 2026 Sehun
+
+This product includes software developed by The PySCF Developers.
+
+PySCF and GPU4PySCF are distributed under the Apache License, Version 2.0.
+This project uses their public APIs and package conventions, and selected
+source files adapt their Apache-licensed implementations. Applicable upstream
+copyright and attribution notices are retained in those files.
+
+The original PySCF NOTICE is reproduced in
+`THIRD_PARTY_NOTICES/PYSCF_NOTICE`. A source-level provenance summary is in
+`THIRD_PARTY_NOTICES/README.md`.
+
+PySCF: https://github.com/pyscf/pyscf
+GPU4PySCF: https://github.com/pyscf/gpu4pyscf
+
+The names PySCF and GPU4PySCF identify separate upstream projects and do not
+imply endorsement of this project.

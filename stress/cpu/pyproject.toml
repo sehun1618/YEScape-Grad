@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77", "wheel", "pyscf>=2.13,<2.15"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyscf-pbc-dcdft-stress"
+version = "0.1.0a0"
+description = "Independent stress and cell-derivative extension for periodic DC-DFT"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES/*"]
+authors = [{name = "Sehun"}]
+dependencies = [
+  "numpy>=1.24",
+  "pyscf>=2.13,<2.15",
+  "pyscf-pbc-dcdft==0.1.0a0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "build>=1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

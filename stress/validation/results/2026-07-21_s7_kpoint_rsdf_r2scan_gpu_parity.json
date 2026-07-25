@@ -1,0 +1,227 @@
+{
+  "input": {
+    "df_backend": "rsdf",
+    "xc": "R2SCAN",
+    "sampling": "sampled_k",
+    "kmesh": [
+      2,
+      1,
+      1
+    ],
+    "mesh": [
+      11,
+      11,
+      11
+    ],
+    "host_workers": null,
+    "df_diagonal_cache_bytes": 268435456,
+    "cpu_evidence": "/home/ksh/2026_project/dc_force/claude/gradient/dc_dft_grad_repo/stress/validation/results/2026-07-21_s6_kpoint_rsdf_r2scan.json"
+  },
+  "energy_ha": -1.2201763977471152,
+  "timings_s": {
+    "gpu_source_hf_and_target_state": 3.200691874139011,
+    "gpu_analytic_stress": 4.94503512699157
+  },
+  "cpu_gpu_max_abs_difference_ha_per_bohr3": 1.1667917066554567e-12,
+  "cpu_gpu_difference_ha_per_bohr3": [
+    -1.1667917066554567e-12,
+    -4.1058356801265683e-13,
+    -4.3403236733852157e-13,
+    -7.43691132981672e-14,
+    -6.868545445945506e-14,
+    -5.1997529817039007e-14
+  ],
+  "gpu": {
+    "component_derivatives_ha": {
+      "kinetic": [
+        -0.13957303916599073,
+        0.10480157776232893,
+        -0.056303210250761654,
+        -0.07435520964650834,
+        -0.15548364118921648,
+        -0.06470735359713103
+      ],
+      "pseudopotential": [
+        0.010157776017260157,
+        -0.26936129345545,
+        0.0851943045833673,
+        0.23389583679169013,
+        0.4499406571574692,
+        0.18910026776850328
+      ],
+      "one_electron": [
+        -0.12941526314873059,
+        -0.16455971569312108,
+        0.028891094332605644,
+        0.1595406271451818,
+        0.29445701596825274,
+        0.12439291417137224
+      ],
+      "target_coulomb": [
+        0.05771888199830227,
+        0.05149477216712829,
+        -0.003708249994187396,
+        -0.05849771868833521,
+        -0.11409683516153421,
+        -0.045689677175674404
+      ],
+      "target_xc": [
+        0.06672073541640267,
+        0.3143266069209216,
+        0.39050357421336424,
+        0.05637609411033241,
+        0.12372474674624409,
+        0.04534156458804493
+      ],
+      "target_overlap": [
+        -0.04452187541333549,
+        -0.3538854372764886,
+        -0.39581991155832075,
+        -0.03596152060291425,
+        -0.08253021246521433,
+        -0.028620921003855198
+      ],
+      "nuclear": [
+        0.014773860075754576,
+        0.29467393844748446,
+        0.07555770057185793,
+        -0.1257712824645585,
+        -0.23020431948377135,
+        -0.10105021848977495
+      ],
+      "explicit": [
+        -0.034723661071606564,
+        0.14205016456592473,
+        0.09542420756531964,
+        -0.00431380050029373,
+        -0.008649604396023053,
+        -0.005626337909887383
+      ],
+      "orbital_response": [
+        7.229525005676865e-17,
+        -3.505795678323221e-16,
+        -9.618106474444806e-16,
+        2.778992669411384e-17,
+        1.550380142625481e-17,
+        2.95756632319412e-17
+      ],
+      "total": [
+        -0.034723661071606494,
+        0.14205016456592437,
+        0.09542420756531868,
+        -0.004313800500293702,
+        -0.008649604396023037,
+        -0.005626337909887353
+      ]
+    },
+    "stress_voigt_ha_per_bohr3": [
+      -0.00021050894551476797,
+      0.0008611658284334399,
+      0.0005785003277659345,
+      -2.6152011811348225e-05,
+      -5.243741714826243e-05,
+      -3.4109147018734977e-05
+    ],
+    "stress_tensor_ha_per_bohr3": [
+      [
+        -0.00021050894551476797,
+        -3.4109147018734977e-05,
+        -5.243741714826243e-05
+      ],
+      [
+        -3.4109147018734977e-05,
+        0.0008611658284334399,
+        -2.6152011811348225e-05
+      ],
+      [
+        -5.243741714826243e-05,
+        -2.6152011811348225e-05,
+        0.0005785003277659345
+      ]
+    ],
+    "volume_bohr3": 164.95100000000002,
+    "z_vector": {
+      "dimension": 4,
+      "residual_max_abs": 1.0842021724855044e-19,
+      "solver": "dense",
+      "equation": "adjoint"
+    },
+    "timings_s": {
+      "target_fock_and_zvector_device": 0.05515108909457922,
+      "host_one_electron_pp_ewald_primitives": 3.305555084720254,
+      "df_host_primitives": 1.460212366655469,
+      "df_device_factorization": 0.00849637109786272,
+      "df_device_jk_components": 1.528715867549181,
+      "device_xc_lagrangian_assembly": 0.05473628919571638,
+      "total": 4.944722428917885
+    },
+    "metadata": {
+      "stage": "S7_rsdf_mgga_analytic",
+      "production": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_xctype": "MGGA",
+      "nkpts": 2,
+      "fixed_fractional_kpoints": true,
+      "primitive_backend": "host_integral_device_response",
+      "silent_cpu_fallback": false,
+      "source_hf_owner": "gpu",
+      "target_fock_owner": "gpu",
+      "z_vector_owner": "gpu",
+      "z_vector_reused": false,
+      "target_xc_stress_owner": "gpu4pyscf",
+      "df_cholesky_response_owner": "gpu",
+      "df_jk_stress_contraction_owner": "gpu_component_stream",
+      "one_electron_pp_strain_primitive_owner": "host_analytic",
+      "df_2c3c_strain_primitive_owner": "host_analytic",
+      "target_fock_workspace_reused": true,
+      "df_parameters": {
+        "source_omega": 0.3,
+        "source_mesh": [
+          7,
+          9,
+          9
+        ],
+        "metric_omega": 0.4,
+        "metric_mesh": [
+          9,
+          11,
+          11
+        ],
+        "precision_R": 1e-10,
+        "precision_G": 1e-08,
+        "precision_j2c": 1e-14,
+        "use_bvk": true
+      },
+      "df_memory_estimate": {
+        "host_derivative_payload_bytes": 2880,
+        "host_parallel_build_upper_bound_bytes": 2880,
+        "central_device_factor_bytes": 480,
+        "diagonal_response_cache_bytes": 256,
+        "peak_component_device_workspace_bytes": 864,
+        "jk_device_workspace_bytes": 512,
+        "estimated_peak_df_device_bytes": 2112
+      },
+      "df_diagonal_response_bytes": 256,
+      "df_diagonal_cache_enabled": true,
+      "df_preflight_free_device_bytes": 101023547392,
+      "df_device_memory_fraction": 0.85,
+      "one_electron_pp_host_workers": 1,
+      "df_host_primitive_workers": 3,
+      "central_cderi_parity_max_abs": 7.837328008797332e-10,
+      "device_memory": {
+        "start_free_device_bytes": 101023547392,
+        "minimum_observed_free_device_bytes": 101017255936,
+        "total_device_bytes": 101975851008,
+        "start_pool_used_bytes": 48640,
+        "peak_observed_pool_used_bytes": 70144,
+        "start_pool_reserved_bytes": 98836480,
+        "peak_observed_pool_reserved_bytes": 98836480,
+        "observed_device_use_increase_bytes": 6291456,
+        "observed_pool_used_increase_bytes": 21504,
+        "observed_pool_reserved_increase_bytes": 0
+      },
+      "low_level_numerical_components": []
+    }
+  }
+}

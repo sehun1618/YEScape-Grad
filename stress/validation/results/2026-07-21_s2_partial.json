@@ -1,0 +1,34 @@
+{
+  "stage": "S2_partial",
+  "system": "distorted_H2",
+  "method": {
+    "source": "RHF",
+    "target_xc": "PBE",
+    "df_backend": "gdf",
+    "basis": "gth-szv",
+    "auxbasis": "gth-szv",
+    "pseudo": "gth-hf",
+    "mesh": [15, 15, 15],
+    "strain_step": 0.00025
+  },
+  "component_fd_max_abs_error_ha_per_bohr3": {
+    "kinetic": 1.8850705591215607e-10,
+    "xc": 5.305341524170643e-10,
+    "nuclear": 9.961929091156178e-11
+  },
+  "representation_guard": {
+    "diagnostic": "FFT PP derivative compared with GDF PP component FD",
+    "max_abs_difference_ha_per_bohr3": 2.917962866044385e-05,
+    "accepted_as_gdf_component": false
+  },
+  "missing_components": [
+    "gdf_pseudopotential",
+    "gdf_coulomb",
+    "overlap_lagrangian",
+    "orbital_response"
+  ],
+  "tests": {
+    "command": "python -m unittest discover -s stress/cpu/tests -p 'test_*.py' -v",
+    "passed": 14
+  }
+}

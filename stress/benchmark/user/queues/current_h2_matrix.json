@@ -1,0 +1,37 @@
+{
+  "output_root": "../results/current_h2_matrix",
+  "defaults": {
+    "atom_file": "../../structures/h2.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[5.0, 0.2, 0.1], [0.0, 5.5, 0.3], [0.1, 0.0, 6.0]],
+    "lattice_unit": "Bohr",
+    "basis": "gth-szv",
+    "pseudo": "gth-hf",
+    "auxbasis": "gth-szv",
+    "mesh": [11, 11, 11],
+    "precision": 1e-10,
+    "kmesh": [2, 1, 1],
+    "xc": "PBE",
+    "conv_tol": 1e-10,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 4,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "device_warmup": true,
+    "checkpoint_resume": true,
+    "z_solver": "matrix_free",
+    "stress_df_device_memory_fraction": 0.85,
+    "target_integrator": "uniform",
+    "run_stress_fd": false
+  },
+  "jobs": [
+    {
+      "name": "all_routes",
+      "devices": ["cpu", "gpu"],
+      "df_backends": ["gdf", "rsdf"],
+      "calculation_modes": ["stress_only", "gradient_and_stress"]
+    }
+  ],
+  "benchmark_scope": "user"
+}

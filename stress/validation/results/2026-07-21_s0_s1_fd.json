@@ -1,0 +1,54 @@
+{
+  "schema": "pbc_dcdft_stress_s0_s1_evidence_v1",
+  "date": "2026-07-21",
+  "scope": {
+    "reference": "restricted Gamma RHF",
+    "df_backend": "gdf",
+    "target_xc": "PBE",
+    "basis": "gth-szv",
+    "auxbasis": "gth-szv",
+    "pseudo": "gth-hf",
+    "stress_convention": "tensile_positive",
+    "voigt_order": ["xx", "yy", "zz", "yz", "xz", "xy"],
+    "fixed_fractional_coordinates": true,
+    "fixed_integer_mesh": true
+  },
+  "cubic_h2": {
+    "cell_bohr": 5.0,
+    "mesh": [9, 9, 9],
+    "step": 0.0005,
+    "stress_tensor_eh_per_bohr3": [
+      [0.0013690584355981, 3.5527136788005e-15, 3.5527136788005e-15],
+      [3.5527136788005e-15, 0.0013690584355981, 7.1054273576010e-15],
+      [3.5527136788005e-15, 7.1054273576010e-15, -0.0002511481607223]
+    ],
+    "pressure_eh_per_bohr3": -0.0008289895699729
+  },
+  "distorted_h2_step_convergence": {
+    "steps": [0.001, 0.0005, 0.00025],
+    "xx_eh_per_bohr3": [
+      0.0010943796857638,
+      0.0010943780670705,
+      0.0010943776488390
+    ],
+    "xy_eh_per_bohr3": [
+      -0.0001021483999848,
+      -0.0001021483558958,
+      -0.0001021483525171
+    ]
+  },
+  "rigid_translation_mesh_convergence": {
+    "translation_bohr": [0.23, 0.17, 0.11],
+    "meshes": [9, 15, 21],
+    "xx_difference_eh_per_bohr3": [
+      0.0000914709633957,
+      0.0000013470338995,
+      0.0000000161732938
+    ]
+  },
+  "tests": {
+    "count": 12,
+    "status": "passed",
+    "runner": "python -m unittest discover"
+  }
+}

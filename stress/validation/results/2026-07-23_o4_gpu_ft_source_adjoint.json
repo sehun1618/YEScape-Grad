@@ -1,0 +1,116 @@
+{
+  "schema": "pbc_dcdft_stress_optimization_evidence_v1",
+  "date": "2026-07-23",
+  "stage": "O4_gpu_ft_source_adjoint",
+  "provenance": {
+    "reference_package": "GPU4PySCF 1.7.4",
+    "reference_kernels": [
+      "PBC_ft_aopair_ej_strain_deriv",
+      "PBC_ft_aopair_ek_strain_deriv"
+    ],
+    "license": "Apache-2.0",
+    "algorithm_reference_only": "CP2K GPW task blocking"
+  },
+  "algorithm": {
+    "kind": "exact_reverse_source_blocked_gpu_ft_contraction",
+    "changes_numerical_parameters": false,
+    "changes_screening": false,
+    "materializes_full_source_derivative": false,
+    "status": "explicit_production_capable_opt_in"
+  },
+  "h2_fd_max_abs_ha_per_bohr3": {
+    "rsdf_gamma": 2.8255784647809867e-11,
+    "rsdf_k211": 1.977867815274731e-11,
+    "native_gdf_gamma": 2.806411776145462e-11,
+    "native_gdf_k211": 1.982367319342676e-11
+  },
+  "h2_dzvp_gth": {
+    "native_gdf_gamma": {
+      "fd_max_abs_ha_per_bohr3": 2.944008e-11,
+      "stress_wall_s": 0.6482,
+      "source_wall_s": 0.2317,
+      "host_peak_rss_gib": 1.8798,
+      "sampled_vram_delta_gib": 2.1934
+    },
+    "rsdf_gamma": {
+      "fd_max_abs_ha_per_bohr3": 2.920145e-11,
+      "stress_wall_s": 0.4590,
+      "source_wall_s": 0.1561,
+      "host_peak_rss_gib": 1.8473,
+      "sampled_vram_delta_gib": 2.2930
+    },
+    "native_gdf_k211": {
+      "fd_max_abs_ha_per_bohr3": 2.206346e-12,
+      "stress_wall_s": 1.3741,
+      "source_wall_s": 0.3608,
+      "host_peak_rss_gib": 1.8851,
+      "sampled_vram_delta_gib": 9.7754
+    },
+    "rsdf_k211": {
+      "fd_max_abs_ha_per_bohr3": 1.993831e-12,
+      "stress_wall_s": 1.2577,
+      "source_wall_s": 0.4164,
+      "host_peak_rss_gib": 1.8798,
+      "sampled_vram_delta_gib": 9.7637
+    }
+  },
+  "water8_rsdf_gamma": {
+    "fd_max_abs_ha_per_bohr3": 6.899577919628266e-11,
+    "profiled_stress_wall_s": 8.209871917963028,
+    "three_run_median": {
+      "stress_wall_s": 8.057203619740903,
+      "df_wall_s": 1.3281362978741527,
+      "source_wall_s": 0.620065039023757,
+      "reciprocal_source_wall_s": 0.40621339809149504,
+      "host_peak_rss_gib": 3.1348114013671875
+    },
+    "bounded_forward_baseline": {
+      "stress_wall_s": 40.004361976869404,
+      "host_peak_rss_gib": 8.869773864746094
+    },
+    "change_percent": {
+      "stress_wall": -79.85918729462654,
+      "host_peak_rss": -64.65736952069494
+    }
+  },
+  "water8_rsdf_k211": {
+    "fd_max_abs_ha_per_bohr3": 6.738686659461118e-11,
+    "stress_wall_s": 41.329896858893335,
+    "df_wall_s": 5.078521389514208,
+    "source_wall_s": 2.8017767388373613,
+    "host_peak_rss_gib": 3.154407501220703,
+    "sampled_vram_delta_gib": 14.189453125
+  },
+  "water8_native_gdf_gamma": {
+    "fd_max_abs_ha_per_bohr3": 6.884840381181714e-11,
+    "three_run_median": {
+      "stress_wall_s": 12.208507322706282,
+      "df_wall_s": 5.481792867183685,
+      "source_wall_s": 3.782843289896846,
+      "reciprocal_source_wall_s": 3.3787051159888506,
+      "metric_wall_s": 1.651619665324688,
+      "host_peak_rss_gib": 3.568572998046875
+    },
+    "bounded_forward_baseline": {
+      "stress_wall_s": 271.1094367587939,
+      "host_peak_rss_gib": 12.44134521484375
+    },
+    "change_percent": {
+      "stress_wall": -95.49683424204515,
+      "host_peak_rss": -71.3168235715442
+    }
+  },
+  "water8_native_gdf_k211": {
+    "fd_max_abs_ha_per_bohr3": 6.726054804263859e-11,
+    "stress_wall_s": 48.6684711528942,
+    "df_wall_s": 12.47557133808732,
+    "source_wall_s": 8.415843421593308,
+    "metric_wall_s": 3.911777403205633,
+    "host_peak_rss_gib": 3.543018341064453,
+    "sampled_vram_delta_gib": 14.193359375
+  },
+  "limitations": [
+    "Water20/64 memory scaling remains a user-run gate.",
+    "The explicit backend has not replaced the Python API default; current GPU user queues opt in explicitly."
+  ]
+}

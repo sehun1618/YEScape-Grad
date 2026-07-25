@@ -1,0 +1,142 @@
+{
+  "schema": "pbc_dcdft_stress_optimization_evidence_v1",
+  "date": "2026-07-23",
+  "stage": "O2_device_analytic_nonlocal_pp",
+  "backend": "gpu4pyscf_native_contracted_analytic_nonlocal_device",
+  "algorithm": {
+    "ao_response": "augmented_cartesian_shell_fourier_first_moment",
+    "density_contraction": "direct_source_and_adjoint_device_contraction",
+    "atom_channel_batching": true,
+    "retained_ao_derivative_matrix": false,
+    "cell_displacements": 0,
+    "host_boundaries": [
+      "small_projector_value_gradient_template"
+    ],
+    "device_owned_work": [
+      "central_ft_ao",
+      "augmented_shell_moment_ft_ao",
+      "structure_factor",
+      "six_voigt_projector_overlap",
+      "source_and_adjoint_density_contraction"
+    ]
+  },
+  "component_gates": {
+    "szv_gamma_random_two_density": {
+      "reference": "host_analytic_matrix",
+      "tolerance_ha": 2e-10,
+      "passed": true
+    },
+    "szv_k211_complex_random_two_density": {
+      "reference": "host_analytic_matrix",
+      "tolerance_ha": 2e-10,
+      "passed": true
+    },
+    "dzvp_molopt_sr_gth_d_polarization": {
+      "reference": "host_analytic_matrix",
+      "tolerance_ha": 3e-10,
+      "passed": true
+    }
+  },
+  "water1_gamma": {
+    "gdf": {
+      "fd_max_abs_error_ha_per_bohr3": 6.317587579918356e-12,
+      "analytic_stress_wall_s": 16.016623676754534,
+      "pp_wall_s": 1.4727737987414002,
+      "nonlocal_pp_wall_s": 0.5745311165228486,
+      "host_reference_pp_raw_max_abs_difference_ha": 5.151434834260726e-14,
+      "production": true
+    },
+    "rsdf": {
+      "fd_max_abs_error_ha_per_bohr3": 6.3135322843225e-12,
+      "analytic_stress_wall_s": 2.4352426640689373,
+      "pp_wall_s": 1.4833017690107226,
+      "nonlocal_pp_wall_s": 0.5795820178464055,
+      "host_reference_pp_raw_max_abs_difference_ha": 1.687538997430238e-14,
+      "production": true
+    },
+    "result_root": "stress/benchmark/development/results/optimization_o3_water1_device_analytic_nonlocal_pp"
+  },
+  "water8_gamma": {
+    "gdf": {
+      "fd_max_abs_error_ha_per_bohr3": 6.882686234095312e-11,
+      "analytic_stress_wall_s": 605.2107146410272,
+      "pp_wall_s": 12.051453591324389,
+      "nonlocal_pp_wall_s": 6.403221326880157,
+      "df_wall_s": 592.8524162666872,
+      "host_peak_rss_gib": 12.378559112548828,
+      "sampled_vram_delta_gib": 7.32421875,
+      "production": true
+    },
+    "rsdf_pre_atom_batching": {
+      "fd_max_abs_error_ha_per_bohr3": 6.899472047286123e-11,
+      "analytic_stress_wall_s": 123.31301809195429,
+      "pp_wall_s": 12.060809315182269,
+      "nonlocal_pp_wall_s": 6.342866298742592,
+      "df_wall_s": 110.91945756133646,
+      "host_peak_rss_gib": 8.6800537109375,
+      "sampled_vram_delta_gib": 7.330078125,
+      "production": true
+    },
+    "result_root": "stress/benchmark/development/results/optimization_o3_water8_device_analytic_nonlocal_pp"
+  },
+  "water8_atom_channel_batching": {
+    "nonlocal_only_microprofile": {
+      "before_wall_s": 6.4151935102418065,
+      "after_wall_s": 1.9592472100630403,
+      "wall_change_percent": -69.45926561786301,
+      "per_overlap_call_count_before": 960,
+      "per_overlap_call_count_after": 120,
+      "call_count_change_percent": -87.5
+    },
+    "rsdf_end_to_end": {
+      "fd_max_abs_error_ha_per_bohr3": 6.89947184128771e-11,
+      "analytic_stress_wall_s": 114.29090665001422,
+      "pp_wall_s": 6.4045975506305695,
+      "nonlocal_pp_wall_s": 1.8962207539007068,
+      "local_potential_setup_wall_s": 0.12492044363170862,
+      "df_wall_s": 107.59666452277452,
+      "host_peak_rss_gib": 8.664592742919922,
+      "sampled_vram_delta_gib": 7.408203125,
+      "production": true,
+      "result_root": "stress/benchmark/development/results/optimization_o2_water8_rsdf_batched_analytic_pp"
+    }
+  },
+  "water8_comparison_percent": {
+    "against_host_analytic_matrix": {
+      "gdf": {
+        "analytic_stress": -46.99315210326507,
+        "pp": -97.79304100788944,
+        "nonlocal_pp": -98.81184626969028
+      },
+      "rsdf": {
+        "analytic_stress": -83.06189766637611,
+        "pp": -98.86758973732039,
+        "nonlocal_pp": -99.66039047219247
+      }
+    },
+    "against_numerical_fast_route": {
+      "gdf": {
+        "analytic_stress": 0.29510896887614546,
+        "pp": -0.6364235900420123,
+        "sampled_vram_delta": -36.224489795918366
+      },
+      "rsdf": {
+        "analytic_stress": -6.939711984110208,
+        "pp": -47.428853374279576,
+        "sampled_vram_delta": -35.56989977917445
+      }
+    },
+    "gpu_native_local_setup": {
+      "water8_previous_wall_s": 1.3152424646541476,
+      "water8_final_wall_s": 0.12484918162226677,
+      "wall_change_percent": -90.50751591607889
+    }
+  },
+  "limitations": [
+    "Water8 timing cases enable detailed CUDA-event profiling and are not a three-repeat median.",
+    "The complete sampled-k end-to-end energy-FD gate remains open; sampled-k nonlocal PP component parity passed.",
+    "The older Water8 RSDF host result has a different central-state fingerprint and is not used as a same-revision raw-component parity proof.",
+    "The final atom-batched Water8 GDF full workflow was not rerun because its unchanged exact DF source costs about ten minutes; final GDF evidence is component parity, Water1 full FD, and a Water8 nonlocal-only profile.",
+    "AO angular momentum l=4 would require an l=5 moment shell, beyond the current GPU4PySCF FT-AO LMAX=4 guard."
+  ]
+}

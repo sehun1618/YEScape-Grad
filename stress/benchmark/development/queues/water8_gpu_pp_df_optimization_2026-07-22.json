@@ -1,0 +1,41 @@
+{
+  "output_root": "../results/water8_gpu_pp_df_optimization_2026-07-22",
+  "defaults": {
+    "atom_file": "../../structures/water8.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {"H": "GTH-SCAN-q1", "O": "GTH-SCAN-q6"},
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 400.0,
+    "precision": 1e-09,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "device_warmup": true,
+    "z_solver": "matrix_free",
+    "stress_pp_response_backend": "gpu4pyscf_native_contracted",
+    "stress_df_response_backend": "gpu_fixed_density_fd_contracted",
+    "stress_df_contracted_fd_step": 1e-05,
+    "target_integrator": "uniform",
+    "calculation_mode": "stress_only",
+    "run_stress_fd": true,
+    "stress_fd_components": ["xx", "xy"],
+    "stress_fd_step": 0.00025,
+    "stress_fd_tolerance_ha_per_bohr3": 1e-08,
+    "device": "gpu"
+  },
+  "jobs": [
+    {"name": "water8_r2scan_gpu_pp_df", "df_backend": "gdf"},
+    {"name": "water8_r2scan_gpu_pp_df", "df_backend": "rsdf"}
+  ],
+  "benchmark_scope": "development"
+}

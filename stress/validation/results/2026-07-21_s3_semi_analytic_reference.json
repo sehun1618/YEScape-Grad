@@ -1,0 +1,36 @@
+{
+  "stage": "S3_development_reference",
+  "production": false,
+  "system": "distorted_H2",
+  "method": {
+    "source": "RHF",
+    "target_xc": "PBE",
+    "df_backend": "gdf",
+    "basis": "gth-dzvp",
+    "auxbasis": "gth-dzvp",
+    "pseudo": "gth-hf",
+    "mesh": [15, 15, 15],
+    "matrix_fd_step": 0.00025
+  },
+  "dimensions": {
+    "nao": 10,
+    "z_vector_real_dimension": 18
+  },
+  "z_vector_residual_max_abs": 1.734723475976807e-18,
+  "orbital_response_stress_max_abs_ha_per_bohr3": 0.000151266179,
+  "full_energy_fd_max_abs_difference_ha_per_bohr3": 1.6205227546146894e-10,
+  "timing_seconds": {
+    "semi_analytic_after_central_energy": 1.564180356450379,
+    "full_energy_fd": 2.508863483555615,
+    "semi_analytic_gdf_pp_jk_matrix_fd": 1.2810000590980053
+  },
+  "source_hf_rerun_during_stress": false,
+  "low_level_numerical_components": [
+    "kinetic_matrix",
+    "gdf_pseudopotential_matrix",
+    "gdf_coulomb_matrix",
+    "gdf_exchange_matrix",
+    "overlap_matrix",
+    "ewald_energy"
+  ]
+}

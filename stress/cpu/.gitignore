@@ -1,0 +1,5 @@
+build/
+src/*.egg-info/
+src/pyscf_pbc_dcdft_stress/*.so
+**/__pycache__/
+*.pyc

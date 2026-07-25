@@ -1,0 +1,55 @@
+{
+  "schema": "pbc_dcdft_stress_scaling_gate_evidence_v1",
+  "date": "2026-07-23",
+  "system": "water20",
+  "basis": "SZV-GTH",
+  "kmesh": [1, 1, 1],
+  "mesh": [239, 239, 239],
+  "source_digest": "5b2ff6f6c11e35826822243738fee065ad3fe56d150d14832e8078b670c7f7af",
+  "validator_passed": true,
+  "shared_properties": {
+    "production": true,
+    "silent_cpu_fallback": false,
+    "low_level_numerical_components": [],
+    "df_owner": "gpu_analytic_df_source_adjoint_gamma_ft",
+    "pp_owner": "gpu4pyscf_native_energy_contracted_analytic_nonlocal_device",
+    "gpu_ft_dispatch": "gamma",
+    "reciprocal_block_size": 4656,
+    "estimated_block_work_gib": 6.0610198974609375,
+    "z_vector_iterations": 18
+  },
+  "gdf": {
+    "attempt_id": "e429c9d7785640d1a0ea3c40891848f5",
+    "energy_ha": -348.51063521256845,
+    "source_state_wall_s": 7.392792632803321,
+    "stress_wall_s": 61.515575632452965,
+    "analytic_total_wall_s": 68.90836826525629,
+    "df_response_wall_s": 15.212725264020264,
+    "pp_and_source_xc_wall_s": 45.86778413876891,
+    "host_peak_rss_gib": 5.427574157714844,
+    "global_device_peak_gib": 12.99432373046875,
+    "df_stage_device_peak_gib": 7.45135498046875,
+    "z_vector_residual_max_abs": 1.3511923784709223e-13
+  },
+  "rsdf": {
+    "attempt_id": "263e7fef09454a1eaf3795d0b6420e40",
+    "energy_ha": -348.51060642481707,
+    "source_state_wall_s": 7.567276515066624,
+    "stress_wall_s": 52.50566284637898,
+    "analytic_total_wall_s": 60.072939361445606,
+    "df_response_wall_s": 6.7405208963900805,
+    "pp_and_source_xc_wall_s": 45.371094326488674,
+    "host_peak_rss_gib": 5.2011260986328125,
+    "global_device_peak_gib": 13.62127685546875,
+    "df_stage_device_peak_gib": 7.46697998046875,
+    "z_vector_residual_max_abs": 1.350963611812528e-13
+  },
+  "cross_backend_comparison": {
+    "gdf_minus_rsdf_energy_ha": -2.8787751375602966e-05,
+    "stress_max_abs_difference_ha_per_bohr3": 3.261028121430594e-08,
+    "stress_rms_difference_ha_per_bohr3": 1.7960795006947042e-08,
+    "rsdf_stress_speedup_vs_gdf": 1.1715988771046502,
+    "rsdf_total_speedup_vs_gdf": 1.1470783517125716
+  },
+  "decision": "system_scaling_gate_passed_explicit_production_opt_in_retained"
+}

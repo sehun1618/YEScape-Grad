@@ -1,0 +1,34 @@
+{
+  "output_root": "../results/smoke_h2",
+  "defaults": {
+    "atom_file": "../../structures/h2.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[8.0, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]],
+    "lattice_unit": "Bohr",
+    "basis": "gth-szv",
+    "pseudo": "gth-hf",
+    "auxbasis": "gth-szv",
+    "mesh": [9, 9, 9],
+    "precision": 1e-10,
+    "kmesh": [1, 1, 1],
+    "xc": "PBE",
+    "conv_tol": 1e-10,
+    "max_cycle": 80,
+    "num_threads": 4,
+    "target_integrator": "uniform",
+    "track_vram_peak": false
+  },
+  "jobs": [
+    {
+      "name": "cpu_gdf_stress_fd_xx",
+      "device": "cpu",
+      "df_backend": "gdf",
+      "calculation_mode": "stress_only",
+      "run_stress_fd": true,
+      "stress_fd_components": ["xx"],
+      "stress_fd_step": 0.00025,
+      "stress_fd_tolerance_ha_per_bohr3": 1e-06
+    }
+  ],
+  "benchmark_scope": "development"
+}

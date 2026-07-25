@@ -1,0 +1,222 @@
+{
+  "input": {
+    "df_backend": "gdf",
+    "xc": "R2SCAN",
+    "sampling": "sampled_k",
+    "kmesh": [
+      2,
+      1,
+      1
+    ],
+    "mesh": [
+      11,
+      11,
+      11
+    ],
+    "host_workers": null,
+    "df_diagonal_cache_bytes": 268435456,
+    "cpu_evidence": "/home/ksh/2026_project/dc_force/claude/gradient/dc_dft_grad_repo/stress/validation/results/2026-07-21_s6_kpoint_gdf_r2scan.json"
+  },
+  "energy_ha": -1.2201819297272838,
+  "timings_s": {
+    "gpu_source_hf_and_target_state": 4.311893332749605,
+    "gpu_analytic_stress": 7.898906503804028
+  },
+  "cpu_gpu_max_abs_difference_ha_per_bohr3": 2.880414711001894e-12,
+  "cpu_gpu_difference_ha_per_bohr3": [
+    -2.880414711001894e-12,
+    -1.981202203162058e-12,
+    -6.832995540911879e-13,
+    1.3850574265522435e-12,
+    2.766897245988411e-12,
+    1.0858483301965163e-12
+  ],
+  "gpu": {
+    "component_derivatives_ha": {
+      "kinetic": [
+        -0.13957303916599068,
+        0.1048015777623289,
+        -0.056303210250761626,
+        -0.07435520964650832,
+        -0.15548364118921643,
+        -0.064707353597131
+      ],
+      "pseudopotential": [
+        0.01015777601725985,
+        -0.2693612934554499,
+        0.08519430458336733,
+        0.23389583679169018,
+        0.4499406571574691,
+        0.18910026776850325
+      ],
+      "one_electron": [
+        -0.12941526314873084,
+        -0.164559715693121,
+        0.0288910943326057,
+        0.15954062714518186,
+        0.2944570159682527,
+        0.12439291417137224
+      ],
+      "target_coulomb": [
+        0.05778054499674007,
+        0.05154502277761607,
+        -0.003652428382209967,
+        -0.05848984850746942,
+        -0.1140877884873156,
+        -0.045699088835441895
+      ],
+      "target_xc": [
+        0.06672073541640289,
+        0.31432660692092185,
+        0.39050357421336424,
+        0.0563760941103324,
+        0.12372474674624406,
+        0.04534156458804492
+      ],
+      "target_overlap": [
+        -0.04452123644552419,
+        -0.3538902244712017,
+        -0.3958252840939237,
+        -0.03596201860534197,
+        -0.08253143194934821,
+        -0.02862132183470462
+      ],
+      "nuclear": [
+        0.014773860075754576,
+        0.29467393844748446,
+        0.07555770057185793,
+        -0.1257712824645585,
+        -0.23020431948377135,
+        -0.10105021848977495
+      ],
+      "explicit": [
+        -0.034661359105357496,
+        0.14209562798169967,
+        0.09547465664169422,
+        -0.004306428321855613,
+        -0.008641777205938395,
+        -0.005636150400504303
+      ],
+      "orbital_response": [
+        1.57788799786869e-16,
+        -3.466071911365005e-16,
+        -9.540666270038203e-16,
+        2.9968624350778985e-17,
+        9.487592815217364e-18,
+        2.8828515083366427e-17
+      ],
+      "total": [
+        -0.03466135910535734,
+        0.14209562798169934,
+        0.09547465664169326,
+        -0.004306428321855582,
+        -0.008641777205938386,
+        -0.005636150400504274
+      ]
+    },
+    "stress_voigt_ha_per_bohr3": [
+      -0.00021013124567512373,
+      0.0008614414461367274,
+      0.0005788061705700071,
+      -2.6107318669517504e-05,
+      -5.238996554090842e-05,
+      -3.416863432476477e-05
+    ],
+    "stress_tensor_ha_per_bohr3": [
+      [
+        -0.00021013124567512373,
+        -3.416863432476477e-05,
+        -5.238996554090842e-05
+      ],
+      [
+        -3.416863432476477e-05,
+        0.0008614414461367274,
+        -2.6107318669517504e-05
+      ],
+      [
+        -5.238996554090842e-05,
+        -2.6107318669517504e-05,
+        0.0005788061705700071
+      ]
+    ],
+    "volume_bohr3": 164.95100000000002,
+    "z_vector": {
+      "dimension": 4,
+      "residual_max_abs": 5.421010862427522e-20,
+      "solver": "dense",
+      "equation": "adjoint"
+    },
+    "timings_s": {
+      "target_fock_and_zvector_device": 0.06433720793575048,
+      "host_one_electron_pp_ewald_primitives": 3.326906116679311,
+      "df_host_primitives": 4.386905829422176,
+      "df_device_factorization": 0.0010473886504769325,
+      "df_device_jk_components": 4.44487483240664,
+      "device_xc_lagrangian_assembly": 0.06179224234074354,
+      "total": 7.8986046286299825
+    },
+    "metadata": {
+      "stage": "S7_gdf_mgga_analytic",
+      "production": true,
+      "device": "gpu",
+      "df_backend": "gdf",
+      "target_xctype": "MGGA",
+      "nkpts": 2,
+      "fixed_fractional_kpoints": true,
+      "primitive_backend": "host_integral_device_response",
+      "silent_cpu_fallback": false,
+      "source_hf_owner": "gpu",
+      "target_fock_owner": "gpu",
+      "z_vector_owner": "gpu",
+      "z_vector_reused": false,
+      "target_xc_stress_owner": "gpu4pyscf",
+      "df_cholesky_response_owner": "gpu",
+      "df_jk_stress_contraction_owner": "gpu_component_stream",
+      "one_electron_pp_strain_primitive_owner": "host_analytic",
+      "df_2c3c_strain_primitive_owner": "host_analytic",
+      "target_fock_workspace_reused": true,
+      "df_parameters": {
+        "omega": 0.8290570503701985,
+        "source_mesh": [
+          15,
+          17,
+          19
+        ],
+        "metric_mesh": [
+          17,
+          19,
+          19
+        ]
+      },
+      "df_memory_estimate": {
+        "host_derivative_payload_bytes": 2880,
+        "host_parallel_build_upper_bound_bytes": 2880,
+        "central_device_factor_bytes": 288,
+        "diagonal_response_cache_bytes": 256,
+        "peak_component_device_workspace_bytes": 480,
+        "jk_device_workspace_bytes": 512,
+        "estimated_peak_df_device_bytes": 1536
+      },
+      "df_diagonal_response_bytes": 256,
+      "df_diagonal_cache_enabled": true,
+      "df_preflight_free_device_bytes": 100922884096,
+      "df_device_memory_fraction": 0.85,
+      "one_electron_pp_host_workers": 1,
+      "df_host_primitive_workers": 3,
+      "central_cderi_parity_max_abs": null,
+      "device_memory": {
+        "start_free_device_bytes": 100924981248,
+        "minimum_observed_free_device_bytes": 100916592640,
+        "total_device_bytes": 101975851008,
+        "start_pool_used_bytes": 48128,
+        "peak_observed_pool_used_bytes": 71168,
+        "start_pool_reserved_bytes": 197402624,
+        "peak_observed_pool_reserved_bytes": 197402624,
+        "observed_device_use_increase_bytes": 8388608,
+        "observed_pool_used_increase_bytes": 23040,
+        "observed_pool_reserved_increase_bytes": 0
+      },
+      "low_level_numerical_components": []
+    }
+  }
+}

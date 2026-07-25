@@ -1,0 +1,109 @@
+{
+  "system": "H2",
+  "xc": "PBE",
+  "purpose": "RSDF numerical range-separation convergence; not a default override",
+  "records": [
+    {
+      "source_omega": 0.25,
+      "metric_omega": 0.35,
+      "energy_ha": -1.191942778186533,
+      "stress_voigt_ha_per_bohr3": [
+        -3.466630309219204e-05,
+        -3.4666303090444035e-05,
+        -0.00016056289199742547,
+        8.324730431634687e-17,
+        -5.606756908654019e-17,
+        6.899111886239069e-16
+      ],
+      "stress_wall_seconds": 2.206850486807525,
+      "resolved_parameters": {
+        "source_omega": 0.25,
+        "source_mesh": [
+          9,
+          9,
+          9
+        ],
+        "metric_omega": 0.35,
+        "metric_mesh": [
+          13,
+          13,
+          13
+        ],
+        "precision_R": 1e-10,
+        "precision_G": 1e-08,
+        "precision_j2c": 1e-14,
+        "use_bvk": true
+      },
+      "cderi_parity": 3.014401506185038e-10,
+      "stress_difference_from_default_max_abs_ha_per_bohr3": 1.9052222728719453e-08
+    },
+    {
+      "source_omega": 0.3,
+      "metric_omega": 0.4,
+      "energy_ha": -1.1919420130003127,
+      "stress_voigt_ha_per_bohr3": [
+        -3.4676718766844123e-05,
+        -3.4676718765096444e-05,
+        -0.00016058194422015419,
+        8.325038815228055e-17,
+        -5.60667458534955e-17,
+        6.898743936491903e-16
+      ],
+      "stress_wall_seconds": 2.323456189595163,
+      "resolved_parameters": {
+        "source_omega": 0.3,
+        "source_mesh": [
+          11,
+          11,
+          11
+        ],
+        "metric_omega": 0.4,
+        "metric_mesh": [
+          15,
+          15,
+          15
+        ],
+        "precision_R": 1e-10,
+        "precision_G": 1e-08,
+        "precision_j2c": 1e-14,
+        "use_bvk": true
+      },
+      "cderi_parity": 3.1703467628929616e-10,
+      "stress_difference_from_default_max_abs_ha_per_bohr3": 0.0
+    },
+    {
+      "source_omega": 0.35,
+      "metric_omega": 0.45,
+      "energy_ha": -1.1919365484046702,
+      "stress_voigt_ha_per_bohr3": [
+        -3.4771574252643257e-05,
+        -3.477157425089558e-05,
+        -0.00016064806668020655,
+        8.323384674102491e-17,
+        -5.606659528469252e-17,
+        6.899245271877352e-16
+      ],
+      "stress_wall_seconds": 2.318351127207279,
+      "resolved_parameters": {
+        "source_omega": 0.35,
+        "source_mesh": [
+          11,
+          11,
+          11
+        ],
+        "metric_omega": 0.45,
+        "metric_mesh": [
+          15,
+          15,
+          15
+        ],
+        "precision_R": 1e-10,
+        "precision_G": 1e-08,
+        "precision_j2c": 1e-14,
+        "use_bvk": true
+      },
+      "cderi_parity": 1.1375109881806011e-10,
+      "stress_difference_from_default_max_abs_ha_per_bohr3": 9.485548579913315e-08
+    }
+  ]
+}

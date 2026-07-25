@@ -1,0 +1,43 @@
+{
+  "output_root": "../results/optimization_o4_water8_factorized_device_projection",
+  "defaults": {
+    "atom_file": "../../structures/water8.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {"H": "GTH-SCAN-q1", "O": "GTH-SCAN-q6"},
+    "auxbasis": "SZV-GTH",
+    "rsdf_central_setup": "exact_gpu_source",
+    "ke_cutoff_ha": 400.0,
+    "precision": 1e-09,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "device": "gpu",
+    "df_backend": "rsdf",
+    "target_integrator": "uniform",
+    "calculation_mode": "stress_only",
+    "stress_pp_response_backend": "gpu4pyscf_native_contracted_analytic_nonlocal_device",
+    "stress_df_response_backend": "host_analytic_direct_contracted_factorized_device",
+    "stress_host_workers": 1,
+    "stress_df_device_memory_fraction": 0.75,
+    "stress_detailed_profile": true,
+    "run_stress_fd": true,
+    "stress_fd_components": ["xx", "xy"],
+    "stress_fd_step": 0.00025,
+    "stress_fd_tolerance_ha_per_bohr3": 1e-08,
+    "checkpoint_resume": true,
+    "track_vram_peak": true,
+    "device_warmup": true,
+    "z_solver": "matrix_free"
+  },
+  "jobs": [
+    {"name": "water8_rsdf_factorized_device_projection"}
+  ],
+  "benchmark_scope": "development"
+}

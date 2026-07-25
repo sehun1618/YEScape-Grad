@@ -1,0 +1,38 @@
+{
+  "output_root": "../results/water20_gdf_host_memory_gate",
+  "defaults": {
+    "atom_file": "../../structures/water20.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[12.4139, 0.0, 0.0], [0.0, 12.4139, 0.0], [0.0, 0.0, 12.4139]],
+    "lattice_unit": "Angstrom",
+    "basis": "SZV-GTH",
+    "pseudo": {"H": "GTH-SCAN-q1", "O": "GTH-SCAN-q6"},
+    "auxbasis": "SZV-GTH",
+    "gdf_setup_mode": "native",
+    "ke_cutoff_ha": 500.0,
+    "precision": 1e-09,
+    "kmesh": [1, 1, 1],
+    "xc": "r2SCAN",
+    "conv_tol": 1e-08,
+    "conv_tol_grad": 1e-08,
+    "max_cycle": 80,
+    "num_threads": 64,
+    "gpu_id": 0,
+    "track_vram_peak": true,
+    "device_warmup": true,
+    "z_solver": "matrix_free",
+    "stress_df_device_memory_fraction": 0.85,
+    "stress_host_reciprocal_block_size": 4096,
+    "target_integrator": "uniform",
+    "run_stress_fd": false
+  },
+  "jobs": [
+    {
+      "name": "gdf_stress_block4096",
+      "device": "gpu",
+      "df_backend": "gdf",
+      "calculation_mode": "stress_only"
+    }
+  ],
+  "benchmark_scope": "development"
+}

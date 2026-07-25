@@ -1,0 +1,227 @@
+{
+  "input": {
+    "df_backend": "rsdf",
+    "xc": "PBE",
+    "sampling": "gamma",
+    "kmesh": [
+      1,
+      1,
+      1
+    ],
+    "mesh": [
+      15,
+      15,
+      15
+    ],
+    "host_workers": null,
+    "df_diagonal_cache_bytes": 268435456,
+    "cpu_evidence": "/home/ksh/2026_project/dc_force/claude/gradient/dc_dft_grad_repo/stress/validation/results/2026-07-21_s5_gamma_rsdf_pbe_analytic.json"
+  },
+  "energy_ha": -1.1919420131188947,
+  "timings_s": {
+    "gpu_source_hf_and_target_state": 1.6639823094010353,
+    "gpu_analytic_stress": 2.833144403062761
+  },
+  "cpu_gpu_max_abs_difference_ha_per_bohr3": 5.040523120419804e-13,
+  "cpu_gpu_difference_ha_per_bohr3": [
+    -5.023050118208028e-13,
+    -5.040523120419804e-13,
+    -3.0356435681139216e-13,
+    -8.383803919668639e-17,
+    5.544924442327887e-17,
+    -6.908939728550652e-16
+  ],
+  "gpu": {
+    "component_derivatives_ha": {
+      "kinetic": [
+        0.04719755783754348,
+        0.04719755783754348,
+        -0.298802287095879,
+        5.430321253626028e-20,
+        -8.60773126406945e-21,
+        -5.800850753473378e-21
+      ],
+      "pseudopotential": [
+        -0.42881893729260956,
+        -0.42881893729260945,
+        0.9272514859664402,
+        -2.99297398515548e-16,
+        -3.1615595845475316e-16,
+        -5.02804220922516e-16
+      ],
+      "one_electron": [
+        -0.3816213794550661,
+        -0.38162137945506597,
+        0.6284491988705612,
+        -2.992430953030117e-16,
+        -3.1616456618601723e-16,
+        -5.028100217732695e-16
+      ],
+      "target_coulomb": [
+        0.15476986583874142,
+        0.15476986583874136,
+        -0.23251546918250215,
+        -1.6644103917822832e-18,
+        -1.9846956074441243e-18,
+        -1.871269168215989e-18
+      ],
+      "target_xc": [
+        0.004842243927239753,
+        0.004842243927239864,
+        0.29627221671549087,
+        -7.894919286223328e-19,
+        -1.5789838572446656e-18,
+        -8.421247238638217e-18
+      ],
+      "target_overlap": [
+        -0.03589736987653465,
+        -0.03589736987653465,
+        -0.2799752194654425,
+        1.0924996498198787e-20,
+        8.956807108962516e-20,
+        3.620158370765289e-22
+      ],
+      "nuclear": [
+        0.24015215929981498,
+        0.24015215929981507,
+        -0.4944486825342504,
+        -1.907019863060917e-23,
+        1.5178640197486883e-18,
+        5.4210119988445924e-18
+      ],
+      "explicit": [
+        -0.017754480265804562,
+        -0.017754480265804312,
+        -0.08221795559614298,
+        -3.016860916971168e-16,
+        -3.181208135598677e-16,
+        -5.07681164165442e-16
+      ],
+      "orbital_response": [
+        -1.4577002496853283e-30,
+        -1.3803184434024557e-30,
+        -1.835456127166442e-30,
+        5.131607091922305e-31,
+        -7.414385121940305e-32,
+        1.6159491066448936e-31
+      ],
+      "total": [
+        -0.017754480265804562,
+        -0.017754480265804312,
+        -0.08221795559614298,
+        -3.016860916971163e-16,
+        -3.181208135598678e-16,
+        -5.076811641654418e-16
+      ]
+    },
+    "stress_voigt_ha_per_bohr3": [
+      -3.467671926914957e-05,
+      -3.467671926914908e-05,
+      -0.00016058194452371692,
+      -5.892306478459308e-19,
+      -6.213297139841174e-19,
+      -9.915647737606296e-19
+    ],
+    "stress_tensor_ha_per_bohr3": [
+      [
+        -3.467671926914957e-05,
+        -9.915647737606296e-19,
+        -6.213297139841174e-19
+      ],
+      [
+        -9.915647737606296e-19,
+        -3.467671926914908e-05,
+        -5.892306478459308e-19
+      ],
+      [
+        -6.213297139841174e-19,
+        -5.892306478459308e-19,
+        -0.00016058194452371692
+      ]
+    ],
+    "volume_bohr3": 511.9999999999995,
+    "z_vector": {
+      "dimension": 2,
+      "residual_max_abs": 0.0,
+      "solver": "dense",
+      "equation": "adjoint"
+    },
+    "timings_s": {
+      "target_fock_and_zvector_device": 0.04828382935374975,
+      "host_one_electron_pp_ewald_primitives": 2.2356532998383045,
+      "df_host_primitives": 0.47094577457755804,
+      "df_device_factorization": 0.005349752493202686,
+      "df_device_jk_components": 0.5100579224526882,
+      "device_xc_lagrangian_assembly": 0.03804302308708429,
+      "total": 2.8328343434259295
+    },
+    "metadata": {
+      "stage": "S7_rsdf_gga_analytic",
+      "production": true,
+      "device": "gpu",
+      "df_backend": "rsdf",
+      "target_xctype": "GGA",
+      "nkpts": 1,
+      "fixed_fractional_kpoints": true,
+      "primitive_backend": "host_integral_device_response",
+      "silent_cpu_fallback": false,
+      "source_hf_owner": "gpu",
+      "target_fock_owner": "gpu",
+      "z_vector_owner": "gpu",
+      "z_vector_reused": false,
+      "target_xc_stress_owner": "gpu4pyscf",
+      "df_cholesky_response_owner": "gpu",
+      "df_jk_stress_contraction_owner": "gpu_component_stream",
+      "one_electron_pp_strain_primitive_owner": "host_analytic",
+      "df_2c3c_strain_primitive_owner": "host_analytic",
+      "target_fock_workspace_reused": true,
+      "df_parameters": {
+        "source_omega": 0.3,
+        "source_mesh": [
+          11,
+          11,
+          11
+        ],
+        "metric_omega": 0.4,
+        "metric_mesh": [
+          15,
+          15,
+          15
+        ],
+        "precision_R": 1e-10,
+        "precision_G": 1e-08,
+        "precision_j2c": 1e-14,
+        "use_bvk": true
+      },
+      "df_memory_estimate": {
+        "host_derivative_payload_bytes": 960,
+        "host_parallel_build_upper_bound_bytes": 960,
+        "central_device_factor_bytes": 96,
+        "diagonal_response_cache_bytes": 128,
+        "peak_component_device_workspace_bytes": 480,
+        "jk_device_workspace_bytes": 256,
+        "estimated_peak_df_device_bytes": 960
+      },
+      "df_diagonal_response_bytes": 128,
+      "df_diagonal_cache_enabled": true,
+      "df_preflight_free_device_bytes": 101023547392,
+      "df_device_memory_fraction": 0.85,
+      "one_electron_pp_host_workers": 1,
+      "df_host_primitive_workers": 1,
+      "central_cderi_parity_max_abs": 4.6524784025336885e-11,
+      "device_memory": {
+        "start_free_device_bytes": 101023547392,
+        "minimum_observed_free_device_bytes": 101015158784,
+        "total_device_bytes": 101975851008,
+        "start_pool_used_bytes": 113664,
+        "peak_observed_pool_used_bytes": 129024,
+        "start_pool_reserved_bytes": 98806784,
+        "peak_observed_pool_reserved_bytes": 98806784,
+        "observed_device_use_increase_bytes": 8388608,
+        "observed_pool_used_increase_bytes": 15360,
+        "observed_pool_reserved_increase_bytes": 0
+      },
+      "low_level_numerical_components": []
+    }
+  }
+}

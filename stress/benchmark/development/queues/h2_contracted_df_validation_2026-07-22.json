@@ -1,0 +1,52 @@
+{
+  "output_root": "../results/h2_contracted_df_validation_2026-07-22",
+  "defaults": {
+    "atom_file": "../../structures/h2.xyz",
+    "atom_unit": "Angstrom",
+    "lattice_vectors": [[8.0, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]],
+    "lattice_unit": "Bohr",
+    "basis": "gth-szv",
+    "pseudo": "gth-hf",
+    "auxbasis": "gth-szv",
+    "gdf_setup_mode": "native",
+    "rsdf_central_setup": "exact_gpu_source",
+    "mesh": [9, 9, 9],
+    "precision": 1e-10,
+    "kmesh": [1, 1, 1],
+    "xc": "PBE",
+    "conv_tol": 1e-10,
+    "max_cycle": 80,
+    "num_threads": 4,
+    "gpu_id": 0,
+    "device": "gpu",
+    "target_integrator": "uniform",
+    "calculation_mode": "stress_only",
+    "run_stress_fd": false,
+    "track_vram_peak": true,
+    "z_solver": "matrix_free",
+    "stress_pp_response_backend": "host_analytic_matrix"
+  },
+  "jobs": [
+    {
+      "name": "h2_gdf_host_df",
+      "df_backend": "gdf",
+      "stress_df_response_backend": "host_analytic_device_factorization"
+    },
+    {
+      "name": "h2_gdf_contracted_df",
+      "df_backend": "gdf",
+      "stress_df_response_backend": "gpu_fixed_density_fd_contracted"
+    },
+    {
+      "name": "h2_rsdf_host_df",
+      "df_backend": "rsdf",
+      "stress_df_response_backend": "host_analytic_device_factorization"
+    },
+    {
+      "name": "h2_rsdf_contracted_df",
+      "df_backend": "rsdf",
+      "stress_df_response_backend": "gpu_fixed_density_fd_contracted"
+    }
+  ],
+  "benchmark_scope": "development"
+}

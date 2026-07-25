@@ -1,0 +1,144 @@
+{
+  "xc": "r2SCAN",
+  "df_backend": "gdf",
+  "shift_bohr": [
+    0.23,
+    0.17,
+    0.11
+  ],
+  "records": [
+    {
+      "mesh": [
+        9,
+        9,
+        9
+      ],
+      "pair": [
+        {
+          "geometry": "base",
+          "stress_voigt_ha_per_bohr3": [
+            0.0015114557410456629,
+            0.0015114557410562295,
+            -9.094992597856478e-05,
+            -5.568396220623391e-16,
+            -1.8530165706312826e-16,
+            2.6554002023654705e-15
+          ],
+          "stress_wall_seconds": 6.570102128200233,
+          "z_residual_max_abs": 0.0
+        },
+        {
+          "geometry": "shifted",
+          "stress_voigt_ha_per_bohr3": [
+            0.0016162839786837743,
+            0.0015929202482106236,
+            -7.840730718821765e-05,
+            6.014271288754326e-08,
+            3.304503779641035e-08,
+            2.2840277057170863e-06
+          ],
+          "stress_wall_seconds": 6.866689505055547,
+          "z_residual_max_abs": 0.0
+        }
+      ],
+      "translation_difference_voigt_ha_per_bohr3": [
+        0.0001048282376381114,
+        8.146450715439406e-05,
+        1.254261879034713e-05,
+        6.014271344438288e-08,
+        3.304503798171201e-08,
+        2.2840277030616863e-06
+      ],
+      "translation_difference_max_abs_ha_per_bohr3": 0.0001048282376381114
+    },
+    {
+      "mesh": [
+        15,
+        15,
+        15
+      ],
+      "pair": [
+        {
+          "geometry": "base",
+          "stress_voigt_ha_per_bohr3": [
+            0.0015714318931346462,
+            0.0015714318931625887,
+            -8.599656532214311e-05,
+            -1.800653697004709e-16,
+            -1.0569039331003629e-16,
+            3.0428961863213354e-15
+          ],
+          "stress_wall_seconds": 6.56465891841799,
+          "z_residual_max_abs": 0.0
+        },
+        {
+          "geometry": "shifted",
+          "stress_voigt_ha_per_bohr3": [
+            0.0015730114684477038,
+            0.001573616006529391,
+            -8.440828372485281e-05,
+            -1.1900380003540827e-10,
+            -2.0297747488246615e-09,
+            3.1868172158154177e-10
+          ],
+          "stress_wall_seconds": 6.934716316871345,
+          "z_residual_max_abs": 0.0
+        }
+      ],
+      "translation_difference_voigt_ha_per_bohr3": [
+        1.5795753130576438e-06,
+        2.1841133668024006e-06,
+        1.5882815972902983e-06,
+        -1.1900361997003856e-10,
+        -2.029774643134268e-09,
+        3.1867867868535543e-10
+      ],
+      "translation_difference_max_abs_ha_per_bohr3": 2.1841133668024006e-06
+    },
+    {
+      "mesh": [
+        21,
+        21,
+        21
+      ],
+      "pair": [
+        {
+          "geometry": "base",
+          "stress_voigt_ha_per_bohr3": [
+            0.0015725402499803176,
+            0.0015725402500024169,
+            -8.522740340254091e-05,
+            -3.083774609843339e-16,
+            -3.9237253722362095e-16,
+            1.9307901428283235e-15
+          ],
+          "stress_wall_seconds": 6.667716997675598,
+          "z_residual_max_abs": 0.0
+        },
+        {
+          "geometry": "shifted",
+          "stress_voigt_ha_per_bohr3": [
+            0.0015725400622499633,
+            0.0015725472204541674,
+            -8.521459978993698e-05,
+            1.413885307140046e-10,
+            2.4040520786601347e-11,
+            -6.273803339280581e-11
+          ],
+          "stress_wall_seconds": 7.0266517121344805,
+          "z_residual_max_abs": 0.0
+        }
+      ],
+      "translation_difference_voigt_ha_per_bohr3": [
+        -1.877303542653641e-10,
+        6.970451750520912e-09,
+        1.2803612603923568e-08,
+        1.413888390914656e-10,
+        2.404091315913857e-11,
+        -6.273996418294863e-11
+      ],
+      "translation_difference_max_abs_ha_per_bohr3": 1.2803612603923568e-08
+    }
+  ],
+  "interpretation": "Rigid-translation differences are uniform-grid phase error, not a fitted correction or analytic-kernel residual."
+}

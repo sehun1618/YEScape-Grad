@@ -1,0 +1,1607 @@
+{
+  "input": {
+    "df_backend": "gdf",
+    "xc": "PBE",
+    "sampling": "gamma",
+    "mesh": [
+      15,
+      15,
+      15
+    ],
+    "repeats": 3,
+    "fd_step": 0.00025,
+    "host_workers": null
+  },
+  "median_s": {
+    "source_hf_and_target_state": 1.3800684502348304,
+    "analytic_stress": 7.203874354250729,
+    "analytic_end_to_end": 8.580298190936446,
+    "full_gpu_fd": 17.932062301784754
+  },
+  "repeats": [
+    {
+      "repeat": 1,
+      "energy_ha": -1.191942945945272,
+      "source_hf_and_target_state_s": 2.0942370733246207,
+      "analytic_stress_s": 7.275394581258297,
+      "analytic_end_to_end_s": 9.369631654582918,
+      "full_gpu_fd_s": 17.95367986522615,
+      "fd_over_analytic_stress_ratio": 2.467725930834808,
+      "max_abs_analytic_fd_ha_per_bohr3": 6.451653187383721e-11,
+      "analytic": {
+        "component_derivatives_ha": {
+          "kinetic": [
+            0.04719755783754348,
+            0.04719755783754348,
+            -0.2988022870958791,
+            5.430321253626028e-20,
+            -8.60773126406945e-21,
+            -5.8008507534733785e-21
+          ],
+          "pseudopotential": [
+            -0.4288189372926095,
+            -0.42881893729260945,
+            0.9272514859664404,
+            -2.9926235238085683e-16,
+            -3.161533020393137e-16,
+            -5.028042106457345e-16
+          ],
+          "one_electron": [
+            -0.381621379455066,
+            -0.38162137945506597,
+            0.6284491988705613,
+            -2.9920804916832055e-16,
+            -3.1616190977057775e-16,
+            -5.0281001149648795e-16
+          ],
+          "target_coulomb": [
+            0.15477674193500118,
+            0.15477674193500116,
+            -0.23250254223741923,
+            5.773019111483602e-19,
+            -1.3451955791351582e-18,
+            -2.3212791507831727e-18
+          ],
+          "target_xc": [
+            0.004842243927239864,
+            0.004842243927239864,
+            0.296272216715491,
+            -2.894803738281887e-18,
+            2.6316397620744427e-19,
+            0.0
+          ],
+          "target_overlap": [
+            -0.0358974431832879,
+            -0.03589744318328789,
+            -0.2799757912085646,
+            1.0925018808357588e-20,
+            8.956825399841509e-20,
+            3.6201657635647394e-22
+          ],
+          "nuclear": [
+            0.24015215929981498,
+            0.24015215929981507,
+            -0.4944486825342504,
+            -1.907019863060917e-23,
+            1.5178640197486883e-18,
+            5.4210119988445924e-18
+          ],
+          "explicit": [
+            -0.017747677476297907,
+            -0.01774767747629777,
+            -0.08220560039418201,
+            -3.0151464504684433e-16,
+            -3.1563650909975837e-16,
+            -4.997099166318503e-16
+          ],
+          "orbital_response": [
+            -5.109913606110203e-31,
+            -4.963649817776405e-31,
+            -7.332430992123573e-31,
+            1.8329821469532573e-31,
+            -2.612894002970234e-32,
+            5.781103773493767e-32
+          ],
+          "total": [
+            -0.017747677476297907,
+            -0.01774767747629777,
+            -0.08220560039418201,
+            -3.0151464504684413e-16,
+            -3.156365090997584e-16,
+            -4.997099166318502e-16
+          ]
+        },
+        "stress_voigt_ha_per_bohr3": [
+          -3.4663432570894384e-05,
+          -3.466343257089411e-05,
+          -0.0001605578132698869,
+          -5.88895791107118e-19,
+          -6.164775568354662e-19,
+          -9.759959309215834e-19
+        ],
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.4663432570894384e-05,
+            -9.759959309215834e-19,
+            -6.164775568354662e-19
+          ],
+          [
+            -9.759959309215834e-19,
+            -3.466343257089411e-05,
+            -5.88895791107118e-19
+          ],
+          [
+            -6.164775568354662e-19,
+            -5.88895791107118e-19,
+            -0.0001605578132698869
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "z_vector": {
+          "dimension": 2,
+          "residual_max_abs": 0.0,
+          "solver": "dense",
+          "equation": "adjoint"
+        },
+        "timings_s": {
+          "target_fock_and_zvector_device": 0.06001823954284191,
+          "host_one_electron_pp_ewald_primitives": 2.2421001251786947,
+          "df_host_primitives": 4.899528100155294,
+          "df_device_factorization": 0.0008675577118992805,
+          "df_device_jk_components": 4.937025419436395,
+          "device_xc_lagrangian_assembly": 0.03519873693585396,
+          "total": 7.275076448917389
+        },
+        "metadata": {
+          "stage": "S7_gdf_gga_analytic",
+          "production": true,
+          "device": "gpu",
+          "df_backend": "gdf",
+          "target_xctype": "GGA",
+          "nkpts": 1,
+          "fixed_fractional_kpoints": true,
+          "primitive_backend": "host_integral_device_response",
+          "silent_cpu_fallback": false,
+          "source_hf_owner": "gpu",
+          "target_fock_owner": "gpu",
+          "z_vector_owner": "gpu",
+          "z_vector_reused": false,
+          "target_xc_stress_owner": "gpu4pyscf",
+          "df_cholesky_response_owner": "gpu",
+          "df_jk_stress_contraction_owner": "gpu_component_stream",
+          "one_electron_pp_strain_primitive_owner": "host_analytic",
+          "df_2c3c_strain_primitive_owner": "host_analytic",
+          "target_fock_workspace_reused": true,
+          "df_parameters": {
+            "omega": 0.9632601797302424,
+            "source_mesh": [
+              27,
+              27,
+              27
+            ],
+            "metric_mesh": [
+              29,
+              29,
+              29
+            ]
+          },
+          "df_memory_estimate": {
+            "host_derivative_payload_bytes": 960,
+            "host_parallel_build_upper_bound_bytes": 960,
+            "central_device_factor_bytes": 96,
+            "diagonal_response_cache_bytes": 128,
+            "peak_component_device_workspace_bytes": 480,
+            "jk_device_workspace_bytes": 256,
+            "estimated_peak_df_device_bytes": 960
+          },
+          "df_diagonal_response_bytes": 128,
+          "df_diagonal_cache_enabled": true,
+          "df_preflight_free_device_bytes": 100924981248,
+          "df_device_memory_fraction": 0.85,
+          "one_electron_pp_host_workers": 1,
+          "df_host_primitive_workers": 1,
+          "central_cderi_parity_max_abs": null,
+          "device_memory": {
+            "start_free_device_bytes": 100924981248,
+            "minimum_observed_free_device_bytes": 100914495488,
+            "total_device_bytes": 101975851008,
+            "start_pool_used_bytes": 114176,
+            "peak_observed_pool_used_bytes": 130048,
+            "start_pool_reserved_bytes": 197372928,
+            "peak_observed_pool_reserved_bytes": 197372928,
+            "observed_device_use_increase_bytes": 10485760,
+            "observed_pool_used_increase_bytes": 15872,
+            "observed_pool_reserved_increase_bytes": 0
+          },
+          "low_level_numerical_components": []
+        }
+      },
+      "fd": {
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.4663402819976075e-05,
+            -1.3010426069826066e-14,
+            1.7347234759768089e-15
+          ],
+          [
+            -1.3010426069826066e-14,
+            -3.466340282084344e-05,
+            1.7347234759768089e-15
+          ],
+          [
+            1.7347234759768089e-15,
+            1.7347234759768089e-15,
+            -0.00016055787778641878
+          ]
+        ],
+        "stress_voigt_ha_per_bohr3": [
+          -3.4663402819976075e-05,
+          -3.466340282084344e-05,
+          -0.00016055787778641878,
+          1.7347234759768089e-15,
+          1.7347234759768089e-15,
+          -1.3010426069826066e-14
+        ],
+        "stress_tensor_gpa": [
+          [
+            -1.0198325184613846,
+            -3.82779949618793e-10,
+            5.103732661583907e-11
+          ],
+          [
+            -3.82779949618793e-10,
+            -1.0198325184869033,
+            5.103732661583907e-11
+          ],
+          [
+            5.103732661583907e-11,
+            5.103732661583907e-11,
+            -4.723775842554503
+          ]
+        ],
+        "pressure_ha_per_bohr3": 7.662822780907942e-05,
+        "virial_ha": [
+          [
+            0.017747662243827733,
+            6.661338147750939e-12,
+            -8.881784197001252e-13
+          ],
+          [
+            6.661338147750939e-12,
+            0.017747662244271822,
+            -8.881784197001252e-13
+          ],
+          [
+            -8.881784197001252e-13,
+            -8.881784197001252e-13,
+            0.08220563342664633
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "center": {
+          "energy_ha": -1.191942945945272,
+          "wall_seconds": 1.3806329667568207,
+          "converged": true,
+          "metadata": {
+            "device": "gpu",
+            "df_backend": "gdf"
+          }
+        },
+        "pairs": [
+          {
+            "component": "xx",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.191947393984324,
+              "wall_seconds": 1.38011010363698,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191938520153202,
+              "wall_seconds": 1.3834808599203825,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662243827733,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919473939843237,
+              "wall_seconds": 1.3767933566123247,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919385201532016,
+              "wall_seconds": 1.3817065060138702,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662244271822,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "zz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919634700334474,
+              "wall_seconds": 1.3820967860519886,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191922367216734,
+              "wall_seconds": 1.379677252843976,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.08220563342664633,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.8719999999999,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.3774553686380386,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.3818130008876324,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.3793487446382642,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.379927033558488,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429436238247,
+              "wall_seconds": 1.3786714682355523,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919429436238214,
+              "wall_seconds": 1.378617704845965,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -6.661338147750939e-12,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          }
+        ],
+        "complete": true,
+        "convention": {
+          "stress_sign": "tensile_positive",
+          "pressure_definition": "-trace(stress)/3",
+          "virial_definition": "-volume*stress",
+          "voigt_order": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+          "internal_unit": "Eh/Bohr^3"
+        },
+        "metadata": {
+          "method": "central_finite_difference",
+          "production": false,
+          "fixed_fractional_coordinates": true,
+          "fixed_integer_mesh": true,
+          "warm_start": false,
+          "components": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "convention": {
+            "stress_sign": "tensile_positive",
+            "pressure_definition": "-trace(stress)/3",
+            "virial_definition": "-volume*stress",
+            "voigt_order": [
+              "xx",
+              "yy",
+              "zz",
+              "yz",
+              "xz",
+              "xy"
+            ],
+            "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+            "internal_unit": "Eh/Bohr^3"
+          }
+        }
+      }
+    },
+    {
+      "repeat": 2,
+      "energy_ha": -1.191942945945272,
+      "source_hf_and_target_state_s": 1.3800684502348304,
+      "analytic_stress_s": 7.197602484375238,
+      "analytic_end_to_end_s": 8.577670934610069,
+      "full_gpu_fd_s": 17.921489612199366,
+      "fd_over_analytic_stress_ratio": 2.489924895283374,
+      "max_abs_analytic_fd_ha_per_bohr3": 6.451653187383721e-11,
+      "analytic": {
+        "component_derivatives_ha": {
+          "kinetic": [
+            0.04719755783754348,
+            0.04719755783754348,
+            -0.2988022870958791,
+            5.430321253626028e-20,
+            -8.60773126406945e-21,
+            -5.8008507534733785e-21
+          ],
+          "pseudopotential": [
+            -0.4288189372926095,
+            -0.42881893729260945,
+            0.9272514859664404,
+            -2.993057697594682e-16,
+            -3.161716364673367e-16,
+            -5.028042394974056e-16
+          ],
+          "one_electron": [
+            -0.381621379455066,
+            -0.38162137945506597,
+            0.6284491988705613,
+            -2.9925146654693194e-16,
+            -3.161802441986008e-16,
+            -5.028100403481591e-16
+          ],
+          "target_coulomb": [
+            0.15477674193500118,
+            0.15477674193500113,
+            -0.23250254223741929,
+            5.744686785771125e-19,
+            -1.3457798510391666e-18,
+            -2.321612935259941e-18
+          ],
+          "target_xc": [
+            0.004842243927239864,
+            0.004842243927239864,
+            0.296272216715491,
+            -2.894803738281887e-18,
+            2.6316397620744427e-19,
+            0.0
+          ],
+          "target_overlap": [
+            -0.0358974431832879,
+            -0.03589744318328789,
+            -0.2799757912085646,
+            1.0925018808357588e-20,
+            8.956825399841509e-20,
+            3.6201657635647394e-22
+          ],
+          "nuclear": [
+            0.24015215929981498,
+            0.24015215929981507,
+            -0.4944486825342504,
+            -1.907019863060917e-23,
+            1.5178640197486883e-18,
+            5.4210119988445924e-18
+          ],
+          "explicit": [
+            -0.017747677476297907,
+            -0.017747677476297824,
+            -0.08220560039418201,
+            -3.0156089565802694e-16,
+            -3.156554277996854e-16,
+            -4.997102792679982e-16
+          ],
+          "orbital_response": [
+            -5.169073054982581e-31,
+            -4.9819610757607125e-31,
+            -6.467576191941661e-31,
+            1.832979422171814e-31,
+            -2.6128917741800863e-32,
+            5.781101849905057e-32
+          ],
+          "total": [
+            -0.017747677476297907,
+            -0.017747677476297824,
+            -0.08220560039418201,
+            -3.0156089565802675e-16,
+            -3.1565542779968547e-16,
+            -4.997102792679981e-16
+          ]
+        },
+        "stress_voigt_ha_per_bohr3": [
+          -3.4663432570894384e-05,
+          -3.466343257089422e-05,
+          -0.0001605578132698869,
+          -5.889861243320841e-19,
+          -6.165145074212613e-19,
+          -9.759966391953097e-19
+        ],
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.4663432570894384e-05,
+            -9.759966391953097e-19,
+            -6.165145074212613e-19
+          ],
+          [
+            -9.759966391953097e-19,
+            -3.466343257089422e-05,
+            -5.889861243320841e-19
+          ],
+          [
+            -6.165145074212613e-19,
+            -5.889861243320841e-19,
+            -0.0001605578132698869
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "z_vector": {
+          "dimension": 2,
+          "residual_max_abs": 0.0,
+          "solver": "dense",
+          "equation": "adjoint"
+        },
+        "timings_s": {
+          "target_fock_and_zvector_device": 0.02627600822597742,
+          "host_one_electron_pp_ewald_primitives": 2.2312485268339515,
+          "df_host_primitives": 4.892096015624702,
+          "df_device_factorization": 0.0006088931113481522,
+          "df_device_jk_components": 4.920631659217179,
+          "device_xc_lagrangian_assembly": 0.018603644333779812,
+          "total": 7.197322830557823
+        },
+        "metadata": {
+          "stage": "S7_gdf_gga_analytic",
+          "production": true,
+          "device": "gpu",
+          "df_backend": "gdf",
+          "target_xctype": "GGA",
+          "nkpts": 1,
+          "fixed_fractional_kpoints": true,
+          "primitive_backend": "host_integral_device_response",
+          "silent_cpu_fallback": false,
+          "source_hf_owner": "gpu",
+          "target_fock_owner": "gpu",
+          "z_vector_owner": "gpu",
+          "z_vector_reused": false,
+          "target_xc_stress_owner": "gpu4pyscf",
+          "df_cholesky_response_owner": "gpu",
+          "df_jk_stress_contraction_owner": "gpu_component_stream",
+          "one_electron_pp_strain_primitive_owner": "host_analytic",
+          "df_2c3c_strain_primitive_owner": "host_analytic",
+          "target_fock_workspace_reused": true,
+          "df_parameters": {
+            "omega": 0.9632601797302424,
+            "source_mesh": [
+              27,
+              27,
+              27
+            ],
+            "metric_mesh": [
+              29,
+              29,
+              29
+            ]
+          },
+          "df_memory_estimate": {
+            "host_derivative_payload_bytes": 960,
+            "host_parallel_build_upper_bound_bytes": 960,
+            "central_device_factor_bytes": 96,
+            "diagonal_response_cache_bytes": 128,
+            "peak_component_device_workspace_bytes": 480,
+            "jk_device_workspace_bytes": 256,
+            "estimated_peak_df_device_bytes": 960
+          },
+          "df_diagonal_response_bytes": 128,
+          "df_diagonal_cache_enabled": true,
+          "df_preflight_free_device_bytes": 100914495488,
+          "df_device_memory_fraction": 0.85,
+          "one_electron_pp_host_workers": 1,
+          "df_host_primitive_workers": 1,
+          "central_cderi_parity_max_abs": null,
+          "device_memory": {
+            "start_free_device_bytes": 100914495488,
+            "minimum_observed_free_device_bytes": 100914495488,
+            "total_device_bytes": 101975851008,
+            "start_pool_used_bytes": 228864,
+            "peak_observed_pool_used_bytes": 244736,
+            "start_pool_reserved_bytes": 197853184,
+            "peak_observed_pool_reserved_bytes": 197853184,
+            "observed_device_use_increase_bytes": 0,
+            "observed_pool_used_increase_bytes": 15872,
+            "observed_pool_reserved_increase_bytes": 0
+          },
+          "low_level_numerical_components": []
+        }
+      },
+      "fd": {
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.4663402819976075e-05,
+            -1.3010426069826066e-14,
+            1.7347234759768089e-15
+          ],
+          [
+            -1.3010426069826066e-14,
+            -3.466340282084344e-05,
+            1.7347234759768089e-15
+          ],
+          [
+            1.7347234759768089e-15,
+            1.7347234759768089e-15,
+            -0.00016055787778641878
+          ]
+        ],
+        "stress_voigt_ha_per_bohr3": [
+          -3.4663402819976075e-05,
+          -3.466340282084344e-05,
+          -0.00016055787778641878,
+          1.7347234759768089e-15,
+          1.7347234759768089e-15,
+          -1.3010426069826066e-14
+        ],
+        "stress_tensor_gpa": [
+          [
+            -1.0198325184613846,
+            -3.82779949618793e-10,
+            5.103732661583907e-11
+          ],
+          [
+            -3.82779949618793e-10,
+            -1.0198325184869033,
+            5.103732661583907e-11
+          ],
+          [
+            5.103732661583907e-11,
+            5.103732661583907e-11,
+            -4.723775842554503
+          ]
+        ],
+        "pressure_ha_per_bohr3": 7.662822780907942e-05,
+        "virial_ha": [
+          [
+            0.017747662243827733,
+            6.661338147750939e-12,
+            -8.881784197001252e-13
+          ],
+          [
+            6.661338147750939e-12,
+            0.017747662244271822,
+            -8.881784197001252e-13
+          ],
+          [
+            -8.881784197001252e-13,
+            -8.881784197001252e-13,
+            0.08220563342664633
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "center": {
+          "energy_ha": -1.191942945945272,
+          "wall_seconds": 1.3772498033940792,
+          "converged": true,
+          "metadata": {
+            "device": "gpu",
+            "df_backend": "gdf"
+          }
+        },
+        "pairs": [
+          {
+            "component": "xx",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.191947393984324,
+              "wall_seconds": 1.3747741663828492,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191938520153202,
+              "wall_seconds": 1.3798591997474432,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662243827733,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919473939843237,
+              "wall_seconds": 1.375974071212113,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919385201532016,
+              "wall_seconds": 1.3802020959556103,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662244271822,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "zz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919634700334474,
+              "wall_seconds": 1.378372904844582,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191922367216734,
+              "wall_seconds": 1.3767521139234304,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.08220563342664633,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.8719999999999,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.377570721320808,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.377649676054716,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.3768749637529254,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.3776577766984701,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429436238247,
+              "wall_seconds": 1.378085881471634,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919429436238214,
+              "wall_seconds": 1.3778132712468505,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -6.661338147750939e-12,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          }
+        ],
+        "complete": true,
+        "convention": {
+          "stress_sign": "tensile_positive",
+          "pressure_definition": "-trace(stress)/3",
+          "virial_definition": "-volume*stress",
+          "voigt_order": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+          "internal_unit": "Eh/Bohr^3"
+        },
+        "metadata": {
+          "method": "central_finite_difference",
+          "production": false,
+          "fixed_fractional_coordinates": true,
+          "fixed_integer_mesh": true,
+          "warm_start": false,
+          "components": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "convention": {
+            "stress_sign": "tensile_positive",
+            "pressure_definition": "-trace(stress)/3",
+            "virial_definition": "-volume*stress",
+            "voigt_order": [
+              "xx",
+              "yy",
+              "zz",
+              "yz",
+              "xz",
+              "xy"
+            ],
+            "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+            "internal_unit": "Eh/Bohr^3"
+          }
+        }
+      }
+    },
+    {
+      "repeat": 3,
+      "energy_ha": -1.191942945945272,
+      "source_hf_and_target_state_s": 1.376423836685717,
+      "analytic_stress_s": 7.203874354250729,
+      "analytic_end_to_end_s": 8.580298190936446,
+      "full_gpu_fd_s": 17.932062301784754,
+      "fd_over_analytic_stress_ratio": 2.4892247449046265,
+      "max_abs_analytic_fd_ha_per_bohr3": 6.451653187383721e-11,
+      "analytic": {
+        "component_derivatives_ha": {
+          "kinetic": [
+            0.04719755783754348,
+            0.04719755783754348,
+            -0.2988022870958791,
+            5.430321253626028e-20,
+            -8.60773126406945e-21,
+            -5.8008507534733785e-21
+          ],
+          "pseudopotential": [
+            -0.4288189372926095,
+            -0.42881893729260945,
+            0.9272514859664404,
+            -2.9928429619152457e-16,
+            -3.161958367315983e-16,
+            -5.028042597927051e-16
+          ],
+          "one_electron": [
+            -0.381621379455066,
+            -0.38162137945506597,
+            0.6284491988705613,
+            -2.992299929789883e-16,
+            -3.1620444446286237e-16,
+            -5.028100606434586e-16
+          ],
+          "target_coulomb": [
+            0.15477674193500113,
+            0.15477674193500118,
+            -0.23250254223741923,
+            5.722436862876058e-19,
+            -1.3522965492391596e-18,
+            -2.321100562374535e-18
+          ],
+          "target_xc": [
+            0.004842243927239864,
+            0.004842243927239864,
+            0.296272216715491,
+            -2.894803738281887e-18,
+            2.6316397620744427e-19,
+            0.0
+          ],
+          "target_overlap": [
+            -0.0358974431832879,
+            -0.03589744318328789,
+            -0.2799757912085646,
+            1.0925018808357588e-20,
+            8.956825399841509e-20,
+            3.6201657635647394e-22
+          ],
+          "nuclear": [
+            0.24015215929981498,
+            0.24015215929981507,
+            -0.4944486825342504,
+            -1.907019863060917e-23,
+            1.5178640197486883e-18,
+            5.4210119988445924e-18
+          ],
+          "explicit": [
+            -0.017747677476297963,
+            -0.01774767747629777,
+            -0.08220560039418201,
+            -3.015416470823728e-16,
+            -3.1568614476214696e-16,
+            -4.997097871904123e-16
+          ],
+          "orbital_response": [
+            -5.150761796998274e-31,
+            -5.00027233374502e-31,
+            -6.756330644771126e-31,
+            1.8329688348318991e-31,
+            -2.612957009596623e-32,
+            5.781103036128961e-32
+          ],
+          "total": [
+            -0.017747677476297963,
+            -0.01774767747629777,
+            -0.08220560039418201,
+            -3.015416470823726e-16,
+            -3.15686144762147e-16,
+            -4.997097871904122e-16
+          ]
+        },
+        "stress_voigt_ha_per_bohr3": [
+          -3.466343257089449e-05,
+          -3.466343257089411e-05,
+          -0.0001605578132698869,
+          -5.889485294577596e-19,
+          -6.16574501488569e-19,
+          -9.759956781062747e-19
+        ],
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.466343257089449e-05,
+            -9.759956781062747e-19,
+            -6.16574501488569e-19
+          ],
+          [
+            -9.759956781062747e-19,
+            -3.466343257089411e-05,
+            -5.889485294577596e-19
+          ],
+          [
+            -6.16574501488569e-19,
+            -5.889485294577596e-19,
+            -0.0001605578132698869
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "z_vector": {
+          "dimension": 2,
+          "residual_max_abs": 0.0,
+          "solver": "dense",
+          "equation": "adjoint"
+        },
+        "timings_s": {
+          "target_fock_and_zvector_device": 0.026265131309628487,
+          "host_one_electron_pp_ewald_primitives": 2.233716493472457,
+          "df_host_primitives": 4.89615832734853,
+          "df_device_factorization": 0.0005714353173971176,
+          "df_device_jk_components": 4.924456764943898,
+          "device_xc_lagrangian_assembly": 0.01860068365931511,
+          "total": 7.2036019982770085
+        },
+        "metadata": {
+          "stage": "S7_gdf_gga_analytic",
+          "production": true,
+          "device": "gpu",
+          "df_backend": "gdf",
+          "target_xctype": "GGA",
+          "nkpts": 1,
+          "fixed_fractional_kpoints": true,
+          "primitive_backend": "host_integral_device_response",
+          "silent_cpu_fallback": false,
+          "source_hf_owner": "gpu",
+          "target_fock_owner": "gpu",
+          "z_vector_owner": "gpu",
+          "z_vector_reused": false,
+          "target_xc_stress_owner": "gpu4pyscf",
+          "df_cholesky_response_owner": "gpu",
+          "df_jk_stress_contraction_owner": "gpu_component_stream",
+          "one_electron_pp_strain_primitive_owner": "host_analytic",
+          "df_2c3c_strain_primitive_owner": "host_analytic",
+          "target_fock_workspace_reused": true,
+          "df_parameters": {
+            "omega": 0.9632601797302424,
+            "source_mesh": [
+              27,
+              27,
+              27
+            ],
+            "metric_mesh": [
+              29,
+              29,
+              29
+            ]
+          },
+          "df_memory_estimate": {
+            "host_derivative_payload_bytes": 960,
+            "host_parallel_build_upper_bound_bytes": 960,
+            "central_device_factor_bytes": 96,
+            "diagonal_response_cache_bytes": 128,
+            "peak_component_device_workspace_bytes": 480,
+            "jk_device_workspace_bytes": 256,
+            "estimated_peak_df_device_bytes": 960
+          },
+          "df_diagonal_response_bytes": 128,
+          "df_diagonal_cache_enabled": true,
+          "df_preflight_free_device_bytes": 100914495488,
+          "df_device_memory_fraction": 0.85,
+          "one_electron_pp_host_workers": 1,
+          "df_host_primitive_workers": 1,
+          "central_cderi_parity_max_abs": null,
+          "device_memory": {
+            "start_free_device_bytes": 100914495488,
+            "minimum_observed_free_device_bytes": 100914495488,
+            "total_device_bytes": 101975851008,
+            "start_pool_used_bytes": 343040,
+            "peak_observed_pool_used_bytes": 358912,
+            "start_pool_reserved_bytes": 198093312,
+            "peak_observed_pool_reserved_bytes": 198093312,
+            "observed_device_use_increase_bytes": 0,
+            "observed_pool_used_increase_bytes": 15872,
+            "observed_pool_reserved_increase_bytes": 0
+          },
+          "low_level_numerical_components": []
+        }
+      },
+      "fd": {
+        "stress_tensor_ha_per_bohr3": [
+          [
+            -3.4663402819976075e-05,
+            -1.3010426069826066e-14,
+            1.7347234759768089e-15
+          ],
+          [
+            -1.3010426069826066e-14,
+            -3.466340282084344e-05,
+            1.7347234759768089e-15
+          ],
+          [
+            1.7347234759768089e-15,
+            1.7347234759768089e-15,
+            -0.00016055787778641878
+          ]
+        ],
+        "stress_voigt_ha_per_bohr3": [
+          -3.4663402819976075e-05,
+          -3.466340282084344e-05,
+          -0.00016055787778641878,
+          1.7347234759768089e-15,
+          1.7347234759768089e-15,
+          -1.3010426069826066e-14
+        ],
+        "stress_tensor_gpa": [
+          [
+            -1.0198325184613846,
+            -3.82779949618793e-10,
+            5.103732661583907e-11
+          ],
+          [
+            -3.82779949618793e-10,
+            -1.0198325184869033,
+            5.103732661583907e-11
+          ],
+          [
+            5.103732661583907e-11,
+            5.103732661583907e-11,
+            -4.723775842554503
+          ]
+        ],
+        "pressure_ha_per_bohr3": 7.662822780907942e-05,
+        "virial_ha": [
+          [
+            0.017747662243827733,
+            6.661338147750939e-12,
+            -8.881784197001252e-13
+          ],
+          [
+            6.661338147750939e-12,
+            0.017747662244271822,
+            -8.881784197001252e-13
+          ],
+          [
+            -8.881784197001252e-13,
+            -8.881784197001252e-13,
+            0.08220563342664633
+          ]
+        ],
+        "volume_bohr3": 511.9999999999995,
+        "center": {
+          "energy_ha": -1.191942945945272,
+          "wall_seconds": 1.3790669487789273,
+          "converged": true,
+          "metadata": {
+            "device": "gpu",
+            "df_backend": "gdf"
+          }
+        },
+        "pairs": [
+          {
+            "component": "xx",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.191947393984324,
+              "wall_seconds": 1.3762912871316075,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191938520153202,
+              "wall_seconds": 1.3789013400673866,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662243827733,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919473939843237,
+              "wall_seconds": 1.3782124975696206,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919385201532016,
+              "wall_seconds": 1.3806850630789995,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.017747662244271822,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.87200000000036,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "zz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919634700334474,
+              "wall_seconds": 1.3799901967868209,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191922367216734,
+              "wall_seconds": 1.3781112683936954,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -0.08220563342664633,
+            "plus_volume_bohr3": 512.1279999999997,
+            "minus_volume_bohr3": 511.8719999999999,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "yz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.3798880781978369,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.3783014519140124,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xz",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429449247576,
+              "wall_seconds": 1.377458623610437,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.191942944924758,
+              "wall_seconds": 1.3768989844247699,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": 8.881784197001252e-13,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          },
+          {
+            "component": "xy",
+            "step": 0.00025,
+            "plus": {
+              "energy_ha": -1.1919429436238247,
+              "wall_seconds": 1.3796534379944205,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "minus": {
+              "energy_ha": -1.1919429436238214,
+              "wall_seconds": 1.3760804366320372,
+              "converged": true,
+              "metadata": {
+                "device": "gpu",
+                "df_backend": "gdf"
+              }
+            },
+            "derivative_ha": -6.661338147750939e-12,
+            "plus_volume_bohr3": 511.99999199999957,
+            "minus_volume_bohr3": 511.99999199999957,
+            "plus_mesh": [
+              15,
+              15,
+              15
+            ],
+            "minus_mesh": [
+              15,
+              15,
+              15
+            ]
+          }
+        ],
+        "complete": true,
+        "convention": {
+          "stress_sign": "tensile_positive",
+          "pressure_definition": "-trace(stress)/3",
+          "virial_definition": "-volume*stress",
+          "voigt_order": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+          "internal_unit": "Eh/Bohr^3"
+        },
+        "metadata": {
+          "method": "central_finite_difference",
+          "production": false,
+          "fixed_fractional_coordinates": true,
+          "fixed_integer_mesh": true,
+          "warm_start": false,
+          "components": [
+            "xx",
+            "yy",
+            "zz",
+            "yz",
+            "xz",
+            "xy"
+          ],
+          "convention": {
+            "stress_sign": "tensile_positive",
+            "pressure_definition": "-trace(stress)/3",
+            "virial_definition": "-volume*stress",
+            "voigt_order": [
+              "xx",
+              "yy",
+              "zz",
+              "yz",
+              "xz",
+              "xy"
+            ],
+            "shear_coordinate": "engineering_shear_gamma=2*epsilon_offdiag",
+            "internal_unit": "Eh/Bohr^3"
+          }
+        }
+      }
+    }
+  ]
+}
