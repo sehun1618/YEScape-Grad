@@ -33,6 +33,9 @@ from pyscf import lib, gto, scf, dft, grad
 from pyscf.lib import logger
 from pyscf.scf import ucphf, cphf
 
+from .uhf import _iter_h1ao as _iter_uhf_h1ao
+from .uhf import nonvariational_correction as _uhf_nonvariational_correction
+
 
 # ============================================================================
 # Utilities
@@ -306,86 +309,16 @@ def skeleton_gradient(mol, ks_grad, dm_hf, fock_oo_a, fock_oo_b,
 # Non-Variational Correction (S1 optimized)
 # ============================================================================
 
-def nonvariational_correction(mol, Coa, Cob, Cva, Cvb,
-                               e_occ_a, e_occ_b, s1, aoslices,
-                               zvec, uhf_response, h1ao_a, h1ao_b,
-                               log=None) -> np.ndarray:
-    """
-    Compute spin-resolved non-variational correction.
+def nonvariational_correction(
+    mol, Coa, Cob, Cva, Cvb, e_occ_a, e_occ_b, s1, aoslices, zvec,
+    uhf_response, h1ao_a, h1ao_b=None, log=None,
+) -> np.ndarray:
+    """Evaluate the ROHF correction through the shared UHF adjoint kernel."""
 
-    g_nv = 2 * sum_ai (Z_alpha_ai V_alpha_ai + Z_beta_ai V_beta_ai)
-
-    The factor is 2 rather than closed-shell 4 because each spin channel is
-    singly occupied in the alpha/beta representation.
-    """
-    if log is None:
-        log = logger.Logger(sys.stdout, logger.NOTE)
-
-    natm = mol.natm
-    nao = mol.nao
-    za, zb = zvec
-
-    dm_s = np.zeros((2, natm, 3, nao, nao))
-    s1_co_cache_a = {}
-    s1_co_cache_b = {}
-
-    for ia in range(natm):
-        p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        s1_co_a = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Coa)
-        s1_oo_a = lib.einsum('xpi,pj->xij', s1_co_a, Coa[p0:p1].conj())
-        s1_oo_a = s1_oo_a + s1_oo_a.transpose(0, 2, 1)
-        tmp_a = lib.einsum('xij,ui->xuj', s1_oo_a, Coa)
-        dm1_a = lib.einsum('xuj,vj->xuv', tmp_a, Coa.conj())
-        dm_s[0, ia] = dm1_a + dm1_a.transpose(0, 2, 1).conj()
-        s1_co_cache_a[ia] = s1_co_a
-
-        s1_co_b = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Cob)
-        s1_oo_b = lib.einsum('xpi,pj->xij', s1_co_b, Cob[p0:p1].conj())
-        s1_oo_b = s1_oo_b + s1_oo_b.transpose(0, 2, 1)
-        tmp_b = lib.einsum('xij,ui->xuj', s1_oo_b, Cob)
-        dm1_b = lib.einsum('xuj,vj->xuv', tmp_b, Cob.conj())
-        dm_s[1, ia] = dm1_b + dm1_b.transpose(0, 2, 1).conj()
-        s1_co_cache_b[ia] = s1_co_b
-
-    ax_ao = uhf_response(dm_s.reshape(2, -1, nao, nao))
-    ax_vo_a = lib.einsum('Auv,ua,vi->Aai', ax_ao[0], Cva.conj(), Coa)
-    ax_vo_b = lib.einsum('Auv,ua,vi->Aai', ax_ao[1], Cvb.conj(), Cob)
-
-    log.debug(f'ax_vo(alpha): max={maxabs(ax_vo_a):.6e}')
-    log.debug(f'ax_vo(beta): max={maxabs(ax_vo_b):.6e}')
-
-    g_nv = np.zeros((natm, 3))
-
-    for ia in range(natm):
-        p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        f1_vo_a = lib.einsum('xuv,ua,vi->xai', h1ao_a[ia], Cva.conj(), Coa)
-        s1_co_a = s1_co_cache_a[ia]
-        s1_vo_bra_a = lib.einsum('xpi,pa->xai', s1_co_a, Cva[p0:p1].conj())
-        s1_cv_a = lib.einsum('xpv,va->xpa', s1[:, p0:p1], Cva)
-        s1_vo_ket_a = lib.einsum('xpa,pi->xai', s1_cv_a, Coa[p0:p1].conj())
-        s1_vo_a = s1_vo_bra_a + s1_vo_ket_a
-        v1_a = f1_vo_a - s1_vo_a * e_occ_a[None, None, :] - 0.5 * ax_vo_a[ia * 3:(ia + 1) * 3]
-
-        f1_vo_b = lib.einsum('xuv,ua,vi->xai', h1ao_b[ia], Cvb.conj(), Cob)
-        s1_co_b = s1_co_cache_b[ia]
-        s1_vo_bra_b = lib.einsum('xpi,pa->xai', s1_co_b, Cvb[p0:p1].conj())
-        s1_cv_b = lib.einsum('xpv,va->xpa', s1[:, p0:p1], Cvb)
-        s1_vo_ket_b = lib.einsum('xpa,pi->xai', s1_cv_b, Cob[p0:p1].conj())
-        s1_vo_b = s1_vo_bra_b + s1_vo_ket_b
-        v1_b = f1_vo_b - s1_vo_b * e_occ_b[None, None, :] - 0.5 * ax_vo_b[ia * 3:(ia + 1) * 3]
-
-        g_nv[ia] = 2.0 * (
-            lib.einsum('ai,xai->x', za, v1_a) +
-            lib.einsum('ai,xai->x', zb, v1_b)
-        )
-
-    del s1_co_cache_a, s1_co_cache_b
-
-    log.debug(f'g_nv: max={maxabs(g_nv):.6e}')
-
-    return g_nv
+    return _uhf_nonvariational_correction(
+        mol, Coa, Cob, Cva, Cvb, e_occ_a, e_occ_b, s1, aoslices, zvec,
+        uhf_response, h1ao_a, h1ao_b, log=log,
+    )
 
 
 # ============================================================================
@@ -501,7 +434,7 @@ class Gradients(lib.StreamObject):
             log.debug('Auxbasis response enabled')
 
         s1 = ks_grad.get_ovlp(mol)
-        h1ao_a, h1ao_b = mf_uhf.Hessian().make_h1((Ca, Cb), (occa, occb))
+        h1ao_iter = _iter_uhf_h1ao(mf_uhf, (Ca, Cb), (occa, occb))
         aoslices = mol.aoslice_by_atom()
 
         log.info('Computing skeleton gradient...')
@@ -514,7 +447,7 @@ class Gradients(lib.StreamObject):
         log.info('Computing non-variational correction (S1 optimized)...')
         g_nv = nonvariational_correction(
             mol, Coa, Cob, Cva, Cvb, ea[occa_idx], eb[occb_idx],
-            s1, aoslices, (za, zb), uhf_resp, h1ao_a, h1ao_b, log=log,
+            s1, aoslices, (za, zb), uhf_resp, h1ao_iter, log=log,
         )
 
         de = g_skel + g_nv

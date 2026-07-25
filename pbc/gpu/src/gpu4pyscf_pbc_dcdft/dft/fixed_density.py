@@ -57,7 +57,9 @@ def evaluate_energy(
         xc=xc,
         with_df=with_df,
     )
-    hcore = cp.asarray(evaluate_target_hcore(target))
+    hcore = cp.asarray(
+        evaluate_target_hcore(target, kpoint_mode=kpoint_mode)
+    )
     target_evaluation = evaluate_target_veff(
         target,
         density,

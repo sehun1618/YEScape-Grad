@@ -24,6 +24,7 @@ sys.path.insert(
 )
 
 import dcdft_benchmark as benchmark  # noqa: E402
+from benchmark_checkpoint import CheckpointStore  # noqa: E402
 import diagnose_rigid_translation_eggbox as translation  # noqa: E402
 import run_water8_eggbox_stage12 as eggbox_stage12  # noqa: E402
 import summarize_optimization_baseline as optimization_baseline  # noqa: E402
@@ -765,6 +766,108 @@ class BenchmarkInputTest(unittest.TestCase):
             [field.name for field in fields(benchmark.EnergyRun)],
             ["energy_ha", "setup_wall_time_s", "wall_time_s"],
         )
+
+    def test_checkpoint_store_validates_checksum_and_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkpoints"
+            store = CheckpointStore(root, "fingerprint-1")
+            store.save_array("state/density", np.eye(2))
+            store.save_array("state/kpoint_blocks", [np.eye(2), 2 * np.eye(2)])
+            store.save_json("state/stage", {"complete": True})
+            np.testing.assert_allclose(
+                store.load_array("state/density"), np.eye(2)
+            )
+            self.assertTrue(store.load_json("state/stage")["complete"])
+            self.assertEqual(
+                store.load_array("state/kpoint_blocks").shape, (2, 2, 2)
+            )
+
+            (root / "state" / "density.npy").write_bytes(b"corrupt")
+            self.assertIsNone(store.load_array("state/density"))
+
+            replaced = CheckpointStore(root, "fingerprint-2")
+            self.assertIsNone(replaced.load_json("state/stage"))
+            self.assertEqual(
+                replaced.describe()["fingerprint_sha256"], "fingerprint-2"
+            )
+
+    def test_fd_resume_computes_only_missing_displacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = CheckpointStore(
+                Path(directory) / "checkpoints", "fd-fingerprint"
+            )
+            system = benchmark.ResolvedSystem(
+                symbols=("H",),
+                coordinates_bohr=np.zeros((1, 3)),
+                lattice_bohr=np.eye(3) * 8.0,
+            )
+            config = {
+                "fd_atoms": [0],
+                "fd_axes": ["x"],
+                "fd_step_bohr": 1.0e-3,
+            }
+            plus = benchmark.EnergyRun(1.2, 0.1, 0.2)
+            minus = benchmark.EnergyRun(1.0, 0.1, 0.2)
+            benchmark._save_energy_run_checkpoint(
+                checkpoint, "fd/atom_0000_x/plus", plus
+            )
+
+            with mock.patch.object(
+                benchmark, "evaluate_energy", return_value=minus
+            ) as evaluate:
+                gradient, mask, components, _ = (
+                    benchmark.finite_difference_gradient(
+                        config,
+                        system,
+                        "cpu",
+                        "gdf",
+                        checkpoint=checkpoint,
+                    )
+                )
+            self.assertEqual(evaluate.call_count, 1)
+            self.assertTrue(mask[0, 0])
+            self.assertAlmostEqual(gradient[0, 0], 100.0)
+            self.assertTrue(components[0]["plus_checkpoint_reused"])
+            self.assertFalse(components[0]["minus_checkpoint_reused"])
+
+            with mock.patch.object(benchmark, "evaluate_energy") as evaluate:
+                resumed, _, components, _ = (
+                    benchmark.finite_difference_gradient(
+                        config,
+                        system,
+                        "cpu",
+                        "gdf",
+                        checkpoint=checkpoint,
+                    )
+                )
+            evaluate.assert_not_called()
+            self.assertAlmostEqual(resumed[0, 0], 100.0)
+            self.assertTrue(components[0]["checkpoint_component_reused"])
+
+    def test_archive_preserves_checkpoint_and_overwrite_removes_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            checkpoint = case_dir / "checkpoints" / "marker.txt"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_text("keep", encoding="utf-8")
+            (case_dir / "report.json").write_text("{}", encoding="utf-8")
+            queue._archive_case_artifacts(case_dir)
+            self.assertTrue(checkpoint.is_file())
+
+            run = {"evidence": _case_evidence("overwrite-fingerprint")}
+            outcome = {
+                "report": {},
+                "status": "failed",
+                "run_identity": {},
+            }
+            with mock.patch.object(queue, "_run_case", return_value=outcome):
+                queue._run_or_reuse_case(
+                    run,
+                    case_dir,
+                    "case",
+                    overwrite=True,
+                )
+            self.assertFalse((case_dir / "checkpoints").exists())
 
     def test_memory_summary_keeps_stage_samples_and_high_water(self):
         report = benchmark.summarize_memory(

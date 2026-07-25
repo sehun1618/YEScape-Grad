@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel", "pyscf>=2.13"]
+requires = ["setuptools>=77", "wheel", "pyscf>=2.13,<2.15"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,7 +13,7 @@ license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES/*"]
 authors = [{name = "Sehun"}]
 dependencies = [
   "numpy>=1.24",
-  "pyscf>=2.13",
+  "pyscf>=2.13,<2.15",
 ]
 
 [project.optional-dependencies]

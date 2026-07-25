@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import cupy as cp
 import numpy as np
@@ -48,8 +49,11 @@ def build_one_electron_derivatives(cell, kpts):
     if not cell._pseudo:
         raise NotImplementedError("GPU Stage 3 supports GTH pseudopotentials")
     kpoint_array = np.asarray(kpts, dtype=float).reshape(-1, 3)
+    gradient_adapter = SimpleNamespace(
+        base=SimpleNamespace(with_x2c=None)
+    )
     local_hcore = gpu_krhf_grad.hcore_generator(
-        None, cell, kpoint_array
+        gradient_adapter, cell, kpoint_array
     )
     nonlocal_result = nonlocal_gth_derivative(cell, kpoint_array)
     overlap_rows = -int1e.int1e_ipovlp(cell, kpoint_array)

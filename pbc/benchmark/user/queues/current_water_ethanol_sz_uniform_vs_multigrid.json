@@ -40,6 +40,7 @@
     {
       "name": "gdf_uniform_mesh240",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "gdf",
       "target_integrator": "uniform",
       "gdf_bilinear_mode": "optimized_fused"
@@ -47,6 +48,7 @@
     {
       "name": "gdf_multigrid_xc_mesh240",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
       "target_multigrid_mesh": [240, 240, 240],
@@ -55,12 +57,14 @@
     {
       "name": "rsdf_uniform_mesh240",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "rsdf",
       "target_integrator": "uniform"
     },
     {
       "name": "rsdf_multigrid_xc_mesh240",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
       "target_multigrid_mesh": [240, 240, 240]

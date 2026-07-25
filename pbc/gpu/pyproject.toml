@@ -14,8 +14,8 @@ authors = [{name = "Sehun"}]
 dependencies = [
   "numpy>=1.24",
   "cupy",
-  "pyscf>=2.13",
-  "gpu4pyscf>=1.7.4",
+  "pyscf>=2.13,<2.15",
+  "gpu4pyscf>=1.7.4,<1.9",
   "pyscf-pbc-dcdft==0.1.0a0",
 ]
 

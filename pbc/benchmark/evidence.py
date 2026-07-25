@@ -25,6 +25,7 @@ _SOURCE_PATHS = (
     "pbc/gpu/src",
     "pbc/gpu/pyproject.toml",
     "pbc/benchmark/dcdft_benchmark.py",
+    "pbc/benchmark/benchmark_checkpoint.py",
     "pbc/benchmark/run_benchmark_queue.py",
     "pbc/benchmark/evidence.py",
 )

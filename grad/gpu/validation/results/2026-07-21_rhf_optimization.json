@@ -1,0 +1,56 @@
+{
+  "schema": "molecular_rhf_optimization_evidence_v1",
+  "date": "2026-07-21",
+  "hardware": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "common_settings": {
+    "functional": "PBE",
+    "atom_grid": [50, 194],
+    "scf_tolerance": 1e-10,
+    "cphf_tolerance": 1e-10,
+    "basis": "def2-svp"
+  },
+  "routes": {
+    "optimized": {
+      "response_backend": "mo_direct",
+      "share_df": true,
+      "factorized_z_f1": true
+    },
+    "reference": {
+      "response_backend": "ao",
+      "share_df": false,
+      "factorized_z_f1": false
+    }
+  },
+  "water8": {
+    "repeats": 2,
+    "optimized_gradient_median_seconds": 1.2780473721213639,
+    "reference_gradient_median_seconds": 1.3282307758927345,
+    "optimized_peak_process_vram_mib": 2116.0,
+    "reference_peak_process_vram_mib": 2132.0,
+    "max_abs_gradient_difference_eh_per_bohr": 2.8491949424780394e-10
+  },
+  "water32": {
+    "repeats": 1,
+    "optimized_gradient_seconds": 40.33095953054726,
+    "reference_gradient_seconds": 44.12943978048861,
+    "optimized_peak_process_vram_mib": 57106.0,
+    "reference_peak_process_vram_mib": 57206.0,
+    "max_abs_gradient_difference_eh_per_bohr": 1.249378205059326e-10,
+    "optimized_stage_seconds": {
+      "ks_fock": 0.5808889865875244,
+      "z_vector": 18.42319679260254,
+      "s1_streaming": 0.16052579879760742,
+      "skeleton": 4.0508527755737305,
+      "adjoint_response": 3.2196755409240723,
+      "direct_z_f1": 13.7973952293396
+    }
+  },
+  "water32_memory_cap_32_gib": {
+    "optimized_gradient_seconds": 40.283679427579045,
+    "optimized_peak_process_vram_mib": 28904.0,
+    "reference_gradient_seconds": 43.990411318838596,
+    "reference_peak_process_vram_mib": 29004.0,
+    "max_abs_gradient_difference_eh_per_bohr": 1.2546528746493202e-10,
+    "decision": "retain as exact opt-in because larger jobs may require a higher mandatory budget"
+  }
+}

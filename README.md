@@ -37,6 +37,9 @@ python -m pip install -e 'pbc/cpu[test]'
 ```
 
 GPU tests require a compatible CUDA, CuPy, and GPU4PySCF environment.
+The current audited stack is PySCF 2.14.x with GPU4PySCF 1.8.x; package
+metadata retains the previously supported PySCF 2.13.x and GPU4PySCF 1.7.x
+lines while bounding unaudited future private-API changes.
 
 ## License
 

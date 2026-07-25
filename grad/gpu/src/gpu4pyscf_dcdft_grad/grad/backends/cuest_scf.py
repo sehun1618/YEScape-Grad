@@ -25,17 +25,16 @@ import cupy as cp
 import numpy as np
 from pyscf import df, gto
 
-from gpu4pyscf.df.df_jk import _make_factorized_dm
-from gpu4pyscf.df.grad import tdrhf as df_tdrhf_grad
-from gpu4pyscf.grad import rhf as gpu_rhf_grad
 from gpu4pyscf.lib.cuest_wrapper import apply_cuest_wrapper
 from gpu4pyscf.scf import hf as gpu_hf
 
 from ..rhf import (
     DCGradientGPU as _AdjointDCGradientGPU,
-    _contract,
     _adjoint_z_ax,
+    _adjoint_z_ax_mo_direct,
     _build_parser as _build_adjoint_parser,
+    _direct_contracted_z_f1,
+    _direct_contracted_z_f1_factorized,
     _read_xyz,
 )
 
@@ -57,14 +56,8 @@ def _explicit_auxbasis(mol, auxbasis):
 
 
 def build_cuest_rhf_handoff(
-    mol,
-    *,
-    auxbasis=None,
-    conv_tol=1.0e-10,
-    max_cycle=100,
-    workspace_gb=2.0,
-    math_mode="default",
-    exchange_slice_count=6,
+    mol, *, auxbasis=None, conv_tol=1.0e-10, max_cycle=100,
+    workspace_gb=2.0, math_mode="default", exchange_slice_count=6,
     exchange_modulus_count=9,
 ):
     """Run full-cuEST DF-RHF, release its plans, and return GPU4PySCF orbitals.
@@ -142,43 +135,6 @@ def build_cuest_rhf_handoff(
     return handoff, diagnostics
 
 
-def _direct_contracted_z_f1_factorized(mol, hf_gpu, C, occ, Co, Cv, Z):
-    """Return ``4*Z:F1_vo`` with explicit low-rank density factors."""
-
-    nocc = Co.shape[1]
-    nmo = C.shape[1]
-    npert = 3 * mol.natm
-
-    hcore1 = gpu_rhf_grad.get_grad_hcore(
-        hf_gpu.nuc_grad_method(), mo_coeff=C, mo_occ=occ
-    ).reshape(npert, nmo, nocc)
-    g_hcore = 4.0 * _contract("ai,Aai->A", Z, hcore1[:, nocc:, :])
-    del hcore1
-
-    # Dz+Dz.T = (Cv@Z)@Co.T + Co@(Cv@Z).T.  Passing these factors avoids
-    # GPU4PySCF decomposing the dense transition density again.
-    z_left = Cv @ Z
-    dz_sym = _make_factorized_dm(z_left, Co, symmetrize=1)
-    dm0 = _make_factorized_dm(Co * 2.0, Co, symmetrize=0)
-
-    auxmol = hf_gpu.with_df.auxmol
-    if auxmol is None:
-        auxmol = df.addons.make_auxmol(
-            mol, auxbasis=hf_gpu.with_df.auxbasis
-        )
-    int3c2e_opt = df_tdrhf_grad.Int3c2eOpt(mol, auxmol).build()
-    g_jk = df_tdrhf_grad._jk_energies_per_atom(
-        int3c2e_opt,
-        [[dz_sym, dm0]],
-        j_factor=[4.0],
-        k_factor=[4.0],
-        sum_results=True,
-    )
-    out = g_hcore.reshape(mol.natm, 3) + cp.asarray(g_jk)
-    del z_left, dz_sym, dm0, int3c2e_opt, g_jk
-    return out
-
-
 class DCGradientGPUCuESTSCF(_AdjointDCGradientGPU):
     """Adjoint DC gradient with last-use release of the CPHF DF storage."""
 
@@ -188,40 +144,13 @@ class DCGradientGPUCuESTSCF(_AdjointDCGradientGPU):
         self.memory_diagnostics = {}
 
     def _nonvariational_gpu(
-        self,
-        mol,
-        hf_gpu,
-        hf_resp,
-        C,
-        e,
-        occ,
-        so,
-        sv,
-        Co,
-        Cv,
-        Co2,
-        Z,
-        S1_mo_o,
-        atom_slices,
-        log,
+        self, mol, hf_gpu, hf_resp, C, e, occ, so, sv, Co, Cv, Co2, Z,
+        S1_oo, z_se, S1_mo_o, atom_slices, log, **kwargs,
     ):
         if not hasattr(hf_gpu, "with_df") or hf_gpu.with_df is None:
             return super()._nonvariational_gpu(
-                mol,
-                hf_gpu,
-                hf_resp,
-                C,
-                e,
-                occ,
-                so,
-                sv,
-                Co,
-                Cv,
-                Co2,
-                Z,
-                S1_mo_o,
-                atom_slices,
-                log,
+                mol, hf_gpu, hf_resp, C, e, occ, so, sv, Co, Cv, Co2, Z,
+                S1_oo, z_se, S1_mo_o, atom_slices, log, **kwargs,
             )
 
         natm = mol.natm
@@ -229,7 +158,13 @@ class DCGradientGPUCuESTSCF(_AdjointDCGradientGPU):
         # The response CDERI is needed here for the last time.
         log.debug("  adjoint Z:Ax(S1)_vo before DF release...")
         t_ax = time.time()
-        z_ax = _adjoint_z_ax(hf_resp, Z, Co, Cv, S1_mo_o, so)
+        if self.response_backend == "mo_direct":
+            z_ax = _adjoint_z_ax_mo_direct(
+                hf_gpu.with_df, Z, Co, Cv, S1_oo,
+                direct_scf_tol=hf_gpu.direct_scf_tol,
+            )
+        else:
+            z_ax = _adjoint_z_ax(hf_resp, Z, Co, Cv, S1_oo)
         log.debug("  adjoint Z:Ax(S1)_vo: %.2f s", time.time() - t_ax)
 
         released_gib = 0.0
@@ -249,14 +184,16 @@ class DCGradientGPUCuESTSCF(_AdjointDCGradientGPU):
 
         log.debug("  factorized direct 4*Z:F1_vo...")
         t_f1 = time.time()
-        g_zf1 = _direct_contracted_z_f1_factorized(
-            mol, hf_gpu, C, occ, Co, Cv, Z
+        direct_z_f1 = (
+            _direct_contracted_z_f1_factorized
+            if self.factorized_z_f1 else _direct_contracted_z_f1
+        )
+        g_zf1 = direct_z_f1(
+            mol, hf_gpu, C, occ, Co, Cv, Z,
+            memory_gb=self.df_deriv_memory_gb,
         )
         log.debug("  factorized direct 4*Z:F1_vo: %.2f s", time.time() - t_f1)
 
-        z_se = _contract(
-            "ai,Aai->A", Z * e[so][None, :], S1_mo_o[:, sv, :]
-        )
         g_nv = g_zf1.reshape(-1) - 4.0 * z_se - 2.0 * z_ax
         self.memory_diagnostics = {
             "released_cphf_df_gib": released_gib,
@@ -347,6 +284,10 @@ def main(argv=None) -> int:
         atom_grid=tuple(args.atom_grid),
         grid_response=not args.no_grid_response,
         release_cphf_df=not args.keep_cphf_df,
+        response_backend=args.response_backend,
+        share_df=not args.separate_df,
+        factorized_z_f1=not args.dense_z_f1,
+        df_deriv_memory_gb=args.df_deriv_memory_gb,
     )
     gradient = method.kernel(verbose=args.verbose)
 

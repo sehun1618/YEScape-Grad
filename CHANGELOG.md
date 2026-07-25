@@ -8,6 +8,23 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### Packaging and scope
 
+- Validate the repository with PySCF 2.14.0 and GPU4PySCF 1.8.0.  Extend the
+  private periodic-stress API guard and package metadata through PySCF 2.14,
+  retain runtime signature checks, and document which upstream memory and
+  periodic-DF improvements are inherited automatically.  Keep the local FFTDF
+  full J/K derivative because GPU4PySCF 1.8 still lacks the K derivative and
+  exposes only an atom-contracted J derivative.
+- Preserve the explicit DC operator ownership contract under GPU4PySCF 1.8:
+  source and target hcore use the selected FFTDF/GDF/RSDF provider instead of
+  the new implicit small-mesh multigrid PP route, and native GDF/RSDF central
+  builds retain CPU-equivalent Cholesky factors inside a restored process-local
+  adapter.  Update the one-electron gradient adapter for the 1.8
+  `hcore_generator` contract and migrate stress PP reciprocal vectors from the
+  removed private helper to `gpu4pyscf.pbc.gto.cell.get_Gv_weights`.
+- Adapt molecular RHF/UHF MO-direct response to GPU4PySCF 1.8's relocated DF
+  Hessian kernel and padded unrestricted contract while retaining the 1.7
+  layout.  Update the dense UHF regression route for the stacked-spin
+  `make_h1` input required by 1.8.
 - Separate stable user-run benchmarks (`pbc/benchmark/user`) from Codex
   implementation and profiling benchmarks (`pbc/benchmark/development`).
   Managed queues declare their scope, and the runner rejects cross-scope
@@ -114,6 +131,20 @@ This development branch is compared against GitHub `main` at `0f286a1`.
 
 ### Benchmark evidence and diagnostics
 
+- Add isolated CPU/GPU PBC DC-DFT analytic-stress packages and benchmark
+  queues. The exact optimized GPU route uses an analytic nonlocal GTH
+  projector contraction and a reverse-Cholesky GPU FT source adjoint. H2 and
+  Water8 GDF/RSDF Gamma/`2x1x1` FD gates pass, including `DZVP-GTH`; Water8
+  Gamma stress falls to 12.21 s for native GDF and 8.06 s for RSDF while peak
+  RSS falls to 3.57 and 3.13 GiB. Water20/64 remain user-run scaling gates.
+- Link the stress C extension explicitly against PySCF `libcgto`/`libcint`
+  with wheel-relative RPATH entries. Force relinking when setup-level library
+  ownership changes, so clean wheel imports do not depend on a benchmark
+  runner having preloaded PySCF shared libraries.
+- Preserve the selected stress PP/DF/source-HF/Z owners and production flag in
+  MLIP JSON and extxyz output. Package both stress distributions with Apache
+  and PySCF notices, and declare the GPU stress wheel's direct base-package
+  dependency.
 - Add configurable VRAM high-water sampling, live KST progress output, failure
   reports, attempt records, queue locking, and summary CSV files.
 - Fingerprint effective inputs, resolved structures, and source state so a

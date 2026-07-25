@@ -1,11 +1,13 @@
 """Full fixed-density FFTDF J/K derivative matrices on the GPU.
 
-GPU4PySCF 1.7.4 provides FFT J/K values and a contracted J derivative, but
-``FFTDF.get_k_e1`` is not implemented.  A nonvariational DC-DFT response RHS
-needs the complete AO matrix ``d(J-K/2)/dR_Ax``.  This module therefore applies
-the product rule to every AO occurrence using CuPy AO collocation, FFTs and
-contractions.  It intentionally mirrors the CPU package's transparent
-correctness kernel so CPU/GPU tensor parity can be tested directly.
+GPU4PySCF 1.8.0 provides FFT J/K values and a sampled-k contracted J energy
+derivative, but ``get_k_e1_kpts`` is still not implemented.  The upstream J
+result is an atom-contracted energy derivative rather than the complete AO
+matrix needed by the nonvariational DC-DFT response RHS.  This module therefore
+forms ``d(J-K/2)/dR_Ax`` by applying the product rule to every AO occurrence
+with CuPy AO collocation, FFTs and contractions.  It intentionally mirrors the
+CPU package's transparent correctness kernel so CPU/GPU tensor parity can be
+tested directly.
 """
 
 from __future__ import annotations

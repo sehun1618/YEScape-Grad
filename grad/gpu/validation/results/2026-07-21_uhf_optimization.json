@@ -1,0 +1,34 @@
+{
+  "schema": "molecular_uhf_optimization_evidence_v1",
+  "date": "2026-07-21",
+  "hardware": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "common_settings": {
+    "system": "OH radical",
+    "charge": 0,
+    "spin": 1,
+    "basis": "sto-3g",
+    "functional": "PBE",
+    "atom_grid": [50, 194],
+    "scf_tolerance": 1e-10,
+    "cphf_tolerance": 1e-10,
+    "repeats": 2
+  },
+  "routes": {
+    "optimized": {
+      "response_backend": "mo_direct",
+      "share_df": true,
+      "direct_z_f1": true
+    },
+    "reference": {
+      "response_backend": "ao",
+      "share_df": false,
+      "direct_z_f1": false
+    }
+  },
+  "optimized_gradient_median_seconds": 1.1590106887742877,
+  "reference_gradient_median_seconds": 1.437429726589471,
+  "optimized_peak_process_vram_mib": 810.0,
+  "reference_peak_process_vram_mib": 1806.0,
+  "max_abs_gradient_difference_eh_per_bohr": 2.9933000522675e-13,
+  "note": "Small-system functional and allocation evidence, not a scaling benchmark."
+}

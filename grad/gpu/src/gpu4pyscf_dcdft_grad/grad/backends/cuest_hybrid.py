@@ -39,7 +39,6 @@ from pyscf import gto
 from pyscf.dft.gen_grid import stratmann
 from pyscf.lib import logger
 
-from gpu4pyscf.df.hessian import jk as df_hessian_jk
 from gpu4pyscf.dft import rks as gpu_rks
 from gpu4pyscf.lib.cuest_wrapper import apply_cuest_wrapper
 from gpu4pyscf.lib.cupy_helper import tag_array
@@ -49,13 +48,16 @@ from gpu4pyscf.scf._response_functions import (
     _gen_rhf_response as _gen_rhf_response_gpu,
 )
 
-from ..rhf import _contract, _read_xyz
+from ..rhf import (
+    _adjoint_z_ax_mo_direct, _build_s1_oo_and_z_se, _contract,
+    _df_hf_response_mo, _direct_contracted_z_f1_factorized,
+    _make_mo_direct_ax, _read_xyz,
+)
 from .cuest_scf import (
     DCGradientGPUCuESTSCF,
     _MODULUS_KEY,
     _SLICE_KEY,
     _build_parser as _build_cuest_scf_parser,
-    _direct_contracted_z_f1_factorized,
     _explicit_auxbasis,
     build_cuest_rhf_handoff,
 )
@@ -83,129 +85,15 @@ def _used_device_gib() -> float:
     return (total - free) / 2**30
 
 
-def _df_hf_response_mo(
-    dfobj,
-    dm_tag,
-    left_coeff,
-    occ_coeff,
-    *,
-    direct_scf_tol: float = 1.0e-14,
-):
-    """Return ``left.T @ (J-.5K)[dm] @ occ`` without AO J/K output.
-
-    ``dm_tag.mo1`` and ``dm_tag.occ_coeff`` must describe the same symmetric
-    RHF response density as ``dm_tag``.  GPU4PySCF's Hessian JK kernel uses
-    those factors for exchange and performs the final AO->MO projection in
-    the DF loop.
-    """
-
-    vj_mo, vk_mo = df_hessian_jk.get_jk(
-        dfobj,
-        dm_tag,
-        left_coeff,
-        occ_coeff,
-        hermi=1,
-        with_j=True,
-        with_k=True,
-        direct_scf_tol=direct_scf_tol,
-    )
-    nset = int(dm_tag.reshape(-1, dm_tag.shape[-1], dm_tag.shape[-1]).shape[0])
-    out = (vj_mo - 0.5 * vk_mo).reshape(
-        nset, left_coeff.shape[1], occ_coeff.shape[1]
-    )
-    del vj_mo, vk_mo
-    return out
-
-
-def _make_mo_direct_ax(
-    dfobj,
-    Cv,
-    Co,
-    *,
-    direct_scf_tol: float = 1.0e-14,
-):
-    """Build the CPHF ``A*x`` callback returning the virtual/occupied block."""
-
-    nvir = Cv.shape[1]
-    nocc = Co.shape[1]
-    co2 = Co * 2.0
-
-    def ax_vo(x_vo):
-        original_shape = x_vo.shape
-        x = cp.asarray(x_vo).reshape(-1, nvir, nocc)
-
-        # dm = 2 * [(Cv X) Co.T + h.c.].  The factor tags are consumed by
-        # df.hessian.jk for its occupied-factor exchange implementation.
-        mo1 = _contract("pa,kai->kpi", Cv, x)
-        dm_x = _contract("kpi,qi->kpq", mo1, co2)
-        dm_x = dm_x + dm_x.transpose(0, 2, 1)
-        dm_x = tag_array(dm_x, mo1=mo1, occ_coeff=Co)
-
-        out = _df_hf_response_mo(
-            dfobj,
-            dm_x,
-            Cv,
-            Co,
-            direct_scf_tol=direct_scf_tol,
-        )
-        del mo1, dm_x
-        return out.reshape(original_shape)
-
-    return ax_vo
-
-
-def _adjoint_z_ax_mo_direct(
-    dfobj,
-    Z,
-    Co,
-    Cv,
-    S1_mo_o,
-    so,
-    *,
-    direct_scf_tol: float = 1.0e-14,
-):
-    """Return ``Z:Ax(S1)_vo`` using one MO-direct HF response.
-
-    Here the physical density is ``Dz+Dz.T`` rather than the CPHF convention
-    ``2*(Dz+Dz.T)``.  Consequently the exchange factor tag contains
-    ``0.5*(Cv@Z)`` while the explicit density passed to J remains unscaled.
-    """
-
-    z_left = Cv @ Z
-    dz_sym = z_left @ Co.T
-    dz_sym = dz_sym + dz_sym.T
-    # df.hessian.jk consistently expects a leading density-set dimension,
-    # including for a single response density.
-    dz_sym = tag_array(
-        dz_sym[None], mo1=(0.5 * z_left)[None], occ_coeff=Co
-    )
-    vz_oo = _df_hf_response_mo(
-        dfobj,
-        dz_sym,
-        Co,
-        Co,
-        direct_scf_tol=direct_scf_tol,
-    )[0]
-    z_ax = 2.0 * _contract("Aij,ij->A", S1_mo_o[:, so, :], vz_oo)
-    del z_left, dz_sym, vz_oo
-    return z_ax
-
-
 class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
     """DC gradient with shared DF, MO-direct response, and cuEST OE/XC."""
 
     def __init__(
-        self,
-        *args,
-        gradient_backend: str = "cuest_hybrid_late",
-        response_backend: str = "mo_direct",
-        release_shared_df: bool = True,
-        release_cuest_plans: bool = True,
-        cuest_math_mode: str = "default",
-        cuest_workspace_gb: float = 2.0,
-        cuest_exchange_slice_count: int = 6,
-        cuest_exchange_modulus_count: int = 9,
-        **kwargs,
+        self, *args, gradient_backend="cuest_hybrid_late",
+        response_backend="mo_direct", release_shared_df=True,
+        release_cuest_plans=True, cuest_math_mode="default",
+        cuest_workspace_gb=2.0, cuest_exchange_slice_count=6,
+        cuest_exchange_modulus_count=9, **kwargs,
     ):
         # The parent flag is unused because this class controls the exact
         # last-use point in its reordered kernel.
@@ -421,14 +309,9 @@ class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
         S1_ao = cp.asarray(ks_grad_gpu.get_ovlp(mol))
 
         natm = mol.natm
-        npert = 3 * natm
-        S1_mo_o = cp.empty((npert, nmo, nocc), dtype=C.dtype)
-        for ia, (p0, p1) in enumerate(atom_slices):
-            for ic in range(3):
-                s1_block = cp.zeros((nao, nao), dtype=C.dtype)
-                s1_block[p0:p1] = S1_ao[ic, p0:p1]
-                s1_block = s1_block + s1_block.T
-                S1_mo_o[3 * ia + ic] = C.T @ s1_block @ Co
+        S1_oo, z_se = _build_s1_oo_and_z_se(
+            S1_ao, Co, Cv, Z, e[so], atom_slices
+        )
         del S1_ao, F_KS
         stage_times["s1_ao_to_mo"] = time.perf_counter() - t0
         log.info("  %.2f s", stage_times["s1_ao_to_mo"])
@@ -444,14 +327,13 @@ class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
                 Z,
                 Co,
                 Cv,
-                S1_mo_o,
-                so,
+                S1_oo,
                 direct_scf_tol=hf_gpu.direct_scf_tol,
             )
         else:
             from ..rhf import _adjoint_z_ax
 
-            z_ax = _adjoint_z_ax(hf_resp, Z, Co, Cv, S1_mo_o, so)
+            z_ax = _adjoint_z_ax(hf_resp, Z, Co, Cv, S1_oo)
         stage_times["adjoint_response"] = time.perf_counter() - t0
         log.info("  %.2f s", stage_times["adjoint_response"])
 
@@ -477,7 +359,8 @@ class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
         log.info("[5/7] Direct factorized 4*Z:F1")
         t0 = time.perf_counter()
         g_zf1 = _direct_contracted_z_f1_factorized(
-            mol, hf_gpu, C, occ, Co, Cv, Z
+            mol, hf_gpu, C, occ, Co, Cv, Z,
+            memory_gb=self.df_deriv_memory_gb,
         )
         stage_times["direct_z_f1"] = time.perf_counter() - t0
         log.info("  %.2f s", stage_times["direct_z_f1"])
@@ -498,14 +381,7 @@ class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
         t0 = time.perf_counter()
         e_occ = e[so]
         g_skel = self._skeleton_gpu(
-            mol,
-            ks_gpu,
-            ks_grad_gpu,
-            F_KS_oo,
-            S1_mo_o,
-            so,
-            log,
-            e_occ,
+            mol, ks_grad_gpu, F_KS_oo, S1_oo, log, e_occ,
         )
         stage_times["skeleton"] = time.perf_counter() - t0
         log.info("  %.2f s", stage_times["skeleton"])
@@ -551,9 +427,6 @@ class DCGradientGPUCuESTHybrid(DCGradientGPUCuESTSCF):
         # ---------------------------------------------------------------
         log.info("[7/7] Scalar non-variational assembly")
         t0 = time.perf_counter()
-        z_se = _contract(
-            "ai,Aai->A", Z * e_occ[None, :], S1_mo_o[:, sv, :]
-        )
         g_nv = g_zf1.reshape(-1) - 4.0 * z_se - 2.0 * z_ax
         g_tot = g_skel + g_nv.reshape(natm, 3)
         g_np = cp.asnumpy(g_tot)
@@ -606,12 +479,6 @@ def _build_parser():
             "Deferred low-peak cuEST gradient (default), eager cuEST "
             "Fock+gradient, or same-grid GPU4PySCF reference"
         ),
-    )
-    parser.add_argument(
-        "--response-backend",
-        choices=("mo-direct", "ao"),
-        default="mo-direct",
-        help="CPHF/adjoint DF response output representation",
     )
     parser.add_argument(
         "--keep-cuest-gradient-plans",
@@ -681,6 +548,7 @@ def main(argv=None) -> int:
         cuest_workspace_gb=args.cuest_workspace_gb,
         cuest_exchange_slice_count=args.cuest_exchange_slice_count,
         cuest_exchange_modulus_count=args.cuest_exchange_modulus_count,
+        df_deriv_memory_gb=args.df_deriv_memory_gb,
     )
     gradient = method.kernel(verbose=args.verbose)
 

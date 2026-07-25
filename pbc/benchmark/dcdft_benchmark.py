@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 import evidence
+from benchmark_checkpoint import CheckpointStore
 
 
 WORKSPACE = Path(__file__).resolve().parents[1]
@@ -129,10 +130,15 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Write a stable, human-readable JSON report."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(_json_value(payload), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(_json_value(payload), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class ProgressReporter:
@@ -892,6 +898,48 @@ def evaluate_energy(
     )
 
 
+def _save_energy_run_checkpoint(
+    checkpoint: CheckpointStore | None,
+    key: str,
+    run: EnergyRun,
+) -> None:
+    if checkpoint is None or not checkpoint.enabled:
+        return
+    checkpoint.save_array(f"{key}/energy_ha", np.asarray(run.energy_ha))
+    checkpoint.save_json(
+        f"{key}/run",
+        {
+            "energy_ha": run.energy_ha,
+            "setup_wall_time_s": run.setup_wall_time_s,
+            "wall_time_s": run.wall_time_s,
+        },
+    )
+
+
+def _load_energy_run_checkpoint(
+    checkpoint: CheckpointStore | None,
+    key: str,
+) -> EnergyRun | None:
+    if checkpoint is None or not checkpoint.enabled:
+        return None
+    metadata = checkpoint.load_json(f"{key}/run")
+    energy = checkpoint.load_array(f"{key}/energy_ha")
+    if metadata is None or energy is None or energy.size != 1:
+        return None
+    try:
+        value = float(np.asarray(energy).reshape(()))
+        metadata_energy = float(metadata.get("energy_ha", np.nan))
+        if not np.isclose(value, metadata_energy):
+            return None
+        return EnergyRun(
+            energy_ha=value,
+            setup_wall_time_s=float(metadata["setup_wall_time_s"]),
+            wall_time_s=float(metadata["wall_time_s"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _selects_all(spec: Any) -> bool:
     """Accept both ``"all"`` and the common JSON spelling ``["all"]``."""
 
@@ -944,6 +992,7 @@ def finite_difference_gradient(
     device: str,
     backend: str,
     progress: ProgressReporter | None = None,
+    checkpoint: CheckpointStore | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]], float]:
     """Evaluate selected components of the full-energy central FD gradient."""
 
@@ -957,9 +1006,92 @@ def finite_difference_gradient(
     components: list[dict[str, Any]] = []
     total_start = perf_counter()
     total_components = len(atoms) * len(axes)
+    expected_shape = (system.natoms, 3)
+    completed = checkpoint.load_json("fd/stage") if checkpoint else None
+    completed_gradient = (
+        checkpoint.load_array("fd/gradient_ha_per_bohr")
+        if checkpoint
+        else None
+    )
+    completed_mask = checkpoint.load_array("fd/mask") if checkpoint else None
+    try:
+        completed_component_count = int(
+            (completed or {}).get("component_count", -1)
+        )
+    except (TypeError, ValueError):
+        completed_component_count = -1
+    if (
+        completed is not None
+        and completed_gradient is not None
+        and completed_mask is not None
+        and completed_gradient.shape == expected_shape
+        and completed_mask.shape == expected_shape
+        and completed_component_count == total_components
+    ):
+        cached_components = list(completed.get("components") or [])
+        if len(cached_components) == total_components:
+            for component in cached_components:
+                component["checkpoint_component_reused"] = True
+                component["plus_checkpoint_reused"] = True
+                component["minus_checkpoint_reused"] = True
+                component["current_attempt_component_wall_s"] = 0.0
+            if progress is not None:
+                progress.update(
+                    "finite_difference",
+                    force=True,
+                    completed=total_components,
+                    total=total_components,
+                    checkpoint_reused_components=total_components,
+                    checkpoint_reused_displacements=2 * total_components,
+                    computed_displacements=0,
+                )
+            return (
+                np.asarray(completed_gradient, dtype=float),
+                np.asarray(completed_mask, dtype=bool),
+                cached_components,
+                perf_counter() - total_start,
+            )
+
+    reused_components = 0
+    reused_displacements = 0
+    computed_displacements = 0
 
     for atom_id in atoms:
         for axis in axes:
+            component_key = f"fd/atom_{atom_id:04d}_{AXIS_NAMES[axis]}"
+            cached_component = (
+                checkpoint.load_json(f"{component_key}/component")
+                if checkpoint
+                else None
+            )
+            cached_derivative = (
+                checkpoint.load_array(f"{component_key}/gradient_ha_per_bohr")
+                if checkpoint
+                else None
+            )
+            try:
+                cached_atom = int((cached_component or {}).get("atom", -1))
+            except (TypeError, ValueError):
+                cached_atom = -1
+            if (
+                cached_component is not None
+                and cached_derivative is not None
+                and cached_derivative.size == 1
+                and cached_atom == atom_id
+                and cached_component.get("axis") == AXIS_NAMES[axis]
+            ):
+                derivative = float(np.asarray(cached_derivative).reshape(()))
+                gradient[atom_id, axis] = derivative
+                mask[atom_id, axis] = True
+                cached_component["checkpoint_component_reused"] = True
+                cached_component["plus_checkpoint_reused"] = True
+                cached_component["minus_checkpoint_reused"] = True
+                cached_component["current_attempt_component_wall_s"] = 0.0
+                components.append(cached_component)
+                reused_components += 1
+                reused_displacements += 2
+                continue
+
             if progress is not None:
                 progress.update(
                     "finite_difference",
@@ -967,6 +1099,9 @@ def finite_difference_gradient(
                     total=total_components,
                     atom=atom_id,
                     axis=AXIS_NAMES[axis],
+                    checkpoint_reused_components=reused_components,
+                    checkpoint_reused_displacements=reused_displacements,
+                    computed_displacements=computed_displacements,
                 )
             plus = np.array(system.coordinates_bohr, copy=True)
             minus = np.array(system.coordinates_bohr, copy=True)
@@ -974,31 +1109,91 @@ def finite_difference_gradient(
             minus[atom_id, axis] -= step
 
             component_start = perf_counter()
-            plus_run = evaluate_energy(config, system, plus, device, backend)
-            minus_run = evaluate_energy(config, system, minus, device, backend)
+            plus_key = f"{component_key}/plus"
+            minus_key = f"{component_key}/minus"
+            plus_run = _load_energy_run_checkpoint(checkpoint, plus_key)
+            plus_reused = plus_run is not None
+            if plus_run is None:
+                plus_run = evaluate_energy(config, system, plus, device, backend)
+                _save_energy_run_checkpoint(checkpoint, plus_key, plus_run)
+                computed_displacements += 1
+            else:
+                reused_displacements += 1
+            if progress is not None:
+                progress.update(
+                    "finite_difference",
+                    force=True,
+                    completed=len(components),
+                    total=total_components,
+                    atom=atom_id,
+                    axis=AXIS_NAMES[axis],
+                    completed_sign="plus",
+                    checkpoint_reused_components=reused_components,
+                    checkpoint_reused_displacements=reused_displacements,
+                    computed_displacements=computed_displacements,
+                )
+
+            minus_run = _load_energy_run_checkpoint(checkpoint, minus_key)
+            minus_reused = minus_run is not None
+            if minus_run is None:
+                minus_run = evaluate_energy(config, system, minus, device, backend)
+                _save_energy_run_checkpoint(checkpoint, minus_key, minus_run)
+                computed_displacements += 1
+            else:
+                reused_displacements += 1
             derivative = (plus_run.energy_ha - minus_run.energy_ha) / (2.0 * step)
             gradient[atom_id, axis] = derivative
             mask[atom_id, axis] = True
-            components.append(
-                {
-                    "atom": atom_id,
-                    "axis": AXIS_NAMES[axis],
-                    "energy_plus_ha": plus_run.energy_ha,
-                    "energy_minus_ha": minus_run.energy_ha,
-                    "fd_gradient_ha_per_bohr": derivative,
-                    "plus_setup_wall_s": plus_run.setup_wall_time_s,
-                    "plus_energy_wall_s": plus_run.wall_time_s,
-                    "minus_setup_wall_s": minus_run.setup_wall_time_s,
-                    "minus_energy_wall_s": minus_run.wall_time_s,
-                    "component_wall_s": perf_counter() - component_start,
-                }
-            )
+            current_component_wall_s = perf_counter() - component_start
+            component = {
+                "atom": atom_id,
+                "axis": AXIS_NAMES[axis],
+                "energy_plus_ha": plus_run.energy_ha,
+                "energy_minus_ha": minus_run.energy_ha,
+                "fd_gradient_ha_per_bohr": derivative,
+                "plus_setup_wall_s": plus_run.setup_wall_time_s,
+                "plus_energy_wall_s": plus_run.wall_time_s,
+                "minus_setup_wall_s": minus_run.setup_wall_time_s,
+                "minus_energy_wall_s": minus_run.wall_time_s,
+                "component_wall_s": current_component_wall_s,
+                "current_attempt_component_wall_s": current_component_wall_s,
+                "accumulated_displacement_wall_s": (
+                    plus_run.setup_wall_time_s
+                    + plus_run.wall_time_s
+                    + minus_run.setup_wall_time_s
+                    + minus_run.wall_time_s
+                ),
+                "checkpoint_component_reused": False,
+                "plus_checkpoint_reused": plus_reused,
+                "minus_checkpoint_reused": minus_reused,
+            }
+            if checkpoint is not None:
+                checkpoint.save_array(
+                    f"{component_key}/gradient_ha_per_bohr",
+                    np.asarray(derivative),
+                )
+                checkpoint.save_json(f"{component_key}/component", component)
+            components.append(component)
     if progress is not None:
         progress.update(
             "finite_difference",
             force=True,
             completed=total_components,
             total=total_components,
+            checkpoint_reused_components=reused_components,
+            checkpoint_reused_displacements=reused_displacements,
+            computed_displacements=computed_displacements,
+        )
+    if checkpoint is not None:
+        checkpoint.save_array("fd/gradient_ha_per_bohr", gradient)
+        checkpoint.save_array("fd/mask", mask)
+        checkpoint.save_json(
+            "fd/stage",
+            {
+                "component_count": total_components,
+                "step_bohr": step,
+                "components": components,
+            },
         )
     return gradient, mask, components, perf_counter() - total_start
 
@@ -1010,6 +1205,129 @@ def _gradient_metadata(gradient_object: Any) -> Mapping[str, Any] | None:
     if hasattr(result, "metadata"):
         return result.metadata()
     return None
+
+
+def _gradient_controls(gradient_object: Any) -> dict[str, Any]:
+    names = (
+        "z_solver",
+        "z_tolerance",
+        "z_residual_tolerance",
+        "z_max_cycle",
+        "z_dense_max_dimension",
+        "z_nuclear_batch_memory_fraction",
+        "z_nuclear_batch_max_components",
+        "gdf_bilinear_mode",
+        "gdf_derivative_omega_scale",
+        "rsdf_derivative_omega_scale",
+    )
+    return {name: getattr(gradient_object, name, None) for name in names}
+
+
+def _save_source_state_checkpoint(
+    checkpoint: CheckpointStore,
+    method: Any,
+    *,
+    energy_ha: float,
+    energy_wall_s: float,
+) -> None:
+    """Persist enough HF state to warm-start object reconstruction."""
+
+    if not checkpoint.enabled:
+        return
+    source = getattr(method, "source_scf", None)
+    if source is None:
+        return
+    checkpoint.save_array("source/density", source.make_rdm1())
+    checkpoint.save_array("source/mo_coeff", source.mo_coeff)
+    checkpoint.save_array("source/mo_occ", source.mo_occ)
+    checkpoint.save_array("source/mo_energy", source.mo_energy)
+    checkpoint.save_array("source/energy_ha", np.asarray(source.e_tot))
+    checkpoint.save_array("target/energy_ha", np.asarray(energy_ha))
+    checkpoint.save_json(
+        "source/stage",
+        {
+            "energy_ha": energy_ha,
+            "source_energy_ha": float(source.e_tot),
+            "energy_wall_s": energy_wall_s,
+            "energy_components": method.dc_energy_result.as_dict(),
+            "method_metadata": (
+                method.metadata() if hasattr(method, "metadata") else None
+            ),
+            "method_internal_s": getattr(method, "timings_s", None),
+            "source_hf": _source_hf_identity(method),
+            "state_format": "reconstructable_arrays_not_pickled_objects",
+        },
+    )
+
+
+def _load_source_density_checkpoint(
+    checkpoint: CheckpointStore,
+) -> np.ndarray | None:
+    if checkpoint.load_json("source/stage") is None:
+        return None
+    return checkpoint.load_array("source/density")
+
+
+def _save_analytic_checkpoint(
+    checkpoint: CheckpointStore,
+    method: Any,
+    gradient_object: Any,
+    analytic_gradient: np.ndarray,
+    *,
+    energy_ha: float,
+    energy_wall_s: float,
+    analytic_gradient_wall_s: float,
+) -> None:
+    """Commit the analytic result after all dependent arrays are durable."""
+
+    if not checkpoint.enabled:
+        return
+    checkpoint.save_array(
+        "analytic/gradient_ha_per_bohr", analytic_gradient
+    )
+    checkpoint.save_array("analytic/energy_ha", np.asarray(energy_ha))
+    result = getattr(gradient_object, "result", None)
+    z_vector = getattr(result, "z_vector", None)
+    z_blocks = tuple(getattr(z_vector, "blocks", ()) or ())
+    for block_id, block in enumerate(z_blocks):
+        checkpoint.save_array(
+            f"analytic/z_vector/block_{block_id:04d}", block
+        )
+    gradient_metadata = _gradient_metadata(gradient_object)
+    checkpoint.save_json(
+        "analytic/stage",
+        {
+            "energy_ha": energy_ha,
+            "energy_wall_s": energy_wall_s,
+            "analytic_gradient_wall_s": analytic_gradient_wall_s,
+            "energy_components": method.dc_energy_result.as_dict(),
+            "method_metadata": (
+                method.metadata() if hasattr(method, "metadata") else None
+            ),
+            "gradient_metadata": gradient_metadata,
+            "gradient_controls": _gradient_controls(gradient_object),
+            "method_internal_s": getattr(method, "timings_s", None),
+            "gradient_internal_s": (
+                None
+                if gradient_metadata is None
+                else gradient_metadata.get("timings_s")
+            ),
+            "source_hf": _source_hf_identity(method),
+            "z_vector_block_count": len(z_blocks),
+            "state_format": "reconstructable_arrays_not_pickled_objects",
+        },
+    )
+
+
+def _load_analytic_checkpoint(
+    checkpoint: CheckpointStore,
+    expected_shape: tuple[int, int],
+) -> tuple[np.ndarray, dict[str, Any]] | None:
+    stage = checkpoint.load_json("analytic/stage")
+    gradient = checkpoint.load_array("analytic/gradient_ha_per_bohr")
+    if stage is None or gradient is None or gradient.shape != expected_shape:
+        return None
+    return np.asarray(gradient, dtype=float), stage
 
 
 def _configure_gradient(config: Mapping[str, Any], gradient_object: Any) -> None:
@@ -1185,6 +1503,19 @@ def _save_arrays(
     return paths
 
 
+def _checkpoint_fingerprint(config: Mapping[str, Any]) -> str:
+    record = config.get("evidence") or {}
+    fingerprint = record.get("fingerprint_sha256")
+    if fingerprint:
+        return str(fingerprint)
+    effective = {
+        str(key): value
+        for key, value in config.items()
+        if key not in {"evidence", "run_identity"}
+    }
+    return hashlib.sha256(evidence.canonical_json_bytes(effective)).hexdigest()
+
+
 def run_benchmark(
     config: Mapping[str, Any],
     output_dir: Path,
@@ -1195,6 +1526,11 @@ def run_benchmark(
     """Run one energy/gradient benchmark and write its numerical arrays."""
 
     device, backend = _validate_config(config)
+    checkpoint = CheckpointStore(
+        output_dir / "checkpoints",
+        _checkpoint_fingerprint(config),
+        enabled=bool(config.get("checkpoint_resume", True)),
+    )
     warmup_start = perf_counter()
     if progress is not None:
         progress.update("device_warmup", force=True, device=device)
@@ -1212,55 +1548,127 @@ def run_benchmark(
         progress.update("input_and_cell_setup", force=True)
     system = resolve_system(config, input_base_dir)
     cell = build_cell(config, system)
-    method, kpts = build_method(config, cell, device, backend)
-    if hasattr(method, "progress_callback"):
-        method.progress_callback = progress
+    analytic_checkpoint = _load_analytic_checkpoint(
+        checkpoint, (system.natoms, 3)
+    )
+    method = None
+    gradient_object = None
+    if analytic_checkpoint is None:
+        method, kpts = build_method(config, cell, device, backend)
+        if hasattr(method, "progress_callback"):
+            method.progress_callback = progress
+    else:
+        kpts = cell.make_kpts(_normalize_kmesh(config), wrap_around=True)
     setup_wall_s = perf_counter() - setup_start
     memory_samples.append(memory_snapshot(device, "after_input_setup"))
 
-    if progress is not None:
-        progress.update(
-            "energy_workflow",
-            force=True,
-            natoms=system.natoms,
-            mesh=np.asarray(cell.mesh, dtype=int),
+    analytic_checkpoint_reused = analytic_checkpoint is not None
+    source_density_warm_start = False
+    if analytic_checkpoint is not None:
+        analytic_gradient, analytic_stage = analytic_checkpoint
+        energy = float(analytic_stage["energy_ha"])
+        energy_wall_s = float(analytic_stage["energy_wall_s"])
+        analytic_gradient_wall_s = float(
+            analytic_stage["analytic_gradient_wall_s"]
         )
-    synchronize(device)
-    energy_start = perf_counter()
-    energy = float(method.kernel())
-    synchronize(device)
-    energy_wall_s = perf_counter() - energy_start
-    memory_samples.append(memory_snapshot(device, "after_energy"))
-    if progress is not None:
-        progress.update(
-            "energy_complete",
-            force=True,
+        energy_components = analytic_stage.get("energy_components")
+        method_metadata = analytic_stage.get("method_metadata")
+        gradient_metadata = analytic_stage.get("gradient_metadata")
+        source_hf_identity = analytic_stage.get("source_hf")
+        gradient_controls = dict(
+            analytic_stage.get("gradient_controls") or {}
+        )
+        method_internal_s = analytic_stage.get("method_internal_s")
+        gradient_internal_s = analytic_stage.get("gradient_internal_s")
+        if progress is not None:
+            progress.update(
+                "analytic_checkpoint_reused",
+                force=True,
+                energy_ha=energy,
+                checkpoint_directory=str(checkpoint.root),
+            )
+        memory_samples.append(
+            memory_snapshot(device, "after_analytic_checkpoint_reuse")
+        )
+    else:
+        if progress is not None:
+            progress.update(
+                "energy_workflow",
+                force=True,
+                natoms=system.natoms,
+                mesh=np.asarray(cell.mesh, dtype=int),
+            )
+        source_density = _load_source_density_checkpoint(checkpoint)
+        source_density_warm_start = source_density is not None
+        synchronize(device)
+        energy_start = perf_counter()
+        energy = float(method.kernel(dm0=source_density))
+        synchronize(device)
+        energy_wall_s = perf_counter() - energy_start
+        _save_source_state_checkpoint(
+            checkpoint,
+            method,
             energy_ha=energy,
-            wall_time_s=energy_wall_s,
+            energy_wall_s=energy_wall_s,
         )
+        memory_samples.append(memory_snapshot(device, "after_energy"))
+        if progress is not None:
+            progress.update(
+                "energy_complete",
+                force=True,
+                energy_ha=energy,
+                wall_time_s=energy_wall_s,
+                source_density_warm_start=source_density_warm_start,
+                checkpoint_saved=checkpoint.enabled,
+            )
 
-    gradient_object = method.nuc_grad_method()
-    _configure_gradient(config, gradient_object)
-    if hasattr(gradient_object, "progress_callback"):
-        gradient_object.progress_callback = progress
-    if progress is not None:
-        progress.update(
-            "analytic_gradient",
-            force=True,
-            backend=backend,
-            device=device,
+        gradient_object = method.nuc_grad_method()
+        _configure_gradient(config, gradient_object)
+        if hasattr(gradient_object, "progress_callback"):
+            gradient_object.progress_callback = progress
+        if progress is not None:
+            progress.update(
+                "analytic_gradient",
+                force=True,
+                backend=backend,
+                device=device,
+            )
+        synchronize(device)
+        gradient_start = perf_counter()
+        analytic_gradient = np.asarray(gradient_object.kernel(), dtype=float)
+        synchronize(device)
+        analytic_gradient_wall_s = perf_counter() - gradient_start
+        _save_analytic_checkpoint(
+            checkpoint,
+            method,
+            gradient_object,
+            analytic_gradient,
+            energy_ha=energy,
+            energy_wall_s=energy_wall_s,
+            analytic_gradient_wall_s=analytic_gradient_wall_s,
         )
-    synchronize(device)
-    gradient_start = perf_counter()
-    analytic_gradient = np.asarray(gradient_object.kernel(), dtype=float)
-    synchronize(device)
-    analytic_gradient_wall_s = perf_counter() - gradient_start
-    memory_samples.append(memory_snapshot(device, "after_analytic_gradient"))
-    if progress is not None:
-        progress.update(
-            "analytic_gradient_complete",
-            force=True,
-            wall_time_s=analytic_gradient_wall_s,
+        memory_samples.append(
+            memory_snapshot(device, "after_analytic_gradient")
+        )
+        if progress is not None:
+            progress.update(
+                "analytic_gradient_complete",
+                force=True,
+                wall_time_s=analytic_gradient_wall_s,
+                checkpoint_saved=checkpoint.enabled,
+            )
+        method_metadata = (
+            method.metadata() if hasattr(method, "metadata") else None
+        )
+        gradient_metadata = _gradient_metadata(gradient_object)
+        source_hf_identity = _source_hf_identity(method)
+        energy_components = method.dc_energy_result.as_dict()
+        gradient_controls = _gradient_controls(gradient_object)
+        method_internal_s = getattr(method, "timings_s", None)
+        gradient_internal_s = (
+            None
+            if gradient_metadata is None
+            else gradient_metadata.get("timings_s")
         )
 
     fd_gradient = None
@@ -1270,7 +1678,12 @@ def run_benchmark(
     accuracy = None
     if bool(config.get("run_fd", False)):
         fd_gradient, fd_mask, fd_components, fd_wall_s = finite_difference_gradient(
-            config, system, device, backend, progress=progress
+            config,
+            system,
+            device,
+            backend,
+            progress=progress,
+            checkpoint=checkpoint,
         )
         accuracy = _accuracy_report(analytic_gradient, fd_gradient, fd_mask)
         memory_samples.append(memory_snapshot(device, "after_fd"))
@@ -1285,9 +1698,29 @@ def run_benchmark(
     if progress is not None:
         progress.update("final_reporting", force=True)
     array_paths = _save_arrays(output_dir, analytic_gradient, fd_gradient, fd_mask)
-    method_metadata = method.metadata() if hasattr(method, "metadata") else None
-    gradient_metadata = _gradient_metadata(gradient_object)
-    source_hf_identity = _source_hf_identity(method)
+    fd_checkpoint = None
+    if fd_components is not None:
+        fd_checkpoint = {
+            "component_count": len(fd_components),
+            "reused_components": sum(
+                bool(item.get("checkpoint_component_reused"))
+                for item in fd_components
+            ),
+            "reused_displacements": sum(
+                bool(item.get("plus_checkpoint_reused"))
+                + bool(item.get("minus_checkpoint_reused"))
+                for item in fd_components
+            ),
+            "computed_displacements": sum(
+                (not bool(item.get("plus_checkpoint_reused")))
+                + (not bool(item.get("minus_checkpoint_reused")))
+                for item in fd_components
+            ),
+        }
+    current_energy_wall_s = 0.0 if analytic_checkpoint_reused else energy_wall_s
+    current_gradient_wall_s = (
+        0.0 if analytic_checkpoint_reused else analytic_gradient_wall_s
+    )
     timing = {
         "device_warmup_wall_s": warmup_wall_s,
         "setup_wall_s": setup_wall_s,
@@ -1295,21 +1728,29 @@ def run_benchmark(
         "analytic_gradient_wall_s": analytic_gradient_wall_s,
         "analytic_total_wall_s": energy_wall_s + analytic_gradient_wall_s,
         "workflow_without_fd_wall_s": (
-            setup_wall_s + energy_wall_s + analytic_gradient_wall_s
+            setup_wall_s + current_energy_wall_s + current_gradient_wall_s
         ),
         "fd_wall_s": fd_wall_s,
-        "workflow_wall_s": perf_counter() - workflow_start,
-        "method_internal_s": getattr(method, "timings_s", None),
-        "gradient_internal_s": (
-            None if gradient_metadata is None else gradient_metadata.get("timings_s")
+        "fd_accumulated_displacement_wall_s": (
+            None
+            if fd_components is None
+            else sum(
+                float(item.get("accumulated_displacement_wall_s", 0.0))
+                for item in fd_components
+            )
         ),
+        "current_attempt_energy_wall_s": current_energy_wall_s,
+        "current_attempt_analytic_gradient_wall_s": current_gradient_wall_s,
+        "workflow_wall_s": perf_counter() - workflow_start,
+        "method_internal_s": method_internal_s,
+        "gradient_internal_s": gradient_internal_s,
     }
     return {
         "status": "complete",
         "execution_status": "complete",
         "accuracy_status": accuracy_status,
         "accuracy_gate": accuracy_gate,
-        "schema_version": 2,
+        "schema_version": 3,
         "run_name": config.get("name"),
         "benchmark_scope": config.get("benchmark_scope"),
         "device": device,
@@ -1320,7 +1761,7 @@ def run_benchmark(
         "xc": str(config.get("xc", "PBE")),
         "dispersion": normalize_dispersion(config.get("dispersion")),
         "energy_ha": energy,
-        "energy_components": method.dc_energy_result.as_dict(),
+        "energy_components": energy_components,
         "source_hf": source_hf_identity,
         "units": {
             "energy": "Ha",
@@ -1371,49 +1812,17 @@ def run_benchmark(
             "mesh": np.asarray(cell.mesh, dtype=int),
             "ke_cutoff_ha": getattr(cell, "ke_cutoff", None),
             "precision": cell.precision,
-            "conv_tol": method.conv_tol,
-            "conv_tol_grad": method.conv_tol_grad,
-            "max_cycle": method.max_cycle,
+            "conv_tol": float(config.get("conv_tol", 1.0e-10)),
+            "conv_tol_grad": config.get("conv_tol_grad", 1.0e-8),
+            "max_cycle": int(config.get("max_cycle", 80)),
             "num_threads": int(config.get("num_threads", 1)),
             "device_warmup": bool(config.get("device_warmup", True)),
             "track_vram_peak": bool(config.get("track_vram_peak", True)),
             "vram_sample_interval_s": float(
                 config.get("vram_sample_interval_s", 0.05)
             ),
-            "z_solver": getattr(gradient_object, "z_solver", None),
-            "z_tolerance": getattr(gradient_object, "z_tolerance", None),
-            "z_residual_tolerance": getattr(
-                gradient_object, "z_residual_tolerance", None
-            ),
-            "z_max_cycle": getattr(gradient_object, "z_max_cycle", None),
-            "z_dense_max_dimension": getattr(
-                gradient_object, "z_dense_max_dimension", None
-            ),
-            "z_nuclear_batch_memory_fraction": getattr(
-                gradient_object,
-                "z_nuclear_batch_memory_fraction",
-                None,
-            ),
-            "z_nuclear_batch_max_components": getattr(
-                gradient_object,
-                "z_nuclear_batch_max_components",
-                None,
-            ),
-            "gdf_bilinear_mode": getattr(
-                gradient_object,
-                "gdf_bilinear_mode",
-                None,
-            ),
-            "gdf_derivative_omega_scale": getattr(
-                gradient_object,
-                "gdf_derivative_omega_scale",
-                None,
-            ),
-            "rsdf_derivative_omega_scale": getattr(
-                gradient_object,
-                "rsdf_derivative_omega_scale",
-                None,
-            ),
+            **gradient_controls,
+            "checkpoint_resume": checkpoint.enabled,
             "benchmark_scope": config.get("benchmark_scope"),
         },
         "fd": {
@@ -1424,6 +1833,7 @@ def run_benchmark(
                 else None
             ),
             "components": fd_components,
+            "checkpoint": fd_checkpoint,
         },
         "accuracy": accuracy,
         "gradient_summary": gradient_summary,
@@ -1431,6 +1841,14 @@ def run_benchmark(
         "arrays": array_paths,
         "method_metadata": method_metadata,
         "gradient_metadata": gradient_metadata,
+        "checkpoint": {
+            **checkpoint.describe(),
+            "analytic_reused": analytic_checkpoint_reused,
+            "source_density_warm_start": source_density_warm_start,
+            "state_policy": (
+                "NPY numerical state; PySCF objects are reconstructed, not pickled"
+            ),
+        },
         "device_metadata": _device_metadata(device),
         "evidence": config.get("evidence"),
         "software_provenance": evidence.software_provenance(device),

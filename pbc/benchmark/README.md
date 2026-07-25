@@ -59,6 +59,17 @@ conda run -n gpu python run_benchmark_queue.py \
 report를 결과로 받아들이지 않는다. 같은 case를 다시 실행하면 기존 root artifact는
 삭제하지 않고 `attempts/<시각>_<attempt-id>/`로 함께 이동한다.
 
+긴 analytic/FD 계산은 기본적으로 case의 `checkpoints/`에 단계별 재시작 상태를
+남긴다. 중앙 구조의 source-HF density/MO 배열, analytic gradient와 Z-vector block,
+각 FD 성분의 `plus`/`minus` energy가 완료되는 즉시 checksum이 붙은 NPY/JSON으로
+원자적으로 저장된다. 계산이 중단되면 같은 fingerprint의 다음 실행은 완료된 analytic
+구간과 FD displacement를 건너뛴다. PySCF 객체 자체는 pickle하지 않고 저장된 numerical
+state로 재구성하며, energy까지만 끝난 경우 density를 source-HF 초기값으로 사용한다.
+
+`checkpoint_resume`의 default는 `true`이다. 설정, XYZ 또는 numerical source가 달라
+fingerprint가 바뀌면 이전 checkpoint는 자동 폐기된다. 동일 입력을 정말 처음부터 다시
+계산하려고 `--overwrite`를 지정한 경우에도 해당 case의 `checkpoints/`를 먼저 비운다.
+
 각 case에는 다음 내용을 합친 SHA256 fingerprint도 기록된다.
 
 - defaults와 job을 합친 effective numerical configuration
@@ -296,6 +307,7 @@ exclusive device phase이며, 합산 wall time과 host setup time은 별도로 �
 - `fd_step_bohr`: nuclear displacement, 단위 `Bohr`
 - `fd_max_abs_tolerance_ha_per_bohr`: optional selected-FD pass/fail threshold
 - `net_gradient_tolerance_ha_per_bohr`: optional translation-sum norm threshold
+- `checkpoint_resume`: analytic/FD displacement checkpoint (default `true`)
 
 FD를 일부 component에만 수행하면 NPY array의 미계산 component는 `NaN`이며,
 `fd_mask.npy`가 실제 비교 component를 표시한다. error metric도 mask가 참인

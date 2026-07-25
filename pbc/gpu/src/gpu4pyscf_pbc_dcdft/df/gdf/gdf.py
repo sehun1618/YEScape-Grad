@@ -916,7 +916,7 @@ def _infer_kmesh(cell, kpts):
 
 @contextmanager
 def _bounded_native_build_memory():
-    """Bound upstream GDF batch planning without changing its algebra."""
+    """Bound upstream planning and retain CPU-equivalent metric algebra."""
 
     metadata = {
         "max_reported_free_device_bytes": int(
@@ -927,6 +927,7 @@ def _bounded_native_build_memory():
     }
     with _NATIVE_BUILD_ADAPTER_LOCK:
         original = rsdf_builder.get_avail_mem
+        original_prefer_ed = rsdf_builder.PREFER_ED
 
         def bounded_available_memory(exclude_memory_pool=True):
             actual = int(
@@ -938,10 +939,15 @@ def _bounded_native_build_memory():
             return int(reported)
 
         rsdf_builder.get_avail_mem = bounded_available_memory
+        # GPU4PySCF 1.8 changed the periodic GDF default to ED.  The local
+        # derivative factorization and strict CPU/GPU parity contract require
+        # the same Cholesky metric representation used by PySCF GDF/RSDF.
+        rsdf_builder.PREFER_ED = False
         try:
             yield metadata
         finally:
             rsdf_builder.get_avail_mem = original
+            rsdf_builder.PREFER_ED = original_prefer_ed
 
 
 def _validate_setup_mode(value):

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -596,6 +597,8 @@ def _run_or_reuse_case(
             }
 
         print(f"[{run_id}] run")
+        if overwrite:
+            shutil.rmtree(case_dir / "checkpoints", ignore_errors=True)
         outcome = _run_case(run, case_dir, run_id)
         print(f"[{run_id}] {outcome['status']}")
         return {

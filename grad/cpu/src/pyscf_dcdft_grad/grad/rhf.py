@@ -1,22 +1,10 @@
-"""
-Restricted DC-DFT Analytic Gradients (S1 Optimized)
-=====================================================
-Based on rdc_grad.py with the following S1-related optimizations:
+"""Restricted molecular DC-DFT gradient with adjoint response contraction.
 
-[Opt S1-CPU] nonvariational_correction에서 s1 관련 중복 계산 제거
-  - 기존: 두 개의 atom loop에서 s1_co = s1[:, p0:p1] @ Co를 독립적으로 계산
-    * Loop 1 (Ax(S1) density): s1_co → s1_oo → dm_s
-    * Loop 2 (V^ξ assembly):   s1_co → s1_vo_bra (+ s1_cv → s1_vo_ket)
-  - 변경: Loop 1에서 계산한 s1_co를 캐시하여 Loop 2에서 재사용
-
-  참고: CPU 코드는 GPU와 달리 S1_mo 행렬을 구성하지 않음.
-  AO 기반 atom-local 연산을 사용하여 이미 메모리 효율적.
-  (GPU에서의 S1_mo (nmo×nmo) → S1_mo_o (nmo×nocc) 최적화와는 다른 접근.)
-
-  CPU에서 "S1_mo occ-only"에 해당하는 개념은:
-    s1_block_sym @ C (nao×nmo) 대신 s1_block_sym @ Co (nao×nocc)를 계산하는 것이며,
-    이는 atom-local 접근에서 s1_co = s1[:, p0:p1] @ Co 계산과 동치.
-    CPU 코드는 이미 이 방식을 사용하고 있으므로 추가적인 S1 메모리 최적화는 불필요.
+The non-variational term applies the self-adjoint HF response once to the Z
+transition density instead of once for every nuclear perturbation.  Overlap
+blocks are formed and contracted atom by atom.  For density-fitted references,
+PySCF's DF Hessian generator is consumed directly so the returned per-atom
+``make_h1`` list is never retained in memory.
 
 Key Equations (from DC-DFT_Gradient_v4.pdf):
     - Eq. 20:  DC-DFT Energy
@@ -24,7 +12,6 @@ Key Equations (from DC-DFT_Gradient_v4.pdf):
     - Eq. 80:  Total Gradient: dE/dξ = g_skel + g_nv
     - Eq. 87:  Non-variational: g_nv = 4 Σ Z_ai V^ξ_ai
 
-원본: rdc_grad.py
 """
 
 import sys
@@ -38,6 +25,23 @@ from .api import (
     maxabs, split_occ_vir, has_df, get_auxbasis,
     normalize_verbose, print_gradient
 )
+
+
+def _iter_h1ao(mf, mo_coeff, mo_occ):
+    """Yield one atom's derivative Fock and discard it after consumption."""
+
+    hess = mf.Hessian()
+    if has_df(mf):
+        from pyscf.df.hessian import rhf as df_hessian_rhf
+
+        for ia, h1, vj1, vk1 in df_hessian_rhf._gen_jk(
+            hess, mo_coeff, mo_occ, with_k=True
+        ):
+            yield ia, h1 + vj1 - 0.5 * vk1
+        return
+
+    for ia, h1ao in enumerate(hess.make_h1(mo_coeff, mo_occ)):
+        yield ia, h1ao
 
 
 # ============================================================================
@@ -182,147 +186,48 @@ def skeleton_gradient(mol, ks_grad, dm_hf: np.ndarray, fock_oo: np.ndarray,
 # Non-Variational Correction (PDF Eq. 87-89) — S1 최적화 적용
 # ============================================================================
 
-def nonvariational_correction(mol, Co: np.ndarray, Cv: np.ndarray,
-                               mo_energy: np.ndarray, zvec: np.ndarray,
-                               s1: np.ndarray, h1ao_list, hf_response: Callable,
-                               log=None) -> np.ndarray:
-    """
-    Compute non-variational gradient correction (S1 optimized).
+def nonvariational_correction(
+    mol, Co, Cv, mo_energy, zvec, s1, h1ao_iter, hf_response, log=None,
+):
+    """Compute the RHF non-variational correction with one adjoint response.
 
-    PDF Eq. 87:
-        g_nv = 4 Σ_{ai} Z_ai V^ξ_ai
-
-    where V^ξ (PDF Eq. 89):
-        V^ξ_ai = (F^HF)^ξ_ai - S^ξ_ai ε_i - 1/2 (A+B)^HF S^ξ
-
-    [Opt S1-CPU] s1 관련 중복 계산 제거
-    ─────────────────────────────────────
-    기존 코드에서는 두 개의 atom loop가 존재:
-
-    Loop 1 (Ax(S1) density, line 268-277 of original):
-      for ia in range(natm):
-          s1_co = s1[:, p0:p1] @ Co          # ← 계산 (1)
-          s1_oo = s1_co.T @ Co[p0:p1]
-          ...
-
-    Loop 2 (V^ξ assembly, line 286-307 of original):
-      for ia in range(natm):
-          s1_co = s1[:, p0:p1] @ Co          # ← 동일 계산 반복 (2)
-          s1_vo_bra = Cv[p0:p1].T @ s1_co
-          ...
-
-    변경: Loop 1에서 s1_co를 atom별로 캐시하여 Loop 2에서 재사용.
-    비용: O(natm × Δp × nao × nocc) 의 GEMM 1회 절약.
-
-    참고: GPU 코드와의 대응 관계
-    ─────────────────────────────
-    GPU에서의 S1_mo_o (npert, nmo, nocc)의 per-atom 조각은:
-      S1_mo_o[ia*3+ic] = C.T @ s1_block_sym @ Co   (nmo × nocc)
-
-    CPU에서 동일한 정보는 다음과 같이 분산:
-      s1_co[ic]  = s1[ic, p0:p1, :] @ Co   (Δp × nocc)    ← s1_block의 p0:p1 행만
-      s1_oo[ic]  = Co[p0:p1].T @ s1_co + s1_co.T @ Co[p0:p1]   (nocc × nocc)
-      s1_vo[ic]  = Cv[p0:p1].T @ s1_co + Co[p0:p1].T @ s1_cv   (nvir × nocc)
-
-    CPU는 atom-local Δp 크기의 행렬만 다루므로 full nao×nao 행렬 구성 불필요.
-    이는 GPU의 S1_mo_o 접근법보다 메모리 효율적이나, atom loop 오버헤드가 있음.
+    Self-adjointness moves the HF response from every nuclear perturbation to
+    the single Z transition density. Atom-local overlap blocks are then
+    contracted immediately; no ``dm_s``, ``ax_ao``, ``ax_vo``, ``Se`` or ``B``
+    tensor is materialized.
     """
     if log is None:
         log = logger.Logger(sys.stdout, logger.NOTE)
 
     natm = mol.natm
-    nao = mol.nao
     nocc = Co.shape[1]
     aoslices = mol.aoslice_by_atom()
-
     e_occ = mo_energy[:nocc]
     g_nv = np.zeros((natm, 3))
 
-    # ──────────────────────────────────────────────────────────
-    # Loop 1: Ax(S1) density 구성
-    #
-    # 각 원자 ia에 대해:
-    #   s1_oo^ξ = S^ξ의 occ-occ block (symmetrized)
-    #   dm_s = Co @ s1_oo @ Co.T + h.c.  (overlap-driven density)
-    #
-    # [Opt S1-CPU] s1_co를 atom별로 캐시
-    # ──────────────────────────────────────────────────────────
-    dm_s = np.zeros((natm, 3, nao, nao))
-    s1_co_cache = {}  # {ia: s1_co}  — atom별 s1_co 캐시
+    dz = Cv @ zvec @ Co.conj().T
+    vz = hf_response(dz + dz.conj().T)
+    vz_oo = Co.conj().T @ vz @ Co
+    del dz, vz
 
-    for ia in range(natm):
+    if isinstance(h1ao_iter, (list, tuple)):
+        h1ao_iter = enumerate(h1ao_iter)
+    for ia, h1ao in h1ao_iter:
         p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        # s1_co = s1[:, p0:p1, :] @ Co
-        # shape: (3, Δp, nocc) where Δp = p1 - p0
-        # 의미: AO overlap derivative의 atom-ia 행 × occupied MO
-        s1_co = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Co)
-
-        # [Opt S1-CPU] 캐시 저장 — Loop 2에서 재사용
-        s1_co_cache[ia] = s1_co
-
-        # s1_oo = Co[p0:p1].T @ s1 @ Co (symmetrized)
-        # 이것은 GPU의 S1_mo_o[:, so, :] 에 해당하는 per-atom occ-occ block
-        s1_oo = lib.einsum('xpi,pj->xij', s1_co, Co[p0:p1].conj())
-        s1_oo = s1_oo + s1_oo.transpose(0, 2, 1)
-
-        # Overlap-driven density response: dm_s = Co @ s1_oo @ Co.T + h.c.
-        tmp = lib.einsum('xij,ui->xuj', s1_oo, Co)
-        dm1 = lib.einsum('xuj,vj->xuv', tmp, Co.conj())
-        dm_s[ia] = dm1 + dm1.transpose(0, 2, 1).conj()
-
-    # Apply (A+B)^HF response to all perturbation densities at once
-    ax_ao = hf_response(dm_s.reshape(-1, nao, nao)) * 2.0
-    ax_vo = lib.einsum('Auv,ua,vi->Aai', ax_ao, Cv.conj(), Co)
-
-    log.debug(f'ax_vo: max={maxabs(ax_vo):.6e}')
-
-    # ──────────────────────────────────────────────────────────
-    # Loop 2: V^ξ assembly and contraction with Z
-    #
-    # V^ξ_ai = (F^HF)^ξ_ai - S^ξ_ai ε_i - 1/2 (A+B)^HF S^ξ
-    #
-    # S^ξ_ai의 계산:
-    #   s1_vo = s1_vo_bra + s1_vo_ket  (symmetrized vo block)
-    #   이것은 GPU의 S1_mo_o[:, sv, :]에 해당
-    #
-    # [Opt S1-CPU] s1_co를 캐시에서 가져옴 (중복 계산 제거)
-    # ──────────────────────────────────────────────────────────
-    for ia in range(natm):
-        p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        # (1) Fock derivative: F^HF_1 in vo block
-        h1ao = h1ao_list[ia]
         f1_vo = lib.einsum('xuv,ua,vi->xai', h1ao, Cv.conj(), Co)
-
-        # (2) Overlap-energy term: S^ξ_ai * ε_i
-        # s1_vo = Cv.T @ s1_sym_block @ Co (per atom, symmetrized)
-        #
-        # [Opt S1-CPU] s1_co를 캐시에서 재사용
-        # 기존: s1_co = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Co)
-        # 변경: s1_co = s1_co_cache[ia]
-        s1_co = s1_co_cache[ia]
-
-        # s1_vo_bra = Cv[p0:p1].T @ (s1[:, p0:p1] @ Co)
-        # = Cv[p0:p1].T @ s1_co
+        s1_co = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Co)
+        s1_oo = lib.einsum('xpi,pj->xij', s1_co, Co[p0:p1].conj())
+        s1_oo = s1_oo + s1_oo.transpose(0, 2, 1).conj()
         s1_vo_bra = lib.einsum('xpi,pa->xai', s1_co, Cv[p0:p1].conj())
-
-        # s1_vo_ket = Co[p0:p1].T @ (s1[:, p0:p1] @ Cv)
-        # 이 부분은 s1_co로부터 유도 불가 (Cv와의 곱이 필요)
         s1_cv = lib.einsum('xpv,va->xpa', s1[:, p0:p1], Cv)
         s1_vo_ket = lib.einsum('xpa,pi->xai', s1_cv, Co[p0:p1].conj())
-
         s1_vo = s1_vo_bra + s1_vo_ket
-        se_vo = s1_vo * e_occ[None, None, :]
-
-        # (3) Assemble V^ξ = F^HF_1 - S*ε - 0.5 * Ax(S1)
-        v1 = f1_vo - se_vo - 0.5 * ax_vo[ia * 3:(ia + 1) * 3]
-
-        # (4) Contract: g_nv = 4 Σ Z V^ξ
-        g_nv[ia] = 4.0 * lib.einsum('ai,xai->x', zvec, v1)
-
-    # 캐시 해제
-    del s1_co_cache
+        z_f1 = lib.einsum('ai,xai->x', zvec, f1_vo)
+        z_se = lib.einsum(
+            'ai,xai->x', zvec, s1_vo * e_occ[None, None, :]
+        )
+        z_ax = 2.0 * lib.einsum('xij,ij->x', s1_oo, vz_oo)
+        g_nv[ia] = 4.0 * z_f1 - 4.0 * z_se - 2.0 * z_ax
 
     log.debug(f'g_nv: max={maxabs(g_nv):.6e}')
 
@@ -442,7 +347,7 @@ class Gradients(lib.StreamObject):
             log.debug('Auxbasis response enabled')
 
         s1 = ks_grad.get_ovlp(mol)
-        h1ao_list = self.base.Hessian().make_h1(mo_coeff, mo_occ)
+        h1ao_iter = _iter_h1ao(self.base, mo_coeff, mo_occ)
 
         # Skeleton gradient
         log.info('Computing skeleton gradient...')
@@ -452,7 +357,7 @@ class Gradients(lib.StreamObject):
         # Non-variational correction (S1 optimized)
         log.info('Computing non-variational correction (S1 optimized)...')
         g_nv = nonvariational_correction(
-            mol, Co, Cv, mo_energy, zvec, s1, h1ao_list, hf_resp, log=log,
+            mol, Co, Cv, mo_energy, zvec, s1, h1ao_iter, hf_resp, log=log,
         )
 
         # Total gradient

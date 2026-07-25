@@ -1,8 +1,9 @@
-"""
-Unrestricted DC-DFT Analytic Gradients
-=======================================
+"""Unrestricted molecular DC-DFT gradient with spin-coupled adjoint response.
 
-Implementation of DC-DFT gradients for open-shell (unrestricted) systems.
+The alpha/beta Z transition densities are submitted together to one UHF
+response call.  Atom-local overlap contractions replace the former
+``(2, 3*Natm, NAO, NAO)`` response-density tensor.  Density-fitted derivative
+Fock matrices are consumed from PySCF's generator one atom at a time.
 
 Key differences from restricted:
     - Separate alpha/beta spin channels
@@ -22,6 +23,25 @@ from .api import (
     maxabs, as_spin_tuple, has_df, get_auxbasis,
     normalize_verbose, print_gradient
 )
+
+
+def _iter_h1ao(mf, mo_coeff, mo_occ):
+    """Yield alpha/beta derivative Fock matrices one atom at a time."""
+
+    hess = mf.Hessian()
+    if has_df(mf):
+        from pyscf.df.hessian import uhf as df_hessian_uhf
+
+        for ia, h1, vj1, vk1 in df_hessian_uhf._gen_jk(
+            hess, mo_coeff, mo_occ, with_k=True
+        ):
+            vk1a, vk1b = vk1
+            yield ia, h1 + vj1 - vk1a, h1 + vj1 - vk1b
+        return
+
+    h1ao_a, h1ao_b = hess.make_h1(mo_coeff, mo_occ)
+    for ia, (h1a, h1b) in enumerate(zip(h1ao_a, h1ao_b)):
+        yield ia, h1a, h1b
 
 
 # ============================================================================
@@ -279,103 +299,66 @@ def skeleton_gradient(mol, ks_grad, dm_hf, fock_oo_a, fock_oo_b,
 # Non-Variational Correction (Unrestricted)
 # ============================================================================
 
-def nonvariational_correction(mol, Coa, Cob, Cva, Cvb,
-                               e_occ_a, e_occ_b, s1, aoslices,
-                               zvec, uhf_response, h1ao_a, h1ao_b,
-                               log=None) -> np.ndarray:
-    """
-    Compute non-variational correction for unrestricted case.
-
-    PDF Eq. 87 (unrestricted):
-        g_nv = 2 Σ (Z^α V^ξ_α + Z^β V^ξ_β)
-
-    Note: Factor 2 (not 4) because no double occupancy.
-
-    Args:
-        mol: Mole object
-        Coa/Cob: Occupied MO coefficients
-        Cva/Cvb: Virtual MO coefficients
-        e_occ_a/b: Occupied orbital energies
-        s1: Overlap derivatives
-        aoslices: Atom slices
-        zvec: (za, zb) Z-vectors
-        uhf_response: UHF response function
-        h1ao_a/b: Fock derivatives
-        log: Logger
-
-    Returns:
-        g_nv: Non-variational correction (natm, 3)
-    """
+def nonvariational_correction(
+    mol, Coa, Cob, Cva, Cvb, e_occ_a, e_occ_b, s1, aoslices, zvec,
+    uhf_response, h1ao_a, h1ao_b=None, log=None,
+):
+    """Compute the UHF correction with one spin-coupled adjoint response."""
     if log is None:
         log = logger.Logger(sys.stdout, logger.NOTE)
 
     natm = mol.natm
-    nao = mol.nao
     za, zb = zvec
+    dz_a = Cva @ za @ Coa.conj().T
+    dz_b = Cvb @ zb @ Cob.conj().T
+    dz = np.asarray((dz_a + dz_a.conj().T, dz_b + dz_b.conj().T))
+    vz_a, vz_b = uhf_response(dz)
+    vz_oo_a = Coa.conj().T @ vz_a @ Coa
+    vz_oo_b = Cob.conj().T @ vz_b @ Cob
+    del dz_a, dz_b, dz, vz_a, vz_b
 
-    # Precompute overlap-driven density response
-    dm_s = np.zeros((2, natm, 3, nao, nao))
-
-    for ia in range(natm):
-        p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        # Alpha
-        s1_co_a = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Coa)
-        s1_oo_a = lib.einsum('xpi,pj->xij', s1_co_a, Coa[p0:p1].conj())
-        s1_oo_a = s1_oo_a + s1_oo_a.transpose(0, 2, 1)
-        tmp_a = lib.einsum('xij,ui->xuj', s1_oo_a, Coa)
-        dm1_a = lib.einsum('xuj,vj->xuv', tmp_a, Coa.conj())
-        dm_s[0, ia] = dm1_a + dm1_a.transpose(0, 2, 1).conj()
-
-        # Beta
-        s1_co_b = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Cob)
-        s1_oo_b = lib.einsum('xpi,pj->xij', s1_co_b, Cob[p0:p1].conj())
-        s1_oo_b = s1_oo_b + s1_oo_b.transpose(0, 2, 1)
-        tmp_b = lib.einsum('xij,ui->xuj', s1_oo_b, Cob)
-        dm1_b = lib.einsum('xuj,vj->xuv', tmp_b, Cob.conj())
-        dm_s[1, ia] = dm1_b + dm1_b.transpose(0, 2, 1).conj()
-
-    # Apply (A+B)^UHF
-    ax_ao = uhf_response(dm_s.reshape(2, -1, nao, nao))
-    ax_vo_a = lib.einsum('Auv,ua,vi->Aai', ax_ao[0], Cva.conj(), Coa)
-    ax_vo_b = lib.einsum('Auv,ua,vi->Aai', ax_ao[1], Cvb.conj(), Cob)
-
-    log.debug(f'ax_vo(α): max={maxabs(ax_vo_a):.6e}')
-    log.debug(f'ax_vo(β): max={maxabs(ax_vo_b):.6e}')
-
-    # Compute V^ξ and contract
     de = np.zeros((natm, 3))
 
-    for ia in range(natm):
+    h1ao_iter = (
+        h1ao_a if h1ao_b is None
+        else ((ia, h1a, h1b) for ia, (h1a, h1b) in enumerate(zip(h1ao_a, h1ao_b)))
+    )
+    for ia, h1a, h1b in h1ao_iter:
         p0, p1 = aoslices[ia, 2], aoslices[ia, 3]
-
-        # Alpha spin
-        f1_vo_a = lib.einsum('xuv,ua,vi->xai', h1ao_a[ia], Cva.conj(), Coa)
-
+        f1_vo_a = lib.einsum('xuv,ua,vi->xai', h1a, Cva.conj(), Coa)
         s1_co_a = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Coa)
+        s1_oo_a = lib.einsum('xpi,pj->xij', s1_co_a, Coa[p0:p1].conj())
+        s1_oo_a = s1_oo_a + s1_oo_a.transpose(0, 2, 1).conj()
         s1_vo_bra_a = lib.einsum('xpi,pa->xai', s1_co_a, Cva[p0:p1].conj())
         s1_cv_a = lib.einsum('xpv,va->xpa', s1[:, p0:p1], Cva)
         s1_vo_ket_a = lib.einsum('xpa,pi->xai', s1_cv_a, Coa[p0:p1].conj())
         s1_vo_a = s1_vo_bra_a + s1_vo_ket_a
-
-        v1_a = f1_vo_a - s1_vo_a * e_occ_a[None, None, :] - 0.5 * ax_vo_a[ia * 3:(ia + 1) * 3]
-
-        # Beta spin
-        f1_vo_b = lib.einsum('xuv,ua,vi->xai', h1ao_b[ia], Cvb.conj(), Cob)
-
+        f1_vo_b = lib.einsum('xuv,ua,vi->xai', h1b, Cvb.conj(), Cob)
         s1_co_b = lib.einsum('xpv,vi->xpi', s1[:, p0:p1], Cob)
+        s1_oo_b = lib.einsum('xpi,pj->xij', s1_co_b, Cob[p0:p1].conj())
+        s1_oo_b = s1_oo_b + s1_oo_b.transpose(0, 2, 1).conj()
         s1_vo_bra_b = lib.einsum('xpi,pa->xai', s1_co_b, Cvb[p0:p1].conj())
         s1_cv_b = lib.einsum('xpv,va->xpa', s1[:, p0:p1], Cvb)
         s1_vo_ket_b = lib.einsum('xpa,pi->xai', s1_cv_b, Cob[p0:p1].conj())
         s1_vo_b = s1_vo_bra_b + s1_vo_ket_b
 
-        v1_b = f1_vo_b - s1_vo_b * e_occ_b[None, None, :] - 0.5 * ax_vo_b[ia * 3:(ia + 1) * 3]
-
-        # Contract: Factor 2 (not 4) for unrestricted
-        de[ia] = 2.0 * (
-            lib.einsum('ai,xai->x', za, v1_a) +
-            lib.einsum('ai,xai->x', zb, v1_b)
+        z_f1 = (
+            lib.einsum('ai,xai->x', za, f1_vo_a)
+            + lib.einsum('ai,xai->x', zb, f1_vo_b)
         )
+        z_se = (
+            lib.einsum(
+                'ai,xai->x', za, s1_vo_a * e_occ_a[None, None, :]
+            )
+            + lib.einsum(
+                'ai,xai->x', zb, s1_vo_b * e_occ_b[None, None, :]
+            )
+        )
+        z_ax = (
+            lib.einsum('xij,ij->x', s1_oo_a, vz_oo_a)
+            + lib.einsum('xij,ij->x', s1_oo_b, vz_oo_b)
+        )
+        de[ia] = 2.0 * z_f1 - 2.0 * z_se - z_ax
 
     log.debug(f'g_nv: max={maxabs(de):.6e}')
 
@@ -519,7 +502,7 @@ class Gradients(lib.StreamObject):
             log.debug('Auxbasis response enabled')
 
         s1 = ks_grad.get_ovlp(mol)
-        h1ao_a, h1ao_b = self.base.Hessian().make_h1((Ca, Cb), (occa, occb))
+        h1ao_iter = _iter_h1ao(self.base, (Ca, Cb), (occa, occb))
         aoslices = mol.aoslice_by_atom()
 
         # Skeleton
@@ -534,7 +517,7 @@ class Gradients(lib.StreamObject):
         log.info('Computing non-variational correction...')
         g_nv = nonvariational_correction(
             mol, Coa, Cob, Cva, Cvb, ea[occa_idx], eb[occb_idx],
-            s1, aoslices, (za, zb), uhf_resp, h1ao_a, h1ao_b, log=log,
+            s1, aoslices, (za, zb), uhf_resp, h1ao_iter, log=log,
         )
 
         de = g_skel + g_nv

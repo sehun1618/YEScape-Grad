@@ -29,7 +29,12 @@ def target_fock_kpts(context, *, return_reuse=False):
         fock = _with_kpoint_axis(workspace.target_fock)
         return (fock, True) if return_reuse else fock
 
-    hcore = cp.asarray(evaluate_target_hcore(context.target_ks))
+    hcore = cp.asarray(
+        evaluate_target_hcore(
+            context.target_ks,
+            kpoint_mode=bool(context.dc_mf.kpoint_mode),
+        )
+    )
     evaluation = evaluate_target_veff(
         context.target_ks,
         context.source_mf.make_rdm1(),

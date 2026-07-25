@@ -23,6 +23,8 @@ from pyscf_pbc_dcdft.dft.target_integrator import (
 )
 from pyscf_pbc_dcdft.lib.kpoints import normalize_kpts
 
+from ..scf.reference import selected_df_hcore
+
 
 @dataclass(frozen=True)
 class TargetVeffEvaluation:
@@ -33,10 +35,10 @@ class TargetVeffEvaluation:
     metadata: dict[str, object]
 
 
-def evaluate_target_hcore(target):
+def evaluate_target_hcore(target, *, kpoint_mode=None):
     """Return hcore from the selected DF provider, never from multigrid."""
 
-    return target.get_hcore()
+    return selected_df_hcore(target, sampled_k=kpoint_mode)
 
 
 def evaluate_target_veff(

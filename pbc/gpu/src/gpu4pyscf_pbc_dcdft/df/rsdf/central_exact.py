@@ -297,6 +297,7 @@ def _cpu_equivalent_builder(parameters, state, *, reference_auxcell):
         original_metric = rsdf_builder._get_2c2e
         original_precontract = rsdf_builder._precontract_j2c_aux_coeff
         original_available_memory = rsdf_builder.get_avail_mem
+        original_prefer_ed = rsdf_builder.PREFER_ED
         source_mesh = np.asarray(parameters.source_mesh, dtype=int)
 
         class SourceOptimizer(original_optimizer):
@@ -365,6 +366,10 @@ def _cpu_equivalent_builder(parameters, state, *, reference_auxcell):
             precontract_with_metric_settings
         )
         rsdf_builder.get_avail_mem = bounded_available_memory
+        # The exact-central route is defined against PySCF's Cholesky metric
+        # representation.  GPU4PySCF 1.8 defaults to ED, which changes both
+        # auxiliary rank and the CDERI basis expected by the local adjoint.
+        rsdf_builder.PREFER_ED = False
         try:
             yield
         finally:
@@ -373,6 +378,7 @@ def _cpu_equivalent_builder(parameters, state, *, reference_auxcell):
             rsdf_builder._get_2c2e = original_metric
             rsdf_builder._precontract_j2c_aux_coeff = original_precontract
             rsdf_builder.get_avail_mem = original_available_memory
+            rsdf_builder.PREFER_ED = original_prefer_ed
 
 
 def _build_metric(

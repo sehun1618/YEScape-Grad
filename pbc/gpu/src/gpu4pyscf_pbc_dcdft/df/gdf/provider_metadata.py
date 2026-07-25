@@ -69,13 +69,23 @@ def build_gamma_factorization_metadata(provider) -> GammaFactorizationMetadata:
         target_omega,
         float(rsdf_builder._guess_omega(provider.cell)),
     )
-    transforms, negative_sizes = rsdf_builder._precontract_j2c_aux_coeff(
-        provider.auxcell,
-        None,
-        target_omega,
-        factorization_omega,
-        float(provider.linear_dep_threshold),
-    )
+    from .gdf import _NATIVE_BUILD_ADAPTER_LOCK
+
+    with _NATIVE_BUILD_ADAPTER_LOCK:
+        original_prefer_ed = rsdf_builder.PREFER_ED
+        rsdf_builder.PREFER_ED = False
+        try:
+            transforms, negative_sizes = (
+                rsdf_builder._precontract_j2c_aux_coeff(
+                    provider.auxcell,
+                    None,
+                    target_omega,
+                    factorization_omega,
+                    float(provider.linear_dep_threshold),
+                )
+            )
+        finally:
+            rsdf_builder.PREFER_ED = original_prefer_ed
     if len(transforms) != 1:
         raise RuntimeError(
             "Gamma GDF expected one auxiliary transform, got "

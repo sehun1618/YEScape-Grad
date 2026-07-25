@@ -1,5 +1,5 @@
 {
-  "output_root": "../results/current_water_ethanol_sz_d2c",
+  "output_root": "../results/current_water_ethanol_sz_d2c_fd",
   "defaults": {
     "atom_file": "../../structures/water_ethanol.xyz",
     "atom_unit": "Angstrom",
@@ -41,6 +41,7 @@
     {
       "name": "gdf_uniform_d2c",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "gdf",
       "target_integrator": "uniform",
       "gdf_bilinear_mode": "optimized_fused"
@@ -48,6 +49,7 @@
     {
       "name": "gdf_multigrid_xc_mesh240_d2c",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "gdf",
       "target_integrator": "multigrid_xc",
       "target_multigrid_mesh": [240, 240, 240],
@@ -56,12 +58,14 @@
     {
       "name": "rsdf_uniform_d2c",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "rsdf",
       "target_integrator": "uniform"
     },
     {
       "name": "rsdf_multigrid_xc_mesh240_d2c",
       "device": "gpu",
+      "run_fd": true,
       "df_backend": "rsdf",
       "target_integrator": "multigrid_xc",
       "target_multigrid_mesh": [240, 240, 240]
