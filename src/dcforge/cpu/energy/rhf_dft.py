@@ -1,0 +1,197 @@
+'''Restricted HF-DFT energy workflow built on PySCF RKS.'''
+
+from pyscf import scf
+from pyscf.df import df_jk
+from pyscf.dft import rks
+
+
+def _check_xc(mf):
+    '''Reject target terms outside the molecular HF-DFT contract.'''
+    if not hasattr(mf, '_numint'):
+        return
+
+    xc, _, disp = rks.parse_dft(mf.xc)
+    has_nlc = mf._numint.libxc.is_nlc(xc)
+    if has_nlc or mf.nlc not in ('', 0, False):
+        raise NotImplementedError('nonlocal correlation such as VV10 is not supported')
+    if disp is not None or mf.do_disp():
+        raise NotImplementedError('dispersion corrections are not supported')
+
+
+class RHFDFT(rks.RKS):
+    '''Evaluate a target RKS energy on converged RHF orbitals.'''
+
+    _keys = rks.RKS._keys | {'mf_hf', 'e_hf', 'e_dft', 'dm_hf'}
+    _hf_options = (
+        'max_memory', 'verbose', 'stdout', 'chkfile',
+        'conv_tol', 'conv_tol_grad', 'conv_tol_cpscf', 'max_cycle',
+        'init_guess', 'DIIS', 'diis', 'diis_space', 'diis_start_cycle',
+        'diis_file', 'diis_space_rollback', 'diis_damp', 'damp',
+        'level_shift', 'direct_scf', 'direct_scf_tol', 'conv_check',
+        'callback',
+    )
+
+    def __init__(self, mol, xc='LDA,VWN', mf_hf=None):
+        rks.RKS.__init__(self, mol, xc=xc)
+        supplied_mf_hf = mf_hf is not None
+        if mf_hf is None:
+            mf_hf = scf.RHF(mol)
+        if type(mf_hf) is not scf.hf.RHF:
+            raise TypeError('mf_hf must be a conventional pyscf.scf.hf.RHF object')
+        if mf_hf.mol is not mol:
+            raise ValueError('mf_hf and RHFDFT must reference the same Mole object')
+
+        self.mf_hf = mf_hf
+        if supplied_mf_hf:
+            self._copy_hf_options(mf_hf, self)
+        self.e_hf = None
+        self.e_dft = None
+        self.dm_hf = None
+
+    def kernel_hf(self, dm0=None, **kwargs):
+        '''Run the source RHF kernel.'''
+        self._copy_hf_options(self, self.mf_hf)
+        e_hf = self.mf_hf.kernel(dm0=dm0, **kwargs)
+        if not self.mf_hf.converged:
+            raise RuntimeError('source RHF calculation did not converge')
+        self._sync_hf_results()
+        return e_hf
+
+    def run_hf(self, dm0=None, **kwargs):
+        self.kernel_hf(dm0=dm0, **kwargs)
+        return self
+
+    def make_hf_rdm1(self):
+        if not self.mf_hf.converged:
+            raise RuntimeError('source RHF calculation must be converged')
+        return self.mf_hf.make_rdm1()
+
+    def kernel(self, dm0=None, run_hf=True, **kwargs):
+        '''Run RHF, then evaluate the target functional at the RHF density.'''
+        _check_xc(self)
+        if run_hf:
+            self.kernel_hf(dm0=dm0, **kwargs)
+        else:
+            if dm0 is not None or kwargs:
+                raise ValueError('dm0/kwargs require run_hf=True')
+            if not self.mf_hf.converged:
+                raise RuntimeError('run_hf=False requires a converged source RHF')
+            self._sync_hf_results()
+
+        self.dm_hf = self.make_hf_rdm1()
+        self.e_dft = float(self.energy_tot(dm=self.dm_hf))
+        self.e_tot = self.e_dft
+        return self.e_dft
+
+    def energy_tot(self, dm=None, h1e=None, vhf=None):
+        '''Evaluate a non-NLC target functional with the inherited RKS kernel.'''
+        _check_xc(self)
+        return rks.RKS.energy_tot(self, dm, h1e, vhf)
+
+    def reset(self, mol=None):
+        rks.RKS.reset(self, mol)
+        self.mf_hf.reset(mol)
+        self.e_hf = self.e_dft = self.dm_hf = None
+        return self
+
+    def nuc_grad_method(self):
+        from dcforge.cpu.grad.rhf_dft import Gradients
+        return Gradients(self)
+
+    def as_scanner(self):
+        raise NotImplementedError('HF-DFT scanner support is not implemented')
+
+    def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):
+        '''Apply the same PySCF density-fitting provider to source and target.
+
+        Args:
+            auxbasis : str, basis dict, or None
+                Auxiliary basis passed to :func:`pyscf.df.df_jk.density_fit`.
+                When omitted, PySCF selects the matching HF/JK-fit basis and
+                uses its normal even-tempered fallback if no match exists.
+
+        Kwargs:
+            with_df : pyscf.df.df.DF or None
+                Existing molecular DF provider.  When supplied, the source
+                RHF and target RKS energy evaluator share this provider.
+            only_dfj : bool
+                Use density fitting for Coulomb only.  PySCF supports this for
+                energies; DC-Forge analytic DF gradients currently require
+                ``only_dfj=False``.
+
+        Returns:
+            RHFDFT
+                A copied workflow whose source RHF and target DFT evaluator
+                both use PySCF's molecular density-fitting implementation.
+
+        Notes:
+            The source RHF is transformed first because it always requires an
+            exchange-capable auxiliary basis.  The resulting ``with_df`` is
+            then attached to the target evaluator, keeping source and target
+            on one explicit three-center-integral representation.
+        '''
+        mf_hf = df_jk.density_fit(
+            self.mf_hf,
+            auxbasis=auxbasis,
+            with_df=with_df,
+            only_dfj=only_dfj,
+        )
+        mf = _DFRHFDFT(self, mf_hf.with_df, only_dfj)
+        mf.mf_hf = mf_hf
+        return mf
+
+    def _sync_hf_results(self):
+        mf_hf = self.mf_hf
+        self.e_hf = float(mf_hf.e_tot)
+        self.e_dft = self.dm_hf = None
+        self.e_tot = self.e_hf
+        self.mo_energy = mf_hf.mo_energy
+        self.mo_coeff = mf_hf.mo_coeff
+        self.mo_occ = mf_hf.mo_occ
+        self.converged = mf_hf.converged
+        self.cycles = mf_hf.cycles
+
+    def _copy_hf_options(self, source, target):
+        for key in self._hf_options:
+            if hasattr(source, key) and hasattr(target, key):
+                setattr(target, key, getattr(source, key))
+
+
+class _DFRHFDFT(df_jk._DFHF, RHFDFT):
+    '''PySCF density-fitting mixin specialized for the HF-DFT workflow.'''
+
+    def undo_df(self):
+        '''Remove density fitting from both source and target workflow objects.'''
+        mf = df_jk._DFHF.undo_df(self)
+        mf.mf_hf = self.mf_hf.undo_df()
+        return mf
+
+    def nuc_grad_method(self):
+        from dcforge.cpu.df.grad.rhf_dft import Gradients
+        return Gradients(self)
+
+    Gradients = nuc_grad_method
+
+
+def energy_tot(mf_hf, mf_dft):
+    '''Evaluate a target DFT energy with a converged RHF or UHF density.
+
+    Args:
+        mf_hf : pyscf.scf.hf.SCF
+            Converged source RHF or UHF object.
+        mf_dft : pyscf.dft.rks.RKS or pyscf.dft.uks.UKS
+            Target supplied-density evaluator on the same molecule.
+
+    Returns:
+        float
+            Target total energy in Hartree.  This function calls
+            ``mf_dft.energy_tot(dm=mf_hf.make_rdm1())`` and never target SCF.
+    '''
+    if not mf_hf.converged:
+        raise RuntimeError('source HF calculation must be converged')
+    if mf_hf.mol is not mf_dft.mol:
+        raise ValueError('mf_hf and mf_dft must reference the same Mole object')
+
+    _check_xc(mf_dft)
+    dm_hf = mf_hf.make_rdm1()
+    return float(mf_dft.energy_tot(dm=dm_hf))
