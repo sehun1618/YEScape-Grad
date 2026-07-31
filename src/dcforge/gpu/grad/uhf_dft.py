@@ -128,9 +128,19 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     e_occ = (mo_energy[0][soa], mo_energy[1][sob])
     s1oo, de_ovlp_energy = make_s1_oo_and_grad_ovlp_energy(
         mol, Co, Cv, e_occ, zvec, s1, atmlst)
-    de_skel = skeleton_gradient_uhf(
-        mf_grad, foo, e_occ, s1oo,
-        mo_energy, mo_coeff, mo_occ, atmlst)
+    # GPU4PySCF's full UKS grid-response helper does not recognize the
+    # exact-exchange-only ``HF`` xctype.  Its XC grid derivative is exactly
+    # zero, so bypass only that nonexistent contribution.  J/K and DF
+    # auxiliary response continue through the active gradient provider.
+    grid_response = mf_grad.grid_response
+    if mf._numint._xc_type(mf.xc) == 'HF':
+        mf_grad.grid_response = False
+    try:
+        de_skel = skeleton_gradient_uhf(
+            mf_grad, foo, e_occ, s1oo,
+            mo_energy, mo_coeff, mo_occ, atmlst)
+    finally:
+        mf_grad.grid_response = grid_response
 
     de_fock = mf_grad.grad_fock(
         Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)

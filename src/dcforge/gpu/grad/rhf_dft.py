@@ -89,9 +89,20 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     s1 = cp.asarray(mf_grad.get_ovlp(mol))
     s1oo, de_ovlp_energy = make_s1_oo_and_grad_ovlp_energy(
         mol, Co, Cv, mo_energy[so], zvec, s1, atmlst)
-    de_skel = skeleton_gradient(
-        mf_grad, foo, mo_energy[so], s1oo,
-        mo_energy, mo_coeff, mo_occ, atmlst)
+    # GPU4PySCF 1.8.0 routes ``grid_response=True`` through
+    # ``get_exc_full_response`` even for ``xc='HF'``.  There is no XC grid
+    # contribution in that case and the upstream helper rejects the ``HF``
+    # xctype.  Disable only the nonexistent grid derivative while retaining
+    # the ordinary conventional/DF Coulomb and exchange derivatives.
+    grid_response = mf_grad.grid_response
+    if mf._numint._xc_type(mf.xc) == 'HF':
+        mf_grad.grid_response = False
+    try:
+        de_skel = skeleton_gradient(
+            mf_grad, foo, mo_energy[so], s1oo,
+            mo_energy, mo_coeff, mo_occ, atmlst)
+    finally:
+        mf_grad.grid_response = grid_response
 
     de_fock = mf_grad.grad_fock(
         Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
