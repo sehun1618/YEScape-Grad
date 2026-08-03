@@ -16,10 +16,16 @@ from dcforge.cpu.pbc.df.rsdf import RSDF
 _MULTIGRID_NTASKS_DEFAULT = 3
 _MULTIGRID_KE_RATIO_DEFAULT = 3.0
 _MULTIGRID_REL_CUTOFF_DEFAULT = 20.0
+_SUPPORTED_TARGET_XC = ('PBE', 'R2SCAN')
+
+
+def _target_xc_name(mf):
+    '''Return the canonical name of the restricted periodic target DFA.'''
+    return str(mf.xc).replace(' ', '').upper()
 
 
 def _check_input(mf):
-    '''Validate the restricted Gamma-point PBE@RHF capability.'''
+    '''Validate the restricted Gamma-point semilocal-DFA@RHF capability.'''
     cell = mf.cell
     if cell.dimension != 3:
         raise NotImplementedError('periodic RHF-DFT currently requires a 3D cell')
@@ -60,11 +66,19 @@ def _check_input(mf):
             'FFTDF energy and gradient require with_df.mesh == cell.mesh'
         )
     if mf._numint.libxc.is_hybrid_xc(mf.xc):
-        raise NotImplementedError('the first periodic target supports pure PBE only')
+        raise NotImplementedError(
+            'periodic target functionals must be pure semilocal PBE or R2SCAN')
     if mf._numint.libxc.is_nlc(mf.xc) or mf.nlc not in ('', 0, False):
         raise NotImplementedError('periodic NLC/VV10 is not supported')
-    if str(mf.xc).replace(' ', '').upper() != 'PBE':
-        raise NotImplementedError('the first periodic target functional is PBE')
+    target_xc = _target_xc_name(mf)
+    if target_xc not in _SUPPORTED_TARGET_XC:
+        raise NotImplementedError(
+            'periodic target functional must be PBE or R2SCAN')
+    if (target_xc == 'R2SCAN'
+            and isinstance(mf._numint, multigrid.MultiGridNumInt2)):
+        raise NotImplementedError(
+            'CPU PySCF 2.14.0 multigrid does not implement the MGGA tau '
+            'energy/gradient channel; use uniform-grid R2SCAN on CPU')
 
 
 class _DFJK:
@@ -93,7 +107,7 @@ FFTDFRHF = DFRHF
 
 
 class RHFDFT(_DFJK, rks.RKS):
-    '''Evaluate periodic PBE energy on converged Gamma-point RHF orbitals.'''
+    '''Evaluate a supported target DFA on converged Gamma-point RHF orbitals.'''
 
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'dm_hf', 'target_fock',
@@ -159,7 +173,7 @@ class RHFDFT(_DFJK, rks.RKS):
         return self.mf_hf.make_rdm1()
 
     def kernel(self, dm0=None, run_hf=True, **kwargs):
-        '''Run RHF and then evaluate ``E_PBE[P_HF]`` without target SCF.'''
+        '''Run RHF and evaluate ``E_DFA[P_HF]`` without target SCF.'''
         _check_input(self)
         if run_hf:
             self.kernel_hf(dm0=dm0, **kwargs)
@@ -184,7 +198,7 @@ class RHFDFT(_DFJK, rks.RKS):
         return self.e_dft
 
     def energy_tot(self, dm=None, h1e=None, vhf=None):
-        '''Evaluate supplied-density periodic PBE energy in Hartree.'''
+        '''Evaluate a supplied-density periodic target-DFA energy.'''
         _check_input(self)
         return rks.RKS.energy_tot(self, dm, h1e, vhf)
 

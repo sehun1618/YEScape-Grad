@@ -1,4 +1,4 @@
-'''Gamma-point FFTDF/GDF/RSDF analytic PBE@RHF nuclear gradients.'''
+'''Gamma-point FFTDF/GDF/RSDF analytic DFA@RHF nuclear gradients.'''
 
 import time
 
@@ -41,7 +41,7 @@ from dcforge.cpu.pbc.grad.skeleton import (
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
-    r'''Evaluate the electronic Gamma-point PBE@RHF gradient.
+    r'''Evaluate the electronic Gamma-point DFA@RHF gradient.
 
     The term ledger follows the molecular implementation,
 
@@ -64,7 +64,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     Returns:
         ndarray of shape (len(atmlst), 3)
-            Electronic PBE@RHF gradient in Ha/Bohr.
+            Electronic target-DFA@RHF gradient in Ha/Bohr.
     '''
     profile = mf_grad.timing_profile
     if profile:
@@ -248,7 +248,7 @@ def _gen_hf_response(mf_hf, mo_coeff, mo_occ):
 
 
 class Gradients(rks.Gradients):
-    '''Analytic nuclear gradient of Gamma-point ``E_PBE[P_RHF]``.'''
+    '''Analytic nuclear gradient of Gamma-point ``E_DFA[P_RHF]``.'''
 
     _keys = rks.Gradients._keys | {
         'cphf_conv_tol', 'cphf_residual_tol', 'cphf_max_cycle',

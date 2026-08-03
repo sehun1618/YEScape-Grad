@@ -1,7 +1,8 @@
-'''Explicit Gamma-point PBE@HF gradient terms for supported DF providers.'''
+'''Explicit Gamma-point semilocal-DFA@HF gradient terms.'''
 
 import numpy as np
 from pyscf import lib
+from pyscf.grad import rks as molecular_rks_grad
 from pyscf.pbc.dft import multigrid, numint
 from pyscf.pbc.grad import krhf, krks
 
@@ -39,7 +40,7 @@ def grad_hcore(dm0, h1ao):
 
 
 def get_vxc_deriv(mf_grad, dm0):
-    '''Return target-PBE AO-row XC derivatives on the selected XC grid.
+    '''Return target-DFA AO-row XC derivatives on the selected XC grid.
 
     Atom-centered PySCF grids use ``pyscf.pbc.grad.krks.get_vxc``.  When the
     target was configured with ``RHFDFT.multigrid_numint()``, the XC-only
@@ -58,6 +59,8 @@ def get_vxc_deriv(mf_grad, dm0):
     if grids.coords is None:
         grids.build(with_non0tab=True)
     ni = numint.KNumInt(kpts)
+    if ni._xc_type(mf.xc) == 'MGGA':
+        return _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts)
     vxc = krks.get_vxc(
         ni, mf.cell, grids, mf.xc, dm0[None], kpts,
         max_memory=mf_grad.max_memory, verbose=mf_grad.verbose,
@@ -65,8 +68,68 @@ def get_vxc_deriv(mf_grad, dm0):
     return np.asarray(vxc)
 
 
+def _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts):
+    r'''Return the periodic MGGA AO-row derivative including the tau channel.
+
+    PySCF 2.14.0's periodic ``krks.get_vxc`` implements LDA and GGA but
+    raises for MGGA.  The missing term is the response of
+
+    .. math::
+
+       \tau(\mathbf r)=\frac12\sum_{\mu\nu}P_{\mu\nu}
+       \nabla\phi_\mu(\mathbf r)\cdot\nabla\phi_\nu(\mathbf r).
+
+    This helper retains PySCF's ``KNumInt`` density, block loop, libxc
+    weights, and molecular AO derivative contractions.  The factor one half
+    applied to ``v_tau`` follows PySCF's definition of ``tau``.  r2SCAN does
+    not request a density-Laplacian channel in this convention.
+
+    Args:
+        mf_grad : dcforge.cpu.pbc.grad.rhf_dft.Gradients
+            Active fixed-density periodic gradient object.
+        dm0 : ndarray of shape (nao, nao)
+            Closed-shell source RHF density.
+        ni : pyscf.pbc.dft.numint.KNumInt
+            Gamma-point numerical integrator used by the target derivative.
+        kpts : ndarray of shape (1, 3)
+            Explicit Gamma-point axis.
+
+    Returns:
+        ndarray of shape (3, 1, nao, nao)
+            Nuclear AO-row derivative of the target MGGA potential.
+    '''
+    mf = mf_grad.base
+    cell = mf.cell
+    grids = mf.grids
+    density = np.asarray(dm0)[None]
+    make_rho, nset, nao = ni._gen_rho_evaluator(
+        cell, density, hermi=1)
+    if nset != 1:
+        raise ValueError('restricted periodic MGGA requires one density set')
+    ao_loc = cell.ao_loc_nr()
+    vmat = np.zeros((3, nset, 1, nao, nao), dtype=density.dtype)
+    for ao_k1, ao_k2, mask, weight, _coords in ni.block_loop(
+            cell, grids, nao, 2, kpts, None,
+            mf_grad.max_memory):
+        ao_k1 = np.asarray(ao_k1)
+        ao_k2 = np.asarray(ao_k2)
+        rho = make_rho(0, ao_k2[:, :4], mask, 'MGGA')
+        vxc = ni.eval_xc_eff(
+            mf.xc, rho, deriv=1, xctype='MGGA', spin=0)[1]
+        weighted = vxc * weight
+        weighted[0] *= .5
+        weighted[4] *= .5
+        molecular_rks_grad._gga_grad_sum_(
+            vmat[:, 0, 0], cell, ao_k1[0], weighted[:4],
+            mask, ao_loc)
+        molecular_rks_grad._tau_grad_dot_(
+            vmat[:, 0, 0], cell, ao_k1[0], weighted[4],
+            mask, ao_loc, True)
+    return -vmat[:, 0]
+
+
 def grad_vxc(mf_grad, dm0, atmlst):
-    '''Return the fixed-density target XC derivative.'''
+    '''Return the fixed-density target-DFA XC derivative.'''
     mf = mf_grad.base
     v1 = get_vxc_deriv(mf_grad, dm0)
     de = np.zeros((len(atmlst), 3))
@@ -132,7 +195,7 @@ def skeleton_gradient(mf_grad, dm0, foo, Co, h1ao, s1, atmlst,
 
     The returned quantity is
 
-    ``E_hcore^lambda + E_Hxc^lambda - 2 F^PBE_oo S^lambda_oo``.
+    ``E_hcore^lambda + E_Hxc^lambda - 2 F^DFA_oo S^lambda_oo``.
 
     The fixed uniform periodic grid has no atom-centered grid-motion term.
     Nuclear Ewald repulsion is added by ``Gradients.kernel``.

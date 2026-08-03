@@ -35,7 +35,7 @@ class RSDF(rsdf.RSGDF):
             'device': self.device,
             'sampling': 'gamma',
             'reference': 'RHF',
-            'target': 'PBE',
+            'target': ['PBE', 'R2SCAN'],
             'energy': True,
             'analytic_gradient': True,
             'stress': False,

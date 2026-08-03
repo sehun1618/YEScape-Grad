@@ -63,10 +63,35 @@ def grad_short_range_metric(auxcell, omega, atmlst=None):
     return metric1(atmlst)
 
 
+def short_range_metric_coordinate_derivatives(auxcell, omega):
+    r'''Return exact screened RSDF primitive ``ip1`` and ``ip2`` arrays.
+
+    Args:
+        auxcell : pyscf.pbc.gto.Cell
+            Built auxiliary cell in the public RSDF AO ordering.
+        omega : float
+            Positive RSDF metric range-separation parameter.
+
+    Returns:
+        tuple
+            ``(ip1, ip2)``.  ``ip1[x,p,q]`` differentiates the first
+            auxiliary center and ``ip2[x,p,q]`` differentiates the second.
+
+    Notes:
+        This is intentionally lower-level than :func:`grad_short_range_metric`.
+        GPU response code transfers these two exact screened primitives, then
+        performs the observable contraction and atom reduction on the device.
+        It does not transfer an assembled all-atom ``dM`` tensor.
+    '''
+    return (
+        _short_range_integral(auxcell, omega, 'int2c2e_ip1'),
+        _short_range_integral(auxcell, omega, 'int2c2e_ip2'),
+    )
+
+
 def gen_grad_short_range_metric(auxcell, omega):
     r'''Generate atom blocks from one exact screened ``ip1/ip2`` traversal.'''
-    ip1 = _short_range_integral(auxcell, omega, 'int2c2e_ip1')
-    ip2 = _short_range_integral(auxcell, omega, 'int2c2e_ip2')
+    ip1, ip2 = short_range_metric_coordinate_derivatives(auxcell, omega)
     naux = auxcell.nao_nr()
     aoslices = auxcell.aoslice_nr_by_atom()
 
