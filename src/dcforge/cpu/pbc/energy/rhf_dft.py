@@ -36,9 +36,6 @@ def _check_input(mf):
     if not isinstance(mf.with_df, (FFTDF, GDF, RSDF)):
         raise NotImplementedError('unsupported periodic density-fitting provider')
     if isinstance(mf._numint, multigrid.MultiGridNumInt2):
-        if not isinstance(mf.with_df, (GDF, RSDF)):
-            raise NotImplementedError(
-                'multigrid XC requires a GDF or RSDF Hartree provider')
         if cell.ke_cutoff is None or cell.ke_cutoff <= 0:
             raise ValueError(
                 'multigrid XC requires a positive cell.ke_cutoff set '
@@ -56,10 +53,13 @@ def _check_input(mf):
             raise ValueError(
                 'multigrid XC mesh is determined by cell.ke_cutoff and must '
                 'equal cell.mesh')
-        if mf._numint.xc_with_j:
+        if bool(mf._numint.xc_with_j) != bool(mf.multigrid_with_j):
             raise ValueError(
-                'multigrid XC must set xc_with_j=False; '
-                'Hartree is owned by GDF/RSDF')
+                'multigrid Hartree ownership is inconsistent between '
+                'RHFDFT.multigrid_with_j and the numerical integrator')
+    elif mf.multigrid_with_j:
+        raise ValueError(
+            'multigrid_with_j=True requires multigrid_numint(with_j=True)')
     if isinstance(mf.with_df, FFTDF) and not np.array_equal(
             np.asarray(mf.with_df.mesh), np.asarray(cell.mesh)):
         raise ValueError(
@@ -113,7 +113,8 @@ class RHFDFT(_DFJK, rks.RKS):
         'mf_hf', 'e_hf', 'e_dft', 'dm_hf', 'target_fock',
         'target_fock_signature',
         'multigrid_ntasks', 'multigrid_ke_ratio',
-        'multigrid_rel_cutoff',
+        'multigrid_rel_cutoff', 'multigrid_with_j',
+        'multigrid_backend',
     }
     _hf_options = (
         'max_memory', 'verbose', 'stdout', 'chkfile', 'conv_tol',
@@ -152,6 +153,8 @@ class RHFDFT(_DFJK, rks.RKS):
         self.multigrid_ntasks = _MULTIGRID_NTASKS_DEFAULT
         self.multigrid_ke_ratio = _MULTIGRID_KE_RATIO_DEFAULT
         self.multigrid_rel_cutoff = _MULTIGRID_REL_CUTOFF_DEFAULT
+        self.multigrid_with_j = False
+        self.multigrid_backend = None
 
     def kernel_hf(self, dm0=None, **kwargs):
         '''Run source RHF with the active FFTDF/GDF/RSDF provider.'''
@@ -210,7 +213,7 @@ class RHFDFT(_DFJK, rks.RKS):
         That split is correct when multigrid owns Hartree, but it would omit
         the long-range local potential when ``xc_with_j=False``.  The hybrid
         DC-Forge route instead keeps the complete one-electron Hamiltonian in
-        the same GDF/RSDF representation as source RHF and Hartree.
+        the same FFTDF/GDF/RSDF representation as source RHF and Hartree.
         '''
         return self.mf_hf.get_hcore(cell=cell, kpt=kpt)
 
@@ -235,18 +238,19 @@ class RHFDFT(_DFJK, rks.RKS):
         return self._set_provider(with_df)
 
     def multigrid_numint(self, mesh=None, ntasks=None, ke_ratio=None,
-                         rel_cutoff=None):
-        r'''Apply PySCF multigrid numerical integration to target XC only.
+                         rel_cutoff=None, with_j=False):
+        r'''Apply PySCF multigrid to target XC and optionally target Hartree.
 
-        This method preserves the source/target GDF or RSDF provider.  In
-        particular, source RHF J/K, the source CPHF action, target Hartree J,
-        and their nuclear derivatives continue to use ``with_df``.  Only
-        :math:`E_{\rm xc}`, :math:`V_{\rm xc}`, and the explicit
-        :math:`V_{\rm xc}^{I\alpha}` derivative use the multigrid mesh.
+        This method preserves the source/target FFTDF, GDF or RSDF provider.  In
+        Source RHF J/K and the source CPHF action always continue to use
+        ``with_df``.  With ``with_j=False`` (the default), target Hartree also
+        uses that provider and multigrid owns only XC.  With ``with_j=True``,
+        fixed-density target :math:`J+V_{\rm xc}` and its explicit nuclear
+        derivative are evaluated together by multigrid.
 
         The returned object follows ``pyscf.pbc.dft.rks.RKS`` convention and
-        is a shallow copy.  It shares the source RHF object and its Gaussian
-        DF provider with ``self`` but owns a new ``MultiGridNumInt2`` object.
+        is a shallow copy.  It shares the source RHF object and its active DF
+        provider with ``self`` but owns a new ``MultiGridNumInt2`` object.
 
         Kwargs:
             mesh : None
@@ -265,12 +269,14 @@ class RHFDFT(_DFJK, rks.RKS):
             rel_cutoff : float or None
                 Relative real-space cutoff passed to PySCF's multigrid task
                 builder.  The default is ``20.0``.
+            with_j : bool
+                If ``True``, include target Hartree J in the multigrid
+                energy, Fock, and explicit derivative.
 
         Returns:
             dcforge.cpu.pbc.energy.rhf_dft.RHFDFT
                 A copied workflow whose target XC numerical integrator is
-                multigrid and whose Hartree contribution is excluded from
-                that integrator.
+                multigrid with the requested target-Hartree ownership.
         '''
         if mesh is not None:
             raise ValueError(
@@ -288,6 +294,9 @@ class RHFDFT(_DFJK, rks.RKS):
         ntasks = int(ntasks)
         ke_ratio = float(ke_ratio)
         rel_cutoff = float(rel_cutoff)
+        if not isinstance(with_j, (bool, np.bool_)):
+            raise TypeError('multigrid with_j must be boolean')
+        with_j = bool(with_j)
         if ntasks < 2:
             raise ValueError('multigrid ntasks must be at least 2')
         if ke_ratio <= 1:
@@ -311,11 +320,15 @@ class RHFDFT(_DFJK, rks.RKS):
         ni.ntasks = ntasks
         ni.ke_ratio = ke_ratio
         ni.rel_cutoff = rel_cutoff
-        ni.xc_with_j = False
+        ni.xc_with_j = with_j
         mf._numint = ni
         mf.multigrid_ntasks = ntasks
         mf.multigrid_ke_ratio = ke_ratio
         mf.multigrid_rel_cutoff = rel_cutoff
+        mf.multigrid_with_j = with_j
+        mf.multigrid_backend = (
+            'pyscf_multigrid_j_xc' if with_j
+            else 'pyscf_multigrid_xc_only')
         mf.e_dft = mf.dm_hf = mf.target_fock = None
         mf.target_fock_signature = None
         if mf.e_hf is not None:
@@ -379,7 +392,7 @@ def _target_fock_signature(mf, dm):
     provider = mf.with_df
     ni = mf._numint
     values = [
-        str(mf.xc), id(provider),
+        str(mf.xc), id(provider), bool(mf.multigrid_with_j),
         type(ni).__module__, type(ni).__name__,
         np.asarray(mf.cell.atom_coords()).tobytes(),
         np.asarray(mf.cell.lattice_vectors()).tobytes(),

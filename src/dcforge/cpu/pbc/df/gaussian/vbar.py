@@ -16,6 +16,15 @@ def vbar_source(cell, auxcell, omega):
         cell, auxcell, omega)[None]
 
 
+def vbar_source_kpts(cell, auxcell, omega, kpt):
+    r'''Return the zero-transfer source at an absolute Bloch k-point.'''
+    kpt = _kpoint(kpt)
+    overlap = np.asarray(cell.pbc_intor(
+        'int1e_ovlp', hermi=1, kpts=kpt.reshape(1, 3)))[0]
+    return -overlap.reshape(cell.nao_nr() ** 2, 1) * _vbar(
+        cell, auxcell, omega)[None]
+
+
 def grad_vbar_source(cell, auxcell, omega, atmlst=None):
     r'''Return the fixed-cell derivative :math:`(B^{vbar})^\lambda`.
 
@@ -59,6 +68,41 @@ def gen_grad_vbar_source(cell, auxcell, omega):
     return source1
 
 
+def grad_vbar_source_kpts(cell, auxcell, omega, kpt, atmlst=None):
+    r'''Return the zero-transfer source derivative at absolute k.
+
+    Auxiliary charges and cell volume are invariant under a fixed-cell
+    nuclear displacement.  Only the two primary overlap centers respond.
+    '''
+    kpt = _kpoint(kpt)
+    if atmlst is None:
+        atmlst = range(cell.natm)
+    atmlst = [int(ia) for ia in atmlst]
+    s1 = -np.asarray(cell.pbc_intor(
+        'int1e_ipovlp', kpts=kpt.reshape(1, 3)))[0]
+    nao = cell.nao_nr()
+    naux = auxcell.nao_nr()
+    coefficient = _vbar(cell, auxcell, omega)
+    aoslices = cell.aoslice_nr_by_atom()
+    value = np.zeros(
+        (len(atmlst), 3, nao, nao, naux), dtype=s1.dtype)
+    for k, ia in enumerate(atmlst):
+        p0, p1 = aoslices[ia, 2:]
+        overlap1 = np.zeros_like(s1)
+        overlap1[:, p0:p1] += s1[:, p0:p1]
+        overlap1[:, :, p0:p1] += s1[:, p0:p1].transpose(
+            0, 2, 1).conj()
+        value[k] = -overlap1[:, :, :, None] * coefficient
+    return value.reshape(len(atmlst), 3, nao * nao, naux)
+
+
 def _vbar(cell, auxcell, omega):
     charge = np.asarray(rsdf.get_aux_chg(auxcell), dtype=float)
     return np.pi * charge / (float(omega) ** 2 * float(cell.vol))
+
+
+def _kpoint(value):
+    value = np.asarray(value, dtype=float)
+    if value.shape != (3,):
+        raise ValueError(f'k-point must have shape (3,), got {value.shape}')
+    return value

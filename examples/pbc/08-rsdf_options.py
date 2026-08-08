@@ -37,6 +37,22 @@ mf.with_df.source_reciprocal_gamma_conjugate_symmetry = True
 # Live arrays and the mathematical order of terms are unchanged.
 mf.with_df.response_release_cached_blocks = True
 
+# Production keeps central CDERI and reverse adjoints in unique Gamma AO-pair
+# storage, then evaluates target-J and source-Fock observables sequentially.
+# dense is an intentionally higher-memory numerical oracle.
+mf.with_df.response_mode = 'sequential_packed'  # or 'dense'
+mf.with_df.response_pair_block_size = 8192
+mf.with_df.response_auxiliary_block_size = 32
+
+# mapped_host is the fast GPU4PySCF central storage.  hdf5 preserves the same
+# factors and streams auxiliary blocks when pinned host RAM is the limiting
+# resource.  This does not by itself reduce the temporary GPU response source.
+mf.with_df.cderi_storage = 'mapped_host'  # or 'hdf5'
+mf.with_df.cderi_storage_path = None
+mf.with_df.cderi_storage_block_size = 256
+mf.with_df.cderi_preflight_max_bytes = None
+mf.with_df.release_cderi_after_response = False
+
 # Local-GTH part 1 is independent of both RSDF range separations.
 mf.with_df.pp_loc_part1_omega = None
 mf.run()
@@ -46,6 +62,7 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_residual_tol=1e-8,
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
+    df_cphf_response_mode='direct_vo',
     hcore_method='auto',
 ).run()
 
@@ -59,6 +76,7 @@ print(f'  local GTH part-1 plan = {mf.with_df.get_pp_loc_part1_plan()}')
 print('Implementation/storage settings actually used')
 print(f'  Hcore backend = {mf_grad.hcore_backend}')
 print(f'  source reciprocal = {mf_grad.rsdf_source_reciprocal}')
+print(f'  central CDERI = {mf.with_df.cderi_memory_report()}')
 print('  response cache releases = '
       f'{mf_grad.rsdf_response_metadata["memory_releases"]}')
 print('Result invariants')
@@ -88,3 +106,13 @@ print('  term recomposition max abs = '
 # mf.with_df.omega = .3
 # mf.with_df.omega_j2c = .4
 # mf.run()
+
+
+#
+# Case 4: dense response oracle or HDF5 central storage
+#
+# mf = RHFDFT(cell, xc='PBE').rs_density_fit(auxbasis='gth-szv')
+# mf.with_df.response_mode = 'dense'
+# mf.with_df.cderi_storage = 'hdf5'
+# mf.run()
+# mf_grad = mf.nuc_grad_method().run()

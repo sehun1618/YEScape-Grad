@@ -16,8 +16,11 @@ from dcforge.cpu.pbc.df.gaussian.cderi import (
 )
 from dcforge.cpu.pbc.df.gaussian.jk import (
     grad_ewald_exchange,
+    grad_ewald_exchange_kpts,
     grad_j_energy,
+    grad_j_energy_kpts,
     grad_jk,
+    grad_jk_kpts,
 )
 from dcforge.cpu.pbc.df.gaussian.metric import (
     g0_metric,
@@ -47,7 +50,8 @@ __all__ = [
     'g0_metric', 'grad_cderi',
     'grad_cderi_all',
     'grad_cderi_with_factor',
-    'grad_ewald_exchange', 'grad_j_energy', 'grad_jk',
+    'grad_ewald_exchange', 'grad_ewald_exchange_kpts', 'grad_j_energy',
+    'grad_j_energy_kpts', 'grad_jk', 'grad_jk_kpts',
     'grad_long_range_metric', 'grad_long_range_source',
     'grad_short_range_source', 'grad_three_center_source',
     'grad_vbar_source', 'load_cderi', 'long_range_metric',

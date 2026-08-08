@@ -126,6 +126,82 @@ def gen_grad_long_range_source(
     return source1
 
 
+def long_range_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj):
+    r'''Return sampled-k :math:`B^{LR}(k_i,k_j)`.
+
+    The AO-pair transform carries the absolute Bloch pair while the Coulomb
+    kernel and auxiliary transform carry momentum transfer
+    ``q = kptj-kpti``.
+    '''
+    context = _context_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj)
+    Gv, Gvbase, reciprocal, gxyz, coulG, auxG, kpti, kptj, q = context
+    ao_pair = ft_ao.ft_aopair(
+        cell, Gv, aosym='s1', b=reciprocal, gxyz=gxyz,
+        Gvbase=Gvbase, kpti_kptj=np.asarray((kpti, kptj)), q=q,
+        intor='GTO_ft_ovlp', comp=1)
+    return lib.einsum(
+        'Gij,PG->ijP', ao_pair, (auxG * coulG).conj()).reshape(
+            cell.nao_nr() ** 2, auxcell.nao_nr())
+
+
+def grad_long_range_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj, atmlst=None):
+    r'''Return sampled-k :math:`(B^{LR}(k_i,k_j))^\lambda`.
+
+    Primary i/j-center Fourier derivatives use the package C callbacks while
+    the auxiliary-center derivative is the analytic phase derivative
+    ``-i(G+q) P(G+q)``.  All three contributions retain their complex Bloch
+    phase until the final full-BZ energy contraction.
+    '''
+    if atmlst is None:
+        atmlst = range(cell.natm)
+    atmlst = [int(ia) for ia in atmlst]
+    context = _context_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj)
+    Gv, Gvbase, reciprocal, gxyz, coulG, auxG, kpti, kptj, q = context
+    supmol = _fourier_supermolecule_kpts(cell, kptj)
+    kernel_i = gen_ft_center_derivative_kernel(
+        supmol, 'i', return_complex=True)
+    kernel_j = gen_ft_center_derivative_kernel(
+        supmol, 'j', return_complex=True)
+    common = (Gv, gxyz, Gvbase)
+    ip_i = kernel_i(
+        *common, q=q, kptjs=np.asarray((kptj,)))[0]
+    ip_j = kernel_j(
+        *common, q=q, kptjs=np.asarray((kptj,)))[0]
+    weighted_aux = (auxG * coulG).conj()
+    nao = cell.nao_nr()
+    naux = auxcell.nao_nr()
+    value = np.zeros(
+        (len(atmlst), 3, nao, nao, naux), dtype=np.complex128)
+    aoslices = cell.aoslice_nr_by_atom()
+    for k, ia in enumerate(atmlst):
+        p0, p1 = aoslices[ia, 2:]
+        value[k, :, p0:p1] -= lib.einsum(
+            'xGij,PG->xijP', ip_i[:, :, p0:p1], weighted_aux)
+        value[k, :, :, p0:p1] -= lib.einsum(
+            'xGij,PG->xijP', ip_j[:, :, :, p0:p1], weighted_aux)
+
+    ao_pair = ft_ao.ft_aopair(
+        cell, Gv, aosym='s1', b=reciprocal, gxyz=gxyz,
+        Gvbase=Gvbase, kpti_kptj=np.asarray((kpti, kptj)), q=q,
+        intor='GTO_ft_ovlp', comp=1)
+    momentum = Gv + q
+    auxslices = auxcell.aoslice_nr_by_atom()
+    for k, ia in enumerate(atmlst):
+        p0, p1 = auxslices[ia, 2:]
+        for xyz in range(3):
+            auxG1 = (
+                -1j * momentum[:, xyz][None] * auxG[p0:p1])
+            value[k, xyz, :, :, p0:p1] += lib.einsum(
+                'Gij,PG->ijP', ao_pair,
+                (auxG1 * coulG).conj())
+    return _real_if_close(
+        value.reshape(len(atmlst), 3, nao * nao, naux))
+
+
 def _grad_primary_source(
         cell, context, atmlst, kernel_i, kernel_j, weighted_aux,
         max_memory):
@@ -297,6 +373,47 @@ def _fourier_supermolecule(cell):
     supmol = ft_ao.ExtendedMole.from_cell(
         rs_cell, bvk_mesh, rcut.max(), log)
     return supmol.strip_basis(rcut)
+
+
+def _context_kpts(cell, auxcell, omega, mesh, kpti, kptj):
+    '''Return reciprocal intermediates for one absolute Bloch pair.'''
+    mesh = _mesh(mesh)
+    kpti = _kpoint(kpti)
+    kptj = _kpoint(kptj)
+    q = kptj - kpti
+    Gv, Gvbase, _weights = cell.get_Gv_weights(mesh)
+    reciprocal = cell.reciprocal_vectors()
+    gxyz = lib.cartesian_prod(
+        [np.arange(len(values)) for values in Gvbase])
+    with_df = rsdf.RSGDF(cell, kpts=np.asarray((kpti, kptj)))
+    with_df.auxcell = auxcell
+    coulG = with_df.weighted_coulG(q, mesh=mesh)
+    coulG -= with_df.weighted_coulG(
+        q, mesh=mesh, omega=-abs(float(omega)))
+    auxG = ft_ao.ft_ao(
+        auxcell, Gv, None, reciprocal, gxyz, Gvbase, q).T
+    return (
+        Gv, Gvbase, reciprocal, gxyz, coulG, auxG,
+        kpti, kptj, q)
+
+
+def _fourier_supermolecule_kpts(cell, kptj):
+    '''Return PySCF's BvK Fourier supermolecule for one ket k-point.'''
+    log = logger.new_logger(cell, 0)
+    rs_cell = ft_ao._RangeSeparatedCell.from_cell(
+        cell, ft_ao.KECUT_THRESHOLD, ft_ao.RCUT_THRESHOLD, log)
+    bvk_mesh = k2gamma.kpts_to_kmesh(cell, np.asarray((kptj,)))
+    rcut = ft_ao.estimate_rcut(rs_cell)
+    supmol = ft_ao.ExtendedMole.from_cell(
+        rs_cell, bvk_mesh, rcut.max(), log)
+    return supmol.strip_basis(rcut)
+
+
+def _kpoint(value):
+    value = np.asarray(value, dtype=float)
+    if value.shape != (3,):
+        raise ValueError(f'k-point must have shape (3,), got {value.shape}')
+    return value
 
 
 def _mesh(mesh):

@@ -2,6 +2,7 @@
 
 import numpy as np
 from pyscf import lib
+from pyscf.pbc.lib.kpts_helper import gamma_point
 
 from dcforge.cpu.pbc.df.gaussian.local_part1 import LocalPart1Derivative
 from dcforge.cpu.pbc.df.gaussian.local_part2 import (
@@ -58,8 +59,7 @@ def contract_hcore_deriv(cell, kpts, densities, atmlst=None):
         cell : pyscf.pbc.gto.Cell
             Built periodic cell.
         kpts : ndarray of shape (nkpts, 3)
-            Explicit k-points; the current DC-Forge production route uses
-            Gamma only.
+            Explicit Gamma or full-BZ sampled k-points.
         densities : ndarray of shape (nset,nkpts,nao,nao)
             Hermitian AO density sources.
 
@@ -101,8 +101,16 @@ def contract_hcore_deriv(cell, kpts, densities, atmlst=None):
     # PySCF contracts local part 2 directly in its periodic integral driver.
     # The full LocalPart2Derivative route remains in get_hcore_deriv as a
     # matrix oracle, while production avoids its atom-by-AO-square tensors.
-    local2 = contract_vpploc_part2_deriv(
-        cell, batch, kpts=kpts, atmlst=atmlst)
+    if len(kpts) == 1 and gamma_point(kpts):
+        local2 = contract_vpploc_part2_deriv(
+            cell, batch, kpts=kpts, atmlst=atmlst)
+    else:
+        # PySCF's density-contracted C endpoint is Gamma-only.  The explicit
+        # sampled-k integral driver caches its three-center primitives and
+        # contracts every requested density immediately, retaining scalar
+        # ``(nset,natm,3)`` output rather than the full Hcore derivative.
+        local2 = LocalPart2Derivative(
+            cell, kpts).contract_batch(batch, atmlst)
     nonlocal1 = contract_vppnl_deriv(
         cell, batch, kpts=kpts, atmlst=atmlst)
     components = {

@@ -15,7 +15,9 @@ retries an uncommitted block at a smaller size after a CUDA allocation error.
 Production also evaluates one representative of each exact ``G,-G``
 conjugate pair with its integer multiplicity.  This preserves the complete
 reciprocal weight and algebraic source; the unreduced full-grid route remains
-an explicit numerical oracle.
+an explicit numerical oracle.  Expanding a unique-pair primitive adjoint back
+to the raw libpbc AO-pair order is likewise blocked: production never
+materialises the complete ``selected[:, inverse]`` advanced-indexing result.
 '''
 
 import ctypes
@@ -40,6 +42,7 @@ from gpu4pyscf.pbc.df.rsdf_builder import _guess_omega, _weighted_coulG_kpts
 from pyscf import lib
 from pyscf.gto import ATOM_OF
 
+from dcforge.gpu.pbc.df.cderi import canonical_pair_layout
 from dcforge.gpu.pbc.df.gaussian.ewald import (
     cross_derivative as ewald_cross_derivative,
 )
@@ -52,10 +55,17 @@ from dcforge.gpu.pbc.df.gaussian.reciprocal import (
     plan_gamma_reciprocal_blocks,
 )
 from dcforge.gpu.pbc.df.gdf.adjoint import (
-    build_rhf_primitive_adjoint,
+    build_rhf_packed_primitive_adjoint,
     build_rhf_primitive_adjoint_channels,
 )
 from dcforge.gpu.pbc.df.gdf.two_channel import get_short_range_kernel
+
+# A power-of-two AO-pair tile keeps the largest gather bounded while retaining
+# enough work per CuPy kernel.  Water64/GTH-DZVP/ETB was validated at this
+# value: the blocked route removed the full 12.8-GiB gather without measurable
+# end-to-end slowdown.  This is an implementation batch, not a scientific
+# approximation or a user convergence parameter.
+_PACKED_SOURCE_PAIR_BLOCK_SIZE = 1 << 15
 
 
 class _SignedState:
@@ -76,6 +86,14 @@ class _SignedState:
     def rank(self):
         '''Return the low-rank factor width used by the native contractions.'''
         return int(self.factor_l.shape[1])
+
+
+class _PackedPrimitiveSource:
+    '''Unique real-Gamma AO-pair source plus its symmetry metadata.'''
+
+    def __init__(self, values, layout):
+        self.values = cp.asarray(values)
+        self.layout = layout
 
 
 def signed_hf_bilinear_derivative(mf_hf, dm0, dz, atmlst=None,
@@ -158,7 +176,7 @@ def coulomb_energy_derivative(mf_hf, dm, atmlst=None, return_metadata=False):
 
 
 def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
-                             return_metadata=False):
+                             return_metadata=False, profile_detail=False):
     r'''Return the fused target-J and signed source-Fock two-electron term.
 
     The result is
@@ -182,6 +200,10 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
     auxiliary ``dM`` metric, and Ewald components.  Those components audit
     the fused observable; they are not a claim that target J and source Fock
     were dispatched as separate native derivatives.
+
+    ``profile_detail=True`` is a validation-only timing request.  It splits
+    metric inversion, ``M^{-1}B`` solution and packed-adjoint construction;
+    it changes no GDF tensor, block size or derivative term.
     '''
     provider = mf_hf.with_df
     _check_gamma_gdf(provider, dm0, dz)
@@ -195,7 +217,11 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
     _finish_profile_stage(profile, 'optimizer_seconds', stage_start)
     value, metadata = _direct_adjoint_derivative(
         intopt, dm0, dz, exxdiv=mf_hf.exxdiv,
-        reciprocal_options=_reciprocal_options(provider))
+        reciprocal_options=_reciprocal_options(provider),
+        adjoint_options=_adjoint_options(provider),
+        profile_detail=profile_detail)
+    provider.adjoint_host_cache_plan = metadata['adjoint'].get(
+        'host_cache_plan')
     metadata['profile']['optimizer_seconds'] = profile['optimizer_seconds']
     atoms = _atmlst(cell, atmlst)
     value = cp.asarray(value[atoms])
@@ -203,6 +229,46 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
         # The native traversal produces all-atom source/metric/Ewald pieces
         # alongside its final reduction.  Keep the metadata shape consistent
         # with the requested atom subset just as the public return value is.
+        metadata['term_components'] = {
+            name: np.asarray(component, dtype=float)[atoms]
+            for name, component in metadata['term_components'].items()
+        }
+        return value, metadata
+    return value
+
+
+def fock_bilinear_derivative(mf_hf, dm0, dz, atmlst=None,
+                             return_metadata=False, profile_detail=False):
+    r'''Return ``Q[P+D_Z]^lambda-Q[P-D_Z]^lambda`` by direct adjoint.
+
+    This is the source-Fock-only counterpart of
+    :func:`target_j_fock_derivative`.  It is used when target Hartree belongs
+    to multigrid and therefore must not be included in the Gaussian response.
+    The direct ``P,D_Z`` adjoint is algebraically identical to signed
+    polarization but builds one primitive three-center tensor instead of the
+    two full-rank ``P+D_Z`` and ``P-D_Z`` states.
+
+    ``profile_detail=True`` enables the same validation-only metric/adjoint
+    timing decomposition as :func:`target_j_fock_derivative`.
+    '''
+    provider = mf_hf.with_df
+    _check_gamma_gdf(provider, dm0, dz)
+    if provider.auxcell is None:
+        provider.build(j_only=False)
+    cell = provider.cell
+    intopt = SRInt3c2eOpt(
+        cell, provider.auxcell, float(_guess_omega(cell)), None).build()
+    value, metadata = _direct_adjoint_derivative(
+        intopt, dm0, dz, exxdiv=mf_hf.exxdiv,
+        reciprocal_options=_reciprocal_options(provider),
+        adjoint_options=_adjoint_options(provider),
+        include_target_j=False, response_sign=1.,
+        profile_detail=profile_detail)
+    provider.adjoint_host_cache_plan = metadata['adjoint'].get(
+        'host_cache_plan')
+    atoms = _atmlst(cell, atmlst)
+    value = cp.asarray(value[atoms])
+    if return_metadata:
         metadata['term_components'] = {
             name: np.asarray(component, dtype=float)[atoms]
             for name, component in metadata['term_components'].items()
@@ -361,6 +427,24 @@ def _reciprocal_options(provider):
     return options
 
 
+def _adjoint_options(provider):
+    '''Read provider-owned real-Gamma packed-adjoint execution controls.'''
+    options = {
+        'auxiliary_block_size': int(provider.adjoint_auxiliary_block_size),
+        'storage': str(provider.adjoint_storage),
+        'host_cache': str(provider.adjoint_host_cache),
+        'host_memory_fraction': float(
+            provider.adjoint_host_memory_fraction),
+        'host_minimum_reserve_bytes': int(
+            provider.adjoint_host_minimum_reserve_bytes),
+        'host_max_bytes': provider.adjoint_host_max_bytes,
+        'host_cache_fallback': bool(provider.adjoint_host_cache_fallback),
+    }
+    if options['host_max_bytes'] is not None:
+        options['host_max_bytes'] = int(options['host_max_bytes'])
+    return options
+
+
 def _is_gpu_out_of_memory(error):
     '''Identify CUDA allocation failures that can be safely rebached.'''
     if isinstance(error, cp.cuda.memory.OutOfMemoryError):
@@ -420,7 +504,7 @@ def _signed_derivative(intopt, states, exxdiv, reciprocal_options):
         cart=True, original_ao_order=False)[0]
     i_addr, j_addr = divmod(pair_addresses, nao)
     naux = int(auxcell.ao_loc[-1])
-    batch_size, aux_block = _work_blocks(
+    batch_size, aux_block, three_center_plan = _work_blocks(
         states, len(pair_addresses), naux, len(intopt.bvkmesh_Ls))
 
     _build_three_center_occupied(
@@ -438,11 +522,13 @@ def _signed_derivative(intopt, states, exxdiv, reciprocal_options):
     stage_start = _finish_profile_stage(
         profile, 'three_center_reciprocal_seconds', stage_start)
     metric_inverse = _metric_inverse(auxcell, metric)
+    del metric
+    solve_plans = []
     for state in states:
-        state.three_center_oo = cp.einsum(
-            'uv,vij->uij', metric_inverse, state.three_center_oo,
-            optimize=True)
+        solve_plans.append(_solve_three_center_inplace(
+            metric_inverse, state.three_center_oo))
         state.aux_vector = state.three_center_oo.trace(axis1=1, axis2=2)
+    del metric_inverse
 
     metric_source = _metric_source(states, naux)
     stage_start = _finish_profile_stage(
@@ -484,6 +570,8 @@ def _signed_derivative(intopt, states, exxdiv, reciprocal_options):
         'reciprocal_plan': reciprocal.plan_metadata(),
         'reciprocal_zero_order': reciprocal.zero_order_execution.as_dict(),
         'reciprocal_derivative': derivative_execution.as_dict(),
+        'three_center_workspace_plan': three_center_plan,
+        'metric_solve_workspace_plans': solve_plans,
         'profile': profile,
         'term_components': term_components,
         'term_component_residual_max_abs': float(np.max(np.abs(
@@ -492,8 +580,10 @@ def _signed_derivative(intopt, states, exxdiv, reciprocal_options):
     return np.asarray(value, dtype=float), metadata
 
 
-def _direct_adjoint_derivative(intopt, reference_density, response_density,
-                               exxdiv, reciprocal_options):
+def _direct_adjoint_derivative(
+        intopt, reference_density, response_density, exxdiv,
+        reciprocal_options, include_target_j=True, response_sign=-1.,
+        profile_detail=False, adjoint_options=None):
     r'''Apply the fused target-J/Z term through one primitive reverse adjoint.
 
     ``_signed_derivative`` is retained as the polarization reference route for
@@ -520,6 +610,20 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
             Source exchange divergence convention.
         reciprocal_options : dict
             Provider-owned bounded reciprocal workspace policy.
+        adjoint_options : dict or None
+            Provider-owned real-Gamma source block, host-cache and fallback
+            policy.  ``None`` retains the low-level two-pass defaults used by
+            algebra tests and internal oracles.
+        include_target_j : bool
+            Include the target ``E_J[P]^lambda`` derivative.  False selects
+            the source-Fock polarization alone for an MG-owned target J.
+        response_sign : {+1., -1.}
+            Sign of ``Q[P+D_Z]^lambda-Q[P-D_Z]^lambda``.
+        profile_detail : bool
+            Split the combined metric/adjoint wall time and record packed-
+            adjoint pass timings.  This adds synchronization and CUDA events
+            for profiling only; the mathematical and memory schedulers are
+            unchanged.
 
     Returns:
         tuple
@@ -527,6 +631,10 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
             metadata.
     '''
     profile = {}
+    adjoint_options = {} if adjoint_options is None else dict(adjoint_options)
+    response_sign = float(response_sign)
+    if response_sign not in (-1., 1.):
+        raise ValueError('response_sign must be +1 or -1')
     total_start = time.perf_counter()
     stage_start = total_start
     cell = intopt.cell
@@ -534,19 +642,16 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
     reference_state = _make_state(cell, reference_density, 0., 0.)
     response_state = _make_state(cell, response_density, 0., 0.)
     nao = int(reference_state.density_sorted.shape[0])
-    identity = cp.eye(nao, dtype=cp.float64)
-    primitive_state = _SignedState(
-        0., 0., identity, identity,
-        cp.asarray(reference_density.real, dtype=cp.float64), identity)
     pair_addresses = intopt.pair_and_diag_indices(
         cart=True, original_ao_order=False)[0]
     i_addr, j_addr = divmod(pair_addresses, nao)
+    pair_layout = canonical_pair_layout(pair_addresses, nao)
     naux = int(auxcell.ao_loc[-1])
-    batch_size, aux_block = _work_blocks(
-        (primitive_state,), len(pair_addresses), naux, len(intopt.bvkmesh_Ls))
-    _build_three_center_occupied(
-        intopt, (primitive_state,), pair_addresses, i_addr, j_addr,
-        batch_size=batch_size, aux_block=aux_block)
+    batch_size, aux_block, three_center_plan = _work_blocks_packed(
+        len(pair_addresses), int(pair_layout['unique_pair_count']), naux,
+        len(intopt.bvkmesh_Ls), nao)
+    solved = _build_three_center_packed(
+        intopt, pair_layout, batch_size=batch_size, aux_block=aux_block)
     stage_start = _finish_profile_stage(
         profile, 'three_center_short_range_seconds', stage_start)
 
@@ -554,22 +659,46 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
         auxcell, intopt.omega, auxcell.precision * 1e-6)
     int2opt = Int2c2eOpt(auxcell)
     metric = int2opt.int2c2e(sort_output=False)
-    reciprocal = _add_zero_order_reciprocal(
-        intopt, (primitive_state,), metric, i_addr, j_addr,
+    reciprocal = _add_zero_order_reciprocal_packed(
+        intopt, solved, pair_layout, metric, i_addr, j_addr,
         reciprocal_options)
     stage_start = _finish_profile_stage(
         profile, 'three_center_reciprocal_seconds', stage_start)
+    combined_start = stage_start
+    metric_inverse_start = stage_start
     metric_inverse = _metric_inverse(auxcell, metric)
-    solved = cp.einsum(
-        'uv,vij->uij', metric_inverse, primitive_state.three_center_oo,
-        optimize=True)
-    primitive_state.three_center_oo = None
+    del metric
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_inverse_seconds', metric_inverse_start)
+    metric_solve_start = stage_start
+    metric_solve_plan = _solve_three_center_inplace(metric_inverse, solved)
     del metric_inverse
-    source, metric_source, adjoint_metadata = build_rhf_primitive_adjoint(
-        solved, reference_state.density_sorted, response_state.density_sorted,
-        include_target_j=True, response_sign=-1.)
-    stage_start = _finish_profile_stage(
-        profile, 'metric_solve_and_adjoint_seconds', stage_start)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_solve_seconds', metric_solve_start)
+    adjoint_start = stage_start
+    source, metric_source, adjoint_metadata = (
+        build_rhf_packed_primitive_adjoint(
+        solved, pair_layout, reference_state.density_sorted,
+        response_state.density_sorted,
+        include_target_j=include_target_j, response_sign=response_sign,
+        overwrite_solved=True, profile_detail=profile_detail,
+        **adjoint_options))
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'adjoint_seconds', adjoint_start)
+        profile.update({
+            f'adjoint_{name}': value
+            for name, value in (adjoint_metadata.get('profile') or {}).items()
+        })
+        profile['metric_solve_and_adjoint_seconds'] = sum(
+            profile[name] for name in (
+                'metric_inverse_seconds', 'metric_solve_seconds',
+                'adjoint_seconds'))
+    else:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_solve_and_adjoint_seconds', combined_start)
     solved_bytes = int(solved.nbytes)
     del solved
     # Returning ``solved`` to CuPy's pool is enough: the ensuing LR/SR
@@ -590,17 +719,19 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
         profile, 'metric_derivative_seconds', stage_start)
     long_range, derivative_execution, long_range_components = _long_range_derivative(
         intopt, reciprocal, (), metric_source, nao, naux,
-        primitive_source=source, return_components=True)
+        primitive_source=_PackedPrimitiveSource(source, pair_layout),
+        return_components=True)
     stage_start = _finish_profile_stage(
         profile, 'long_range_derivative_seconds', stage_start)
     value += long_range
     short_range, short_range_components = _short_range_derivative(
         intopt, (), pair_addresses, batch_size, aux_block, nao, naux,
-        primitive_source=source, return_components=True)
+        primitive_source=_PackedPrimitiveSource(source, pair_layout),
+        return_components=True)
     value += short_range
     stage_start = _finish_profile_stage(
         profile, 'short_range_derivative_seconds', stage_start)
-    ewald = ewald_cross_derivative(
+    ewald = -response_sign * ewald_cross_derivative(
         cell, reference_state.density_physical,
         response_state.density_physical, exxdiv)
     value += ewald
@@ -628,9 +759,15 @@ def _direct_adjoint_derivative(intopt, reference_density, response_density,
         'reciprocal_plan': reciprocal.plan_metadata(),
         'reciprocal_zero_order': reciprocal.zero_order_execution.as_dict(),
         'reciprocal_derivative': derivative_execution.as_dict(),
+        'three_center_workspace_plan': three_center_plan,
+        'metric_solve_workspace_plan': metric_solve_plan,
         'adjoint': adjoint_metadata,
+        'include_target_j': bool(include_target_j),
+        'response_sign': response_sign,
         'profile': profile,
         'solved_three_center_bytes': solved_bytes,
+        'dense_solved_three_center_bytes_avoided': int(
+            naux * (nao ** 2 - int(pair_layout['unique_pair_count'])) * 8),
         # Two full-rank polarization tensors of this shape are absent.
         'signed_state_full_rank_bytes_avoided': 2 * naux * nao ** 2 * 8,
         'term_components': term_components,
@@ -666,7 +803,7 @@ def _direct_adjoint_derivative_channels(intopt, reference_density,
         cart=True, original_ao_order=False)[0]
     i_addr, j_addr = divmod(pair_addresses, nao)
     naux = int(auxcell.ao_loc[-1])
-    batch_size, aux_block = _work_blocks(
+    batch_size, aux_block, three_center_plan = _work_blocks(
         (primitive_state,), len(pair_addresses), naux, len(intopt.bvkmesh_Ls))
     _build_three_center_occupied(
         intopt, (primitive_state,), pair_addresses, i_addr, j_addr,
@@ -684,15 +821,16 @@ def _direct_adjoint_derivative_channels(intopt, reference_density,
     stage_start = _finish_profile_stage(
         profile, 'three_center_reciprocal_seconds', stage_start)
     metric_inverse = _metric_inverse(auxcell, metric)
-    solved = cp.einsum(
-        'uv,vij->uij', metric_inverse, primitive_state.three_center_oo,
-        optimize=True)
-    primitive_state.three_center_oo = None
+    del metric
+    metric_solve_plan = _solve_three_center_inplace(
+        metric_inverse, primitive_state.three_center_oo)
+    solved = primitive_state.three_center_oo
     del metric_inverse
     target, fock, adjoint_metadata = (
         build_rhf_primitive_adjoint_channels(
             solved, reference_state.density_sorted,
             response_state.density_sorted, response_sign=-1.))
+    primitive_state.three_center_oo = None
     solved_bytes = int(solved.nbytes)
     del solved
     stage_start = _finish_profile_stage(
@@ -757,6 +895,8 @@ def _direct_adjoint_derivative_channels(intopt, reference_density,
         'route': 'direct_real_gamma_two_channel_short_range_adjoint',
         'adjoint': adjoint_metadata,
         'profile': profile,
+        'three_center_workspace_plan': three_center_plan,
+        'metric_solve_workspace_plan': metric_solve_plan,
         'solved_three_center_bytes': solved_bytes,
         'reciprocal_plan': reciprocal.plan_metadata(),
         'reciprocal_zero_order': reciprocal.zero_order_execution.as_dict(),
@@ -789,14 +929,91 @@ def _state_nao(states):
 
 
 def _work_blocks(states, npair, naux, nbvk):
-    '''Choose conservative auxiliary blocks from currently free device memory.'''
-    free = int(get_avail_mem(exclude_memory_pool=True))
-    occupied = sum(naux * state.rank ** 2 * 8 for state in states)
-    free = max(1, free - occupied)
-    batch = max(1, min(naux, int(.40 * free / (npair * nbvk * 8))))
-    size = states[0].density_sorted.size
-    block = max(1, min(naux, int(.25 * free / (len(states) * size * 8))))
-    return int(batch), max(1, int(block // 8 * 8))
+    '''Choose joint SR evaluator/contraction blocks from free device memory.
+
+    The former planner budgeted the evaluator batch and AO contraction slice
+    independently.  Their buffers are live together, so each could consume a
+    large fraction of the same reported free memory.  This joint plan first
+    reserves the persistent ``B[P,i,j]`` tensors, then assigns disjoint
+    budgets to the evaluator and the ``full + temp`` contraction workspaces.
+    '''
+    available = int(get_avail_mem(exclude_memory_pool=True))
+    itemsize = np.dtype(np.float64).itemsize
+    persistent = sum(naux * state.rank ** 2 * itemsize for state in states)
+    reserve = min(512 * 1024**2, max(0, available // 8))
+    usable = max(1, available - persistent - reserve)
+
+    evaluator_bytes_per_aux = max(1, npair * max(1, nbvk) * itemsize)
+    batch_budget = int(.35 * usable)
+    batch = max(1, min(naux, batch_budget // evaluator_bytes_per_aux))
+
+    nao = _state_nao(states)
+    maximum_rank = max(state.rank for state in states)
+    contraction_bytes_per_aux = (
+        nao * nao + maximum_rank * nao) * itemsize
+    contraction_budget = int(.35 * usable)
+    block = max(1, min(naux, contraction_budget
+                       // max(1, contraction_bytes_per_aux)))
+    if block >= 8:
+        block = max(8, block // 8 * 8)
+    plan = {
+        'available_bytes': available,
+        'persistent_three_center_bytes': persistent,
+        'reserve_bytes': reserve,
+        'usable_workspace_bytes': usable,
+        'evaluator_budget_bytes': batch_budget,
+        'contraction_budget_bytes': contraction_budget,
+        'evaluator_aux_batch_size': int(batch),
+        'contraction_aux_block_size': int(block),
+        'evaluator_estimated_bytes': int(
+            batch * evaluator_bytes_per_aux),
+        'contraction_estimated_bytes': int(
+            block * contraction_bytes_per_aux),
+    }
+    return int(batch), int(block), plan
+
+
+def _work_blocks_packed(
+        raw_pair_count, unique_pair_count, naux, nbvk, nao):
+    '''Plan the direct primitive path with packed persistent AO-pair storage.'''
+    available = int(get_avail_mem(exclude_memory_pool=True))
+    itemsize = np.dtype(np.float64).itemsize
+    persistent = int(naux) * int(unique_pair_count) * itemsize
+    reserve = min(512 * 1024**2, max(0, available // 8))
+    usable = max(1, available - persistent - reserve)
+    evaluator_bytes_per_aux = max(
+        1, int(raw_pair_count) * max(1, int(nbvk)) * itemsize)
+    batch_budget = int(.35 * usable)
+    batch = max(1, min(int(naux), batch_budget // evaluator_bytes_per_aux))
+    contraction_budget = int(.35 * usable)
+    block = max(1, min(
+        int(naux), contraction_budget
+        // max(1, int(unique_pair_count) * itemsize)))
+    if block >= 8:
+        block = max(8, block // 8 * 8)
+    source_pair_block = min(
+        int(raw_pair_count), _PACKED_SOURCE_PAIR_BLOCK_SIZE)
+    return int(batch), int(block), {
+        'layout': 'unique_real_gamma_ao_pairs',
+        'available_bytes': available,
+        'persistent_three_center_bytes': persistent,
+        'dense_persistent_bytes_avoided': int(
+            naux * (int(nao) ** 2 - int(unique_pair_count)) * itemsize),
+        'raw_pair_count': int(raw_pair_count),
+        'unique_pair_count': int(unique_pair_count),
+        'reserve_bytes': reserve,
+        'usable_workspace_bytes': usable,
+        'evaluator_budget_bytes': batch_budget,
+        'contraction_budget_bytes': contraction_budget,
+        'evaluator_aux_batch_size': int(batch),
+        'contraction_aux_block_size': int(block),
+        'packed_source_reorder': 'blocked_cupy_gather',
+        'packed_source_pair_block_size': source_pair_block,
+        'packed_source_maximum_gather_bytes': int(
+            source_pair_block * block * itemsize),
+        'packed_source_full_gather_bytes_avoided': int(
+            (int(raw_pair_count) - source_pair_block) * block * itemsize),
+    }
 
 
 def _build_three_center_occupied(intopt, states, pair_addresses, i_addr,
@@ -811,6 +1028,8 @@ def _build_three_center_occupied(intopt, states, pair_addresses, i_addr,
 
     full = cp.zeros((nao, nao, aux_block))
     packed = cp.empty((batch_size, len(pair_addresses)))
+    maximum_rank = max(state.rank for state in states)
+    temp = cp.empty((maximum_rank, nao, aux_block))
     offset = 0
     for batch_id in range(len(aux_offsets) - 1):
         compressed = evaluator(aux_batch_id=batch_id, out=packed)[:, 0, :]
@@ -821,12 +1040,70 @@ def _build_three_center_occupied(intopt, states, pair_addresses, i_addr,
             three_center[j_addr, i_addr] = three_center[i_addr, j_addr] = (
                 compressed[:, p0:p1])
             for state in states:
-                temp = cp.empty((state.rank, nao, width))
-                contract('pqr,pi->iqr', three_center, state.factor_r, out=temp)
+                work = temp[:state.rank, :, :width]
+                contract('pqr,pi->iqr', three_center, state.factor_r, out=work)
                 contract(
-                    'iqr,qj->rij', temp, state.factor_l,
+                    'iqr,qj->rij', work, state.factor_l,
                     out=state.three_center_oo[offset:p2])
             offset = p2
+
+
+def _build_three_center_packed(
+        intopt, layout, batch_size, aux_block):
+    '''Build primitive ``B[P,ij]`` directly in unique Gamma-pair storage.'''
+    naux = int(intopt.auxcell.ao_loc[-1])
+    npair = int(layout['unique_pair_count'])
+    first = cp.asarray(layout['first'], dtype=cp.int64)
+    evaluator, _, _, aux_offsets = intopt.int3c2e_evaluator(
+        aux_batch_size=batch_size, cart=True)
+    output = cp.empty((naux, npair), dtype=cp.float64)
+    raw = cp.empty((batch_size, int(layout['raw_pair_count'])))
+    offset = 0
+    for batch_id in range(len(aux_offsets) - 1):
+        compressed = evaluator(aux_batch_id=batch_id, out=raw)[:, 0, :]
+        for p0, p1 in lib.prange(0, compressed.shape[1], aux_block):
+            width = p1 - p0
+            p2 = offset + width
+            output[offset:p2] = compressed[:, p0:p1].T[:, first]
+            offset = p2
+    if offset != naux:
+        raise RuntimeError(
+            f'packed three-center build produced {offset} of {naux} rows')
+    return output
+
+
+def _solve_three_center_inplace(metric_inverse, three_center):
+    r'''Overwrite ``B[P,ij]`` with ``M^{-1}B[P,ij]`` in AO-pair blocks.
+
+    The auxiliary metric couples all ``P`` rows but does not couple distinct
+    AO-pair columns.  Each column block can therefore be solved into one
+    bounded workspace and copied back without retaining a second complete
+    ``(naux,nao,nao)`` tensor.
+    '''
+    naux = int(three_center.shape[0])
+    flat = three_center.reshape(naux, -1)
+    npair = int(flat.shape[1])
+    available = int(get_avail_mem(exclude_memory_pool=True))
+    reserve = min(512 * 1024**2, max(0, available // 8))
+    budget = max(naux * 8, int(.40 * max(1, available - reserve)))
+    block = max(1, min(npair, budget // max(1, naux * 8)))
+    if block >= 64:
+        block = max(64, block // 64 * 64)
+    workspace = cp.empty((naux, block), dtype=three_center.dtype)
+    for p0, p1 in lib.prange(0, npair, block):
+        width = p1 - p0
+        output = workspace[:, :width]
+        contract('uv,vk->uk', metric_inverse, flat[:, p0:p1], out=output)
+        flat[:, p0:p1] = output
+    return {
+        'available_bytes': available,
+        'reserve_bytes': reserve,
+        'budget_bytes': budget,
+        'ao_pair_block_size': int(block),
+        'block_count': int((npair + block - 1) // block),
+        'workspace_bytes': int(workspace.nbytes),
+        'full_output_bytes_avoided': int(three_center.nbytes),
+    }
 
 
 class _Reciprocal:
@@ -918,6 +1195,68 @@ def _add_zero_order_reciprocal(intopt, states, metric, i_addr, j_addr,
     execution = execute_gamma_reciprocal_blocks(
         len(vectors), memory_plan.initial_block_size, worker, accept_result,
         phase='zero_order', is_oom=_is_gpu_out_of_memory,
+        block_alignment=memory_plan.block_alignment,
+        on_oom=_release_cached_gpu_blocks)
+    return _Reciprocal(
+        ft_opt, evaluator, vectors, coulomb, execution.final_block_size,
+        memory_plan, execution, full_grid_count, gamma_symmetry)
+
+
+def _add_zero_order_reciprocal_packed(
+        intopt, three_center, layout, metric, i_addr, j_addr,
+        reciprocal_options):
+    '''Add LR values to packed primitive B and retain derivative evaluators.'''
+    cell = intopt.cell
+    auxcell = intopt.auxcell
+    mesh = intopt.mesh
+    ft_opt = ft_ao.FTOpt.from_intopt(intopt)
+    evaluator = ft_opt.ft_evaluator(
+        compressing=False, cart=True, original_ao_order=False)[0]
+    vectors = asarray(auxcell.get_Gv(mesh))
+    coulomb = asarray(_weighted_coulG_kpts(
+        cell, mesh, 0., intopt.omega))
+    if coulomb.ndim == 2:
+        coulomb = coulomb[0]
+    if coulomb.ndim != 1 or coulomb.size != len(vectors):
+        raise ValueError('Gamma GDF Coulomb weights do not match the grid')
+    full_grid_count = len(vectors)
+    gamma_symmetry = bool(reciprocal_options['gamma_conjugate_symmetry'])
+    if gamma_symmetry:
+        indices, multiplicities = gamma_conjugate_reciprocal_indices(mesh)
+        vectors = vectors[indices]
+        coulomb = coulomb[indices] * asarray(multiplicities)
+
+    nao = int(layout['nao'])
+    naux = int(auxcell.ao_loc[-1])
+    unique_address = cp.asarray(layout['address'], dtype=cp.int64)
+    memory_plan = plan_gamma_reciprocal_blocks(
+        len(vectors), nao, naux, nao,
+        free_device_bytes=int(get_avail_mem(exclude_memory_pool=True)),
+        **{
+            name: value for name, value in reciprocal_options.items()
+            if name != 'gamma_conjugate_symmetry'
+        })
+
+    def worker(p0, p1):
+        ngrid = p1 - p0
+        aux_g = ft_ao.ft_ao(auxcell, vectors[p0:p1]).T
+        weighted = aux_g * coulomb[p0:p1]
+        pair_g = evaluator(vectors[p0:p1]).view(np.float64).reshape(
+            nao, nao, ngrid * 2)
+        pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+        selected = pair_g.reshape(nao * nao, ngrid * 2)[unique_address]
+        return aux_g, weighted, selected
+
+    def accept_result(_p0, _p1, value):
+        aux_g, weighted, selected = value
+        contract('iG,jG->ij', aux_g.view(np.float64),
+                 weighted.view(np.float64), beta=1., out=metric)
+        contract('rG,kG->rk', weighted.view(np.float64), selected,
+                 beta=1., out=three_center)
+
+    execution = execute_gamma_reciprocal_blocks(
+        len(vectors), memory_plan.initial_block_size, worker, accept_result,
+        phase='zero_order_packed', is_oom=_is_gpu_out_of_memory,
         block_alignment=memory_plan.block_alignment,
         on_oom=_release_cached_gpu_blocks)
     return _Reciprocal(
@@ -1030,10 +1369,28 @@ def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
     aux_g = ft_ao.ft_ao(auxcell, vectors).T
     aux_weighted = aux_g.conj() * coulomb
     aux_source = cp.empty((naux, ngrid * 2))
-    contract('rpq,pqG->rG', primitive_source, pair_g, out=aux_source)
     ao_source = cp.empty((nao, nao, ngrid * 2))
-    contract('rpq,rG->pqG', primitive_source, aux_weighted.view(np.float64),
-             out=ao_source)
+    if isinstance(primitive_source, _PackedPrimitiveSource):
+        layout = primitive_source.layout
+        values = primitive_source.values
+        address = cp.asarray(layout['address'], dtype=cp.int64)
+        weights = cp.asarray(layout['weights'], dtype=values.dtype)
+        selected = pair_g.reshape(nao * nao, ngrid * 2)[address]
+        contract('rk,kG->rG', values, selected, out=aux_source)
+        packed_ao_source = cp.empty((len(address), ngrid * 2))
+        contract('rk,rG->kG', values, aux_weighted.view(np.float64),
+                 out=packed_ao_source)
+        packed_ao_source /= weights[:, None]
+        ao_source[...] = 0.
+        row = cp.asarray(layout['row'], dtype=cp.int32)
+        column = cp.asarray(layout['column'], dtype=cp.int32)
+        ao_source[row, column] = packed_ao_source
+        ao_source[column, row] = packed_ao_source
+    else:
+        contract('rpq,pqG->rG', primitive_source, pair_g, out=aux_source)
+        contract(
+            'rpq,rG->pqG', primitive_source, aux_weighted.view(np.float64),
+            out=ao_source)
     contract('sr,sG->rG', metric_source, aux_g.view(np.float64),
              alpha=-1., beta=1., out=aux_source)
     aux_source_complex = aux_source.view(np.complex128)
@@ -1133,6 +1490,67 @@ def _long_range_block(cell, auxcell, states, metric_source, vectors,
     return derivative, auxiliary
 
 
+def _unpack_packed_primitive_source(
+        packed, selected, inverse, weights, p0, p1,
+        pair_block_size=_PACKED_SOURCE_PAIR_BLOCK_SIZE):
+    r'''Expand one unique-pair source slice into libpbc's raw pair order.
+
+    For raw AO-pair index ``k`` and auxiliary-slice index ``r``, this helper
+    evaluates
+
+    .. math::
+
+       X_{k r} =
+       S_{r,\iota(k)} / w_{\iota(k)}
+
+    directly into ``packed[k, p0 + r]``.  A full CuPy expression such as
+    ``selected[:, inverse]`` first materialises the complete
+    ``(width, raw_pair_count)`` gather and another division result.  At
+    Water64/GTH-DZVP/ETB one such array is 12.8 GiB.  Blocking the raw-pair
+    index bounds the principal temporary by
+    ``pair_block_size * width * itemsize`` while preserving the exact mapping.
+
+    Args:
+        packed : cupy.ndarray
+            Existing ``(raw_pair_count, naux_batch)`` libpbc source buffer.
+        selected : cupy.ndarray
+            ``(width, unique_pair_count)`` primitive-adjoint slice.
+        inverse : cupy.ndarray
+            Raw-to-unique AO-pair address ``iota(k)``.
+        weights : cupy.ndarray
+            Unique-pair multiplicities ``w`` used by the canonical Gamma
+            layout.
+        p0, p1 : int
+            Destination auxiliary-column interval in ``packed``.
+
+    Kwargs:
+        pair_block_size : int
+            Maximum number of raw AO pairs in one CuPy gather.  This affects
+            workspace and kernel-launch count only; it does not change the
+            GDF approximation or numerical result.
+
+    Returns:
+        None
+            ``packed[:, p0:p1]`` is overwritten in place.
+    '''
+    pair_block_size = int(pair_block_size)
+    if pair_block_size < 1:
+        raise ValueError('pair_block_size must be positive')
+    width = int(p1 - p0)
+    if selected.ndim != 2 or int(selected.shape[0]) != width:
+        raise ValueError(
+            'selected auxiliary width does not match destination slice')
+    if packed.ndim != 2 or int(packed.shape[0]) != int(inverse.size):
+        raise ValueError(
+            'packed and inverse raw AO-pair dimensions do not match')
+    for q0, q1 in lib.prange(0, int(inverse.size), pair_block_size):
+        address = inverse[q0:q1]
+        gathered = cp.take(selected, address, axis=1)
+        gathered /= weights[address][None]
+        packed[q0:q1, p0:p1] = gathered.T
+        del gathered, address
+
+
 def _short_range_derivative(intopt, states, pair_addresses, batch_size,
                             aux_block, nao, naux, primitive_source=None,
                             return_components=False):
@@ -1199,6 +1617,16 @@ def _short_range_derivative(intopt, states, pair_addresses, batch_size,
                              alpha=-.5 * state.exchange_weight, beta=1.,
                              out=source)
             else:
+                if isinstance(primitive_source, _PackedPrimitiveSource):
+                    layout = primitive_source.layout
+                    inverse = cp.asarray(layout['inverse'], dtype=cp.int64)
+                    weights = cp.asarray(
+                        layout['weights'], dtype=primitive_source.values.dtype)
+                    selected = primitive_source.values[aux0:aux1]
+                    _unpack_packed_primitive_source(
+                        packed, selected, inverse, weights, p0, p1)
+                    aux0 = aux1
+                    continue
                 source = primitive_source[aux0:aux1].transpose(1, 2, 0)
             cp.take(source.reshape(-1, width), pair_addresses, axis=0,
                     out=packed[:, p0:p1])

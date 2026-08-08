@@ -49,7 +49,8 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, hcore_gen, vj1, vk1,
 
 def grad_fock_gdf(mf_grad, Co, Cv, zvec, dm0, hcore_gen, atmlst,
                   hcore_derivative=None, source_derivative=None,
-                  metric_derivative=None, ewald_derivative=None):
+                  metric_derivative=None, ewald_derivative=None,
+                  native_derivative=None, resolved_backend=None):
     r'''Return the one-electron part of ``-4 Z F^HF,lambda_vo`` for GDF.
 
     The ordinary GPU4PySCF endpoint fuses target ``E_J`` and the signed
@@ -84,6 +85,14 @@ def grad_fock_gdf(mf_grad, Co, Cv, zvec, dm0, hcore_gen, atmlst,
             Separate two-electron Z-Fock components from the optional
             two-channel GDF native ABI.  Either all three are supplied or
             all three are omitted for the ordinary fused route.
+        native_derivative : cupy.ndarray or None
+            Already combined two-electron source-Fock derivative.  This is
+            used when target J belongs to multigrid, so the standalone signed
+            GDF polarization supplies only the source-HF response.  It cannot
+            be combined with the three resolved component arguments.
+        resolved_backend : str or None
+            Ledger label for explicitly resolved source/metric/Ewald terms.
+            ``None`` retains the optional two-channel native label.
 
     Returns:
         cupy.ndarray
@@ -104,6 +113,20 @@ def grad_fock_gdf(mf_grad, Co, Cv, zvec, dm0, hcore_gen, atmlst,
         if de_hcore.shape != (len(atmlst), 3):
             raise ValueError('precontracted GDF Fock hcore has invalid shape')
     supplied = (source_derivative, metric_derivative, ewald_derivative)
+    if native_derivative is not None:
+        if any(value is not None for value in supplied):
+            raise ValueError(
+                'combined and resolved GDF Fock derivatives are exclusive')
+        de_native = cp.asarray(native_derivative)
+        if de_native.shape != (len(atmlst), 3):
+            raise ValueError('combined GDF Fock derivative has invalid shape')
+        mf_grad.de_fock_hcore = cp.asnumpy(de_hcore)
+        mf_grad.de_fock_native = cp.asnumpy(de_native)
+        mf_grad.de_fock_source = None
+        mf_grad.de_fock_metric = None
+        mf_grad.de_fock_ewald = None
+        mf_grad.de_fock_backend = 'gdf_signed_source_fock_native_combined'
+        return de_hcore + de_native
     if any(value is None for value in supplied):
         if any(value is not None for value in supplied):
             raise ValueError(
@@ -126,7 +149,9 @@ def grad_fock_gdf(mf_grad, Co, Cv, zvec, dm0, hcore_gen, atmlst,
     mf_grad.de_fock_source = cp.asnumpy(de_source)
     mf_grad.de_fock_metric = cp.asnumpy(de_metric)
     mf_grad.de_fock_ewald = cp.asnumpy(de_ewald)
-    mf_grad.de_fock_backend = 'gdf_two_channel_native_adjoint'
+    mf_grad.de_fock_backend = (
+        'gdf_two_channel_native_adjoint'
+        if resolved_backend is None else str(resolved_backend))
     return de_hcore + de_source + de_metric + de_ewald
 
 
@@ -182,19 +207,39 @@ def grad_ovlp_energy(s1vo, e_occ, zvec):
 
 def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
     '''Return the moving-metric source-HF response with one adjoint density.'''
-    dz = Cv @ zvec @ Co.conj().T
-    vz = fvind(dz + dz.conj().T)
-    vzoo = Co.conj().T @ vz @ Co
+    vzoo = make_ovlp_response_intermediate(Co, Cv, zvec, fvind)
     return 4 * cp.einsum('kxij,ij->kx', s1oo, vzoo).real
 
 
+def make_ovlp_response_intermediate(Co, Cv, zvec, fvind):
+    r'''Return ``C_o^dagger V[D_Z] C_o`` while source CDERI is available.
+
+    This AO-response action is the last nonvariational term that needs the
+    source-HF J/K provider.  Keeping the small occupied-space result allows an
+    opt-in large calculation to release central CDERI before explicit GDF or
+    RSDF nuclear-response work starts.
+    '''
+    dz = Cv @ zvec @ Co.conj().T
+    vz = fvind(dz + dz.conj().T)
+    return Co.conj().T @ vz @ Co
+
+
 def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
-                              de_fock, fvind, atmlst):
+                              de_fock, fvind, atmlst,
+                              ovlp_response_intermediate=None):
     '''Assemble the three periodic GPU ``4 Z^dagger V^lambda`` terms.'''
     s1oo, s1vo = make_s1_oo_vo(mf_grad.cell, Co, Cv, s1, atmlst)
     e_occ = mo_energy[:Co.shape[1]]
     de_ovlp_energy = grad_ovlp_energy(s1vo, e_occ, zvec)
-    de_ovlp_response = grad_ovlp_response(Co, Cv, zvec, s1oo, fvind)
+    if ovlp_response_intermediate is None:
+        de_ovlp_response = grad_ovlp_response(
+            Co, Cv, zvec, s1oo, fvind)
+    else:
+        vzoo = cp.asarray(ovlp_response_intermediate)
+        if vzoo.shape != (Co.shape[1], Co.shape[1]):
+            raise ValueError('overlap-response intermediate has invalid shape')
+        de_ovlp_response = 4 * cp.einsum(
+            'kxij,ij->kx', s1oo, vzoo).real
 
     mf_grad.s1oo = s1oo
     mf_grad.s1vo = s1vo

@@ -12,6 +12,8 @@ import numpy as np
 from gpu4pyscf.pbc import tools
 from gpu4pyscf.pbc.dft.numint import eval_ao_kpts
 
+from dcforge.cpu.pbc.kpts import check_kpts_equal, normalize_kpts
+
 
 def _ao_grid_data(cell, kpts):
     '''Return AO values and first spatial derivatives on ``cell.mesh``.'''
@@ -144,33 +146,50 @@ def _exchange_deriv(cell, kpts, dms, coords, ao, ao1, exxdiv, with_df):
     return output
 
 
-def grad_jk(cell, dm, exxdiv='ewald', with_df=None):
+def grad_jk(cell, dm, exxdiv='ewald', with_df=None, kpts=None):
     '''Return full fixed-density FFTDF J/K derivative matrices on the GPU.
 
     Args:
         cell : pyscf.pbc.gto.Cell
-            Built Gamma-point periodic cell.
-        dm : cupy.ndarray of shape (nao, nao)
-            AO density held fixed while differentiating the finite FFT
-            representation.
+            Built three-dimensional periodic cell.
+        dm : cupy.ndarray
+            Gamma AO density ``(nao,nao)`` or sampled-k density
+            ``(nkpts,nao,nao)`` held fixed while differentiating the finite
+            FFT representation.
 
     Kwargs:
         exxdiv : str or None
             Exchange-divergence convention used by source RHF.
         with_df : dcforge.gpu.pbc.df.fft.FFTDF
             Active source/target FFTDF provider.
+        kpts : array_like or None
+            Explicit full-BZ k-points.  ``None`` selects one Gamma block.
 
     Returns:
         tuple
-            ``(vj1, vk1)`` with shape ``(natm, 3, nao, nao)``.  Each is the
-            complete AO matrix derivative, not an atom-row derivative.
+            At Gamma, ``(vj1,vk1)`` each has shape
+            ``(natm,3,nao,nao)``.  With explicit sampled k-points, the shape
+            is ``(natm,nkpts,3,nao,nao)``.  Each is a complete AO matrix
+            derivative, not an atom-row derivative.
     '''
     if with_df is None:
         raise ValueError('FFTDF derivative requires the active with_df provider')
-    kpts = np.zeros((1, 3))
-    dm = cp.asarray(dm, order='C')[None]
+    kpts = normalize_kpts(kpts, required=False)
+    check_kpts_equal(
+        kpts, with_df.kpts, 'GPU FFTDF response kpts')
+    dm = cp.asarray(dm, order='C')
+    gamma_input = dm.ndim == 2
+    if gamma_input:
+        dm = dm[None]
+    nao = cell.nao_nr()
+    if dm.shape != (len(kpts), nao, nao):
+        raise ValueError(
+            'GPU FFTDF response density must have shape '
+            f'{(len(kpts), nao, nao)}')
     coords, ao, ao1 = _ao_grid_data(cell, kpts)
     vj1 = _coulomb_deriv(cell, kpts, dm, ao, ao1)
     vk1 = _exchange_deriv(
         cell, kpts, dm, coords, ao, ao1, exxdiv, with_df)
-    return vj1[:, 0], vk1[:, 0]
+    if gamma_input:
+        return vj1[:, 0], vk1[:, 0]
+    return vj1, vk1

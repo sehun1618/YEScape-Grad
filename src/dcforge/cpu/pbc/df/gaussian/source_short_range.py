@@ -35,6 +35,29 @@ def short_range_source(
     return np.asarray(tensor).reshape(cell.nao_nr() ** 2, auxcell.nao_nr())
 
 
+def short_range_source_kpts(
+        cell, auxcell, omega, kpti, kptj, precision=None,
+        max_memory=None):
+    r'''Return sampled-k :math:`B^{SR}(k_i,k_j)`.
+
+    Absolute Gamma retains the existing packed-value path.  Every other pair
+    uses PySCF's unpacked complex ``s1`` driver so the primary AO orientation
+    remains explicit for pair reversal and nuclear response.
+    '''
+    kpti = _kpoint(kpti)
+    kptj = _kpoint(kptj)
+    if _absolute_gamma_pair(kpti, kptj):
+        return short_range_source(
+            cell, auxcell, omega, precision, max_memory)
+    tensor = _helper_tensor(
+        cell, auxcell, omega, 'int3c2e', 's1', precision,
+        pairs=np.asarray(((kpti, kptj),)), max_memory=max_memory)
+    if tensor.shape[0] == 1:
+        tensor = tensor[0]
+    return np.asarray(tensor).reshape(
+        cell.nao_nr() ** 2, auxcell.nao_nr())
+
+
 def grad_short_range_source(cell, auxcell, omega, precision=None,
                             atmlst=None, max_memory=None):
     r'''Return the full fixed-cell derivative :math:`(B^{SR})^\lambda`.
@@ -112,6 +135,55 @@ def gen_grad_short_range_source(
     return source1
 
 
+def grad_short_range_source_kpts(
+        cell, auxcell, omega, kpti, kptj, precision=None,
+        atmlst=None, max_memory=None):
+    r'''Return sampled-k :math:`(B^{SR}(k_i,k_j))^\lambda`.
+
+    The first-primary derivative comes from ``int3c2e_ip1(k_i,k_j)``.
+    The second-primary derivative is the conjugate AO transpose of
+    ``int3c2e_ip1(k_j,k_i)``.  ``int3c2e_ip2`` owns the auxiliary-center
+    response.  Electron-coordinate derivatives acquire a minus sign when
+    converted to nuclear-center derivatives.
+    '''
+    kpti = _kpoint(kpti)
+    kptj = _kpoint(kptj)
+    if _absolute_gamma_pair(kpti, kptj):
+        return grad_short_range_source(
+            cell, auxcell, omega, precision, atmlst, max_memory)
+    if atmlst is None:
+        atmlst = range(cell.natm)
+    atmlst = [int(ia) for ia in atmlst]
+    nao = cell.nao_nr()
+    naux = auxcell.nao_nr()
+    pairs = np.asarray(((kpti, kptj),))
+    swapped = np.asarray(((kptj, kpti),))
+    ip1 = _helper_tensor(
+        cell, auxcell, omega, 'int3c2e_ip1', 's1', precision,
+        pairs=pairs, max_memory=max_memory).reshape(3, nao, nao, naux)
+    ip2 = _helper_tensor(
+        cell, auxcell, omega, 'int3c2e_ip2', 's1', precision,
+        pairs=pairs, max_memory=max_memory).reshape(3, nao, nao, naux)
+    ip1_swapped = _helper_tensor(
+        cell, auxcell, omega, 'int3c2e_ip1', 's1', precision,
+        pairs=swapped, max_memory=max_memory).reshape(
+            3, nao, nao, naux)
+    value = np.zeros(
+        (len(atmlst), 3, nao, nao, naux),
+        dtype=np.result_type(ip1, ip2, ip1_swapped))
+    ao_slices = cell.aoslice_nr_by_atom()
+    aux_slices = auxcell.aoslice_nr_by_atom()
+    for k, ia in enumerate(atmlst):
+        p0, p1 = ao_slices[ia, 2:]
+        q0, q1 = aux_slices[ia, 2:]
+        value[k, :, p0:p1] -= ip1[:, p0:p1]
+        value[k, :, :, p0:p1] -= ip1_swapped[:, p0:p1].transpose(
+            0, 2, 1, 3).conj()
+        value[k, :, :, :, q0:q1] -= ip2[:, :, :, q0:q1]
+    return _real_if_close(
+        value.reshape(len(atmlst), 3, nao * nao, naux))
+
+
 def _gamma_s1_tensor(
         cell, auxcell, omega, intor, precision, max_memory=None):
     gamma = np.zeros(3)
@@ -146,6 +218,19 @@ def _helper_tensor(
             [np.asarray(group[key]) for key in keys], axis=-1)
     finally:
         temporary.close()
+
+
+def _kpoint(value):
+    '''Return one Cartesian reciprocal vector.'''
+    value = np.asarray(value, dtype=float)
+    if value.shape != (3,):
+        raise ValueError(f'k-point must have shape (3,), got {value.shape}')
+    return value
+
+
+def _absolute_gamma_pair(kpti, kptj):
+    '''Return whether both absolute k-points are Gamma.'''
+    return np.linalg.norm(kpti) < 1e-10 and np.linalg.norm(kptj) < 1e-10
 
 
 def _real_if_close(value, tol=1e-10):

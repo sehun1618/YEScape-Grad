@@ -194,29 +194,35 @@ class LongRangeLocalPart1:
         )
 
     def contract_batch(self, densities, atmlst=None) -> np.ndarray:
-        '''Contract requested LR derivatives without retaining full H1.'''
+        '''Contract requested LR derivatives in two shared FT traversals.
+
+        The AO-pair Fourier derivative is independent of which atom-owned AO
+        slice will be contracted afterwards.  Likewise, the ordinary AO-pair
+        Fourier value is shared by every pseudopotential-center phase
+        derivative.  Production therefore traverses each Fourier primitive
+        once and resolves atom rows only during the final density contraction.
+        This preserves the term-resolved scalar output without repeating the
+        same full FT for every atom.
+        '''
         batch = _density_batch(densities, self.nkpts, self.nao)
         if atmlst is None:
             atmlst = range(self.cell.natm)
         atmlst = [int(atom_id) for atom_id in atmlst]
-        output = np.zeros((len(batch), len(atmlst), 3), dtype=float)
-        for position, atom_id in enumerate(atmlst):
-            output[:, position] += self._contract_basis_batch(
-                atom_id, batch)
-            output[:, position] += lib.einsum(
-                'xkij,skji->sx', self.center_matrices(atom_id), batch).real
-        return output
+        for atom_id in atmlst:
+            self._indices(atom_id, 0)
+        return (
+            self._contract_basis_batch(atmlst, batch)
+            + self._contract_center_batch(atmlst, batch)
+        )
 
-    def _contract_basis_batch(self, atom_id, batch):
-        '''Contract all three AO-center directions in one FT traversal.'''
-        atom_id, _axis = self._indices(atom_id, 0)
-        p0, p1 = self._ao_slices[atom_id, 2:]
+    def _contract_basis_batch(self, atmlst, batch):
+        '''Contract all atom-owned AO rows in one derivative-FT traversal.'''
         block_size = self._block_size(
             96 * self.nao * self.nao * self.nkpts)
         buffer_i = np.empty(
             (2, self.nkpts, 3, block_size, self.nao, self.nao))
         buffer_j = np.empty_like(buffer_i)
-        output = np.zeros((len(batch), 3), dtype=float)
+        output = np.zeros((len(batch), len(atmlst), 3), dtype=float)
         potential_real = self.weighted_potential.real
         potential_imaginary = self.weighted_potential.imag
 
@@ -228,24 +234,91 @@ class LongRangeLocalPart1:
             derivative_j = self._basis_j(*common, out=buffer_j)
             for kpoint in range(self.nkpts):
                 for axis in range(3):
-                    row = _contract_complex_fourier_block(
-                        potential_real[g0:g1],
-                        potential_imaginary[g0:g1],
-                        -derivative_i[0, kpoint, axis, :, p0:p1],
-                        -derivative_i[1, kpoint, axis, :, p0:p1],
-                    )
-                    column = _contract_complex_fourier_block(
-                        potential_real[g0:g1],
-                        potential_imaginary[g0:g1],
-                        -derivative_j[0, kpoint, axis, :, :, p0:p1],
-                        -derivative_j[1, kpoint, axis, :, :, p0:p1],
-                    )
-                    output[:, axis] += lib.einsum(
-                        'pj,sjp->s', row,
-                        batch[:, kpoint, :, p0:p1]).real
-                    output[:, axis] += lib.einsum(
-                        'ip,spi->s', column,
-                        batch[:, kpoint, p0:p1]).real
+                    for position, atom_id in enumerate(atmlst):
+                        p0, p1 = self._ao_slices[atom_id, 2:]
+                        row = _contract_complex_fourier_block(
+                            potential_real[g0:g1],
+                            potential_imaginary[g0:g1],
+                            -derivative_i[
+                                0, kpoint, axis, :, p0:p1],
+                            -derivative_i[
+                                1, kpoint, axis, :, p0:p1],
+                        )
+                        column = _contract_complex_fourier_block(
+                            potential_real[g0:g1],
+                            potential_imaginary[g0:g1],
+                            -derivative_j[
+                                0, kpoint, axis, :, :, p0:p1],
+                            -derivative_j[
+                                1, kpoint, axis, :, :, p0:p1],
+                        )
+                        output[:, position, axis] += lib.einsum(
+                            'pj,sjp->s', row,
+                            batch[:, kpoint, :, p0:p1]).real
+                        output[:, position, axis] += lib.einsum(
+                            'ip,spi->s', column,
+                            batch[:, kpoint, p0:p1]).real
+        return output
+
+    def _contract_center_batch(self, atmlst, batch):
+        '''Contract all nuclear phase derivatives in one pair-FT traversal.'''
+        fake_slices = np.asarray(
+            self.fakenuc.aoslice_by_atom(), dtype=int)
+        auxiliary = []
+        for atom_id in atmlst:
+            q0, q1 = fake_slices[atom_id, 2:]
+            if q1 - q0 != 1:
+                raise NotImplementedError(
+                    'Gaussian-DF local part1 expects one fake nuclear AO '
+                    'per atom')
+            auxiliary.append(int(q0))
+        auxiliary = np.asarray(auxiliary, dtype=int)
+
+        coulomb = _long_range_coulomb(
+            self.cell, float(self.builder.omega), self.mesh, self.gv)
+        derivative_potential = (
+            self.charges[np.asarray(atmlst), None, None]
+            * (-1j * self.gv.T[None])
+            * self.auxiliary_ft[:, auxiliary].T[:, None]
+            * coulomb[None, None]
+            * self.weights
+        )
+        packed = np.zeros(
+            (len(atmlst), 3, self.nkpts, self.nao_pair),
+            dtype=np.complex128)
+        block_size = self._block_size(
+            16 * self.nao_pair * self.nkpts)
+        buffer = np.empty((2, self.nkpts, block_size, self.nao_pair))
+        for g0, g1 in lib.prange(0, len(self.gv), block_size):
+            ao_pair = self._pair_kernel(
+                self.gv[g0:g1], self.gxyz[g0:g1], self.gvbase,
+                np.zeros(3), out=buffer)
+            potential = derivative_potential[:, :, g0:g1]
+            for kpoint, (pair_real, pair_imaginary) in enumerate(
+                    zip(*ao_pair)):
+                packed[:, :, kpoint] += lib.einsum(
+                    'axg,gp->axp', potential.real, pair_real)
+                packed[:, :, kpoint] += lib.einsum(
+                    'axg,gp->axp', potential.imag, pair_imaginary)
+                non_gamma = not is_zero(self.kpts[kpoint])
+                if non_gamma:
+                    packed[:, :, kpoint] += 1j * lib.einsum(
+                        'axg,gp->axp', potential.real, pair_imaginary)
+                    packed[:, :, kpoint] -= 1j * lib.einsum(
+                        'axg,gp->axp', potential.imag, pair_real)
+
+        output = np.zeros((len(batch), len(atmlst), 3), dtype=float)
+        for position in range(len(atmlst)):
+            matrices = np.asarray([
+                [
+                    lib.unpack_tril(value.real)
+                    if is_zero(kpoint) else lib.unpack_tril(value)
+                    for value, kpoint in zip(axis_values, self.kpts)
+                ]
+                for axis_values in packed[position]
+            ])
+            output[:, position] = lib.einsum(
+                'xkij,skji->sx', matrices, batch).real
         return output
 
     def _build_weighted_potential(self) -> np.ndarray:

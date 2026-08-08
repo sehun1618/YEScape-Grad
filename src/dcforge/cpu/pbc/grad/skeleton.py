@@ -11,7 +11,7 @@ from dcforge.cpu.pbc.df.gdf import GDF
 from dcforge.cpu.pbc.df.rsdf import RSDF
 from dcforge.cpu.pbc.grad._pseudo import get_vppnl_deriv
 from dcforge.cpu.pbc.grad.multigrid import (
-    get_vxc_deriv as get_multigrid_vxc_deriv,
+    get_veff_deriv as get_multigrid_veff_deriv,
 )
 
 
@@ -51,8 +51,12 @@ def get_vxc_deriv(mf_grad, dm0):
     '''
     mf = mf_grad.base
     if isinstance(mf._numint, multigrid.MultiGridNumInt2):
+        if mf.multigrid_with_j:
+            raise ValueError(
+                'grad_vxc cannot split a fused multigrid J+XC derivative; '
+                'use grad_veff')
         mf_grad.xc_deriv_backend = 'multigrid'
-        return get_multigrid_vxc_deriv(mf_grad, dm0)
+        return get_multigrid_veff_deriv(mf_grad, dm0)
     mf_grad.xc_deriv_backend = 'uniform_grid'
     kpts = np.zeros((1, 3))
     grids = mf.grids
@@ -60,7 +64,7 @@ def get_vxc_deriv(mf_grad, dm0):
         grids.build(with_non0tab=True)
     ni = numint.KNumInt(kpts)
     if ni._xc_type(mf.xc) == 'MGGA':
-        return _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts)
+        return get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts)
     vxc = krks.get_vxc(
         ni, mf.cell, grids, mf.xc, dm0[None], kpts,
         max_memory=mf_grad.max_memory, verbose=mf_grad.verbose,
@@ -68,7 +72,7 @@ def get_vxc_deriv(mf_grad, dm0):
     return np.asarray(vxc)
 
 
-def _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts):
+def get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts):
     r'''Return the periodic MGGA AO-row derivative including the tau channel.
 
     PySCF 2.14.0's periodic ``krks.get_vxc`` implements LDA and GGA but
@@ -87,27 +91,34 @@ def _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts):
     Args:
         mf_grad : dcforge.cpu.pbc.grad.rhf_dft.Gradients
             Active fixed-density periodic gradient object.
-        dm0 : ndarray of shape (nao, nao)
-            Closed-shell source RHF density.
+        dm0 : ndarray of shape (nao, nao) or (nkpts,nao,nao)
+            Closed-shell source RHF or KRHF density.
         ni : pyscf.pbc.dft.numint.KNumInt
-            Gamma-point numerical integrator used by the target derivative.
-        kpts : ndarray of shape (1, 3)
-            Explicit Gamma-point axis.
+            K-resolved numerical integrator used by the target derivative.
+        kpts : ndarray of shape (nkpts, 3)
+            Explicit full-BZ k-point axis.
 
     Returns:
-        ndarray of shape (3, 1, nao, nao)
+        ndarray of shape (3, nkpts, nao, nao)
             Nuclear AO-row derivative of the target MGGA potential.
     '''
     mf = mf_grad.base
     cell = mf.cell
     grids = mf.grids
-    density = np.asarray(dm0)[None]
+    kpts = np.asarray(kpts, dtype=float).reshape(-1, 3)
+    density = np.asarray(dm0)
+    if density.ndim == 2:
+        density = density[None]
+    if density.shape != (len(kpts), cell.nao_nr(), cell.nao_nr()):
+        raise ValueError(
+            'periodic MGGA density must have shape (nkpts,nao,nao)')
     make_rho, nset, nao = ni._gen_rho_evaluator(
         cell, density, hermi=1)
     if nset != 1:
         raise ValueError('restricted periodic MGGA requires one density set')
     ao_loc = cell.ao_loc_nr()
-    vmat = np.zeros((3, nset, 1, nao, nao), dtype=density.dtype)
+    vmat = np.zeros(
+        (3, nset, len(kpts), nao, nao), dtype=density.dtype)
     for ao_k1, ao_k2, mask, weight, _coords in ni.block_loop(
             cell, grids, nao, 2, kpts, None,
             mf_grad.max_memory):
@@ -119,12 +130,13 @@ def _get_mgga_vxc_deriv(mf_grad, dm0, ni, kpts):
         weighted = vxc * weight
         weighted[0] *= .5
         weighted[4] *= .5
-        molecular_rks_grad._gga_grad_sum_(
-            vmat[:, 0, 0], cell, ao_k1[0], weighted[:4],
-            mask, ao_loc)
-        molecular_rks_grad._tau_grad_dot_(
-            vmat[:, 0, 0], cell, ao_k1[0], weighted[4],
-            mask, ao_loc, True)
+        for k in range(len(kpts)):
+            molecular_rks_grad._gga_grad_sum_(
+                vmat[:, 0, k], cell, ao_k1[k], weighted[:4],
+                mask, ao_loc)
+            molecular_rks_grad._tau_grad_dot_(
+                vmat[:, 0, k], cell, ao_k1[k], weighted[4],
+                mask, ao_loc, True)
     return -vmat[:, 0]
 
 
@@ -145,6 +157,26 @@ def grad_vxc(mf_grad, dm0, atmlst):
 def grad_veff(mf_grad, dm0, atmlst):
     '''Return fixed-density target Hartree plus XC derivatives.'''
     mf = mf_grad.base
+    if (isinstance(mf._numint, multigrid.MultiGridNumInt2)
+            and mf.multigrid_with_j):
+        v1 = get_multigrid_veff_deriv(mf_grad, dm0)
+        de_veff = np.zeros((len(atmlst), 3))
+        aoslices = mf.cell.aoslice_by_atom()
+        for k, ia in enumerate(atmlst):
+            p0, p1 = aoslices[ia, 2:]
+            de_veff[k] = 2 * lib.einsum(
+                'xij,ji->x', v1[:, 0, p0:p1], dm0[:, p0:p1],
+            ).real
+        # PySCF forms J and XC on one reciprocal potential before the AO
+        # derivative transform.  Keep that honest combined term instead of
+        # attributing it to either physical component without a second pass.
+        mf_grad.de_j = None
+        mf_grad.de_vxc = None
+        mf_grad.de_j_source = None
+        mf_grad.de_j_metric = None
+        mf_grad.de_j_xc_multigrid = de_veff
+        mf_grad.xc_deriv_backend = 'multigrid_j_xc'
+        return de_veff
     de_vxc = grad_vxc(mf_grad, dm0, atmlst)
     if isinstance(mf.with_df, (GDF, RSDF)):
         if mf_grad.vj1 is None:
@@ -173,6 +205,7 @@ def grad_veff(mf_grad, dm0, atmlst):
         mf_grad.de_j_metric = None
     mf_grad.de_j = de_j
     mf_grad.de_vxc = de_vxc
+    mf_grad.de_j_xc_multigrid = None
     return de_j + de_vxc
 
 

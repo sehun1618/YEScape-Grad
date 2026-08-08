@@ -257,6 +257,7 @@ class Gradients(rks.Gradients):
         'cderi_value_validation',
         'fock_deriv_method', 'grid_response', 'target_fock_reused',
         'hcore_deriv_method', 'xc_deriv_backend',
+        'de_j_xc_multigrid',
         'multigrid_xc_deriv_method',
         'multigrid_xc_deriv_method_used',
         'timing_profile', 'electronic_timings_s', 'gradient_timings_s',
@@ -278,6 +279,7 @@ class Gradients(rks.Gradients):
         self.grid_response = True
         self.target_fock_reused = False
         self.xc_deriv_backend = None
+        self.de_j_xc_multigrid = None
         self.multigrid_xc_deriv_method = 'single_pass'
         self.multigrid_xc_deriv_method_used = None
         # This opt-in diagnostic records pipeline wall times without changing
@@ -314,8 +316,9 @@ class Gradients(rks.Gradients):
             self, 'target XC numerical integrator = %s',
             type(self.base._numint).__name__)
         logger.info(
-            self, 'Hartree provider = %s',
-            type(self.base.with_df).__name__)
+            self, 'target Hartree provider = %s',
+            ('multigrid' if self.base.multigrid_with_j
+             else type(self.base.with_df).__name__))
         return self
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,

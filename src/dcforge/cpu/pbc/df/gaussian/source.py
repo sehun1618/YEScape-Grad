@@ -1,16 +1,25 @@
-r'''Complete Gamma-point Gaussian-DF three-center source and response.'''
+r'''Complete Gaussian-DF three-center source and response.'''
+
+import numpy as np
+from pyscf.pbc.lib.kpts_helper import is_zero
 
 from dcforge.cpu.pbc.df.gaussian.source_long_range import (
     gen_grad_long_range_source,
+    grad_long_range_source_kpts,
     long_range_source,
+    long_range_source_kpts,
 )
 from dcforge.cpu.pbc.df.gaussian.source_short_range import (
     gen_grad_short_range_source,
+    grad_short_range_source_kpts,
     short_range_source,
+    short_range_source_kpts,
 )
 from dcforge.cpu.pbc.df.gaussian.vbar import (
     gen_grad_vbar_source,
+    grad_vbar_source_kpts,
     vbar_source,
+    vbar_source_kpts,
 )
 
 
@@ -75,4 +84,41 @@ def gen_grad_three_center_source(cell, auxcell, omega, mesh,
 
     source1.fourier_aux_storage = long_range1.fourier_aux_storage
     source1.fourier_ao_pair_bytes = long_range1.fourier_ao_pair_bytes
+    return source1
+
+
+def three_center_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj, precision=None,
+        max_memory=None):
+    r'''Return complete sampled-k :math:`B(k_i,k_j)`.
+
+    The zero-transfer ``vbar`` term depends on the pair's absolute k-point;
+    off-diagonal momentum-transfer pairs contain only SR and LR sources.
+    '''
+    kpti = np.asarray(kpti, dtype=float)
+    kptj = np.asarray(kptj, dtype=float)
+    source = short_range_source_kpts(
+        cell, auxcell, omega, kpti, kptj, precision, max_memory)
+    source = source + long_range_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj)
+    if is_zero(kptj - kpti):
+        source = source + vbar_source_kpts(
+            cell, auxcell, omega, kpti)
+    return source
+
+
+def grad_three_center_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj, precision=None,
+        atmlst=None, max_memory=None):
+    r'''Return complete sampled-k :math:`B^\lambda(k_i,k_j)`.'''
+    kpti = np.asarray(kpti, dtype=float)
+    kptj = np.asarray(kptj, dtype=float)
+    source1 = grad_short_range_source_kpts(
+        cell, auxcell, omega, kpti, kptj, precision,
+        atmlst, max_memory)
+    source1 = source1 + grad_long_range_source_kpts(
+        cell, auxcell, omega, mesh, kpti, kptj, atmlst)
+    if is_zero(kptj - kpti):
+        source1 = source1 + grad_vbar_source_kpts(
+            cell, auxcell, omega, kpti, atmlst)
     return source1

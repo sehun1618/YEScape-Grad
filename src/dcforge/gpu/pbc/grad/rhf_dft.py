@@ -1,4 +1,4 @@
-'''Gamma-point GPU FFTDF/GDF/RSDF analytic DFA@RHF nuclear gradients.'''
+'''Gamma GPU FFTDF/GDF/RSDF DFA@RHF gradients.'''
 
 import time
 
@@ -17,9 +17,16 @@ from dcforge.gpu.pbc.df.gaussian.hcore import (
 )
 from dcforge.gpu.pbc.df.gdf import (
     GDF,
+    restricted_hf_bilinear_derivative_direct,
     target_j_and_fock_energy_derivative,
     target_j_fock_energy_derivative,
     target_j_fock_signed_energy_derivative,
+)
+from dcforge.gpu.pbc.df.rhf_response import (
+    gen_vind as gen_df_vind,
+)
+from dcforge.gpu.pbc.df.rhf_response import (
+    gen_vind_ao_oracle as gen_df_vind_ao_oracle,
 )
 from dcforge.gpu.pbc.df.rsdf import RSDF, make_gradient_response
 from dcforge.gpu.pbc.energy.rhf_dft import (
@@ -32,6 +39,7 @@ from dcforge.gpu.pbc.grad.rhf_nv import (
     grad_fock_direct,
     grad_fock_gdf,
     grad_fock_rsdf,
+    make_ovlp_response_intermediate,
     nonvariational_correction,
 )
 from dcforge.gpu.pbc.grad.rhf_zvec import gen_vind, solve_z_vector
@@ -60,9 +68,40 @@ def _profile_stop(mf_grad, profile, label, start):
     profile[label] = time.perf_counter() - start
 
 
+def _progress(mf_grad, label):
+    '''Publish one optional non-scientific queue/profiler stage marker.'''
+    callback = getattr(mf_grad, 'progress_callback', None)
+    if callback is not None:
+        callback(str(label))
+
+
+def _gdf_workspace_metadata(metadata):
+    '''Return only bounded-workspace diagnostics from native GDF metadata.'''
+    names = (
+        'three_center_workspace_plan',
+        'metric_solve_workspace_plan',
+        'metric_solve_workspace_plans',
+        'solved_three_center_bytes',
+        'dense_solved_three_center_bytes_avoided',
+        'signed_state_full_rank_bytes_avoided',
+    )
+    workspace = {
+        name: metadata[name] for name in names if name in metadata}
+    adjoint = metadata.get('adjoint')
+    if isinstance(adjoint, dict):
+        # Detailed times already live in ``gdf_response_profile``.  Retain
+        # only the execution plan here so the queue can relate a measured
+        # pass count to auxiliary block size without duplicating timers.
+        workspace['adjoint_plan'] = {
+            name: value for name, value in adjoint.items()
+            if name != 'profile'
+        }
+    return workspace
+
+
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
-    '''Evaluate the electronic Gamma-point GPU FFTDF/GDF DFA@RHF gradient.
+    '''Evaluate the electronic Gamma-point GPU DFA@RHF gradient.
 
     The term ledger is identical to the CPU PBC implementation:
 
@@ -130,6 +169,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     Cv = mo_coeff[:, sv]
     dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
 
+    _progress(mf_grad, 'target_fock')
     stage_start = _profile_start(mf_grad)
     target_signature = _target_fock_signature(mf, dm0)
     if (mf.target_fock is not None and mf.dm_hf is not None
@@ -146,7 +186,22 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     fvind = mf_hf.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
-    vind = gen_vind(Co, Cv, fvind)
+    if isinstance(mf.with_df, (GDF, RSDF)):
+        # Keep GPU4PySCF's AO-density response as the oracle used by the
+        # moving-overlap term below.  Repeated Z-vector actions can exploit
+        # their known cross-factor density without changing the PySCF
+        # ``gen_response`` contract or the orbital-Hessian equation.
+        response_mode = mf_grad.df_cphf_response_mode
+        if response_mode == 'direct_vo':
+            vind = gen_df_vind(mf_hf, Co, Cv)
+        elif response_mode == 'ao_oracle':
+            vind = gen_df_vind_ao_oracle(mf_hf, Co, Cv)
+        else:
+            raise ValueError(
+                'df_cphf_response_mode must be direct_vo or ao_oracle')
+    else:
+        vind = gen_vind(Co, Cv, fvind)
+    _progress(mf_grad, 'z_vector')
     stage_start = _profile_start(mf_grad)
     zvec, z_info = solve_z_vector(
         mo_energy, mo_occ, fvo, vind,
@@ -167,8 +222,27 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     mf_grad.z_refinement_wall_seconds = z_info['refinement_wall_seconds']
     mf_grad.z_refinement_iterations = z_info['refinement_iterations']
     mf_grad.z_wall_seconds = z_info['wall_seconds']
+    mf_grad.z_response_backend = z_info['response_backend']
     dz = Cv @ zvec @ Co.conj().T
     dz = dz + dz.conj().T
+    ovlp_response_intermediate = None
+    release_cderi = (
+        isinstance(mf.with_df, (GDF, RSDF))
+        and bool(mf.with_df.release_cderi_after_response))
+    if release_cderi:
+        _progress(mf_grad, 'overlap_response_intermediate')
+        stage_start = _profile_start(mf_grad)
+        ovlp_response_intermediate = make_ovlp_response_intermediate(
+            Co, Cv, zvec, fvind)
+        _profile_stop(
+            mf_grad, profile, 'overlap_response_intermediate_seconds',
+            stage_start)
+
+    if release_cderi and isinstance(mf.with_df, GDF):
+        # Native GDF nuclear response rebuilds source/metric primitives from
+        # ``auxcell`` and no longer consumes the SCF CDERI.  Releasing here
+        # prevents mapped host factors from overlapping that large stage.
+        mf_grad.cderi_release_metadata = mf.with_df.release_cderi()
 
     if isinstance(mf.with_df, FFTDF):
         # FFTDF uses the public full-matrix Hcore derivative route.
@@ -176,6 +250,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         s1 = -int1e.int1e_ipovlp(cell, np.zeros((1, 3)))[0]
         # This GPU kernel returns full AO derivatives.  They are shared by the
         # target Hartree skeleton and source-Fock Z contraction.
+        _progress(mf_grad, 'fftdf_jk_derivative')
         stage_start = _profile_start(mf_grad)
         vj1, vk1 = grad_jk(
             cell, dm0, exxdiv=mf_hf.exxdiv, with_df=mf.with_df)
@@ -183,10 +258,12 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                       stage_start)
         mf_grad.vj1 = vj1
         mf_grad.vk1 = vk1
+        _progress(mf_grad, 'skeleton')
         stage_start = _profile_start(mf_grad)
         de_skel = skeleton_gradient(
             mf_grad, dm0, foo, Co, s1, hcore_gen, vj1, atmlst)
         _profile_stop(mf_grad, profile, 'skeleton_seconds', stage_start)
+        _progress(mf_grad, 'source_fock')
         stage_start = _profile_start(mf_grad)
         de_fock = grad_fock_direct(
             mf_grad, Co, Cv, zvec, dm0, hcore_gen, vj1, vk1, atmlst)
@@ -215,6 +292,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
              else 'gpu4pyscf_hcore_generator_batched'))
         mf_grad.hcore_effective_batch_size = (
             None if use_gdf_hcore else hcore_batch_size)
+        _progress(mf_grad, 'hcore_pair')
         stage_start = _profile_start(mf_grad)
         hcore_profile = {} if profile is not None else None
         if use_gdf_hcore:
@@ -242,6 +320,68 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             mf_grad.de_fock_hcore_components = None
         _profile_stop(mf_grad, profile, 'hcore_pair_seconds', stage_start)
         mf_grad.hcore_stage_profile = hcore_profile
+        if mf.multigrid_with_j:
+            # Target J belongs to MG.  The Gaussian provider therefore owns
+            # only the source-HF Z-Fock derivative.  A direct ``P,D_Z``
+            # adjoint is algebraically identical to signed polarization but
+            # avoids building the two full-rank ``P+D_Z``/``P-D_Z`` tensors.
+            _progress(mf_grad, 'gdf_native_response')
+            stage_start = _profile_start(mf_grad)
+            direct_fock, response_memory = (
+                restricted_hf_bilinear_derivative_direct(
+                    mf_hf, dm0, dz, atmlst, return_metadata=True,
+                    profile_detail=mf_grad.profile_gradient_stages))
+            _profile_stop(
+                mf_grad, profile, 'gdf_native_response_seconds', stage_start)
+            s1 = -int1e.int1e_ipovlp(cell, np.zeros((1, 3)))[0]
+            _progress(mf_grad, 'skeleton')
+            stage_start = _profile_start(mf_grad)
+            de_skel = skeleton_gradient(
+                mf_grad, dm0, foo, Co, s1, None, None, atmlst,
+                de_hcore_energy=de_hcore)
+            _profile_stop(mf_grad, profile, 'skeleton_seconds', stage_start)
+            mf_grad.de_j_fock_native = None
+            mf_grad.de_j_fock_source = None
+            mf_grad.de_j_fock_metric = None
+            mf_grad.de_j_fock_ewald = None
+            mf_grad.gdf_term_partition = (
+                'multigrid_target_j_xc_plus_direct_gdf_source_fock')
+            mf_grad.gdf_reciprocal_memory_plan = response_memory[
+                'reciprocal_plan']
+            mf_grad.gdf_reciprocal_zero_order = response_memory[
+                'reciprocal_zero_order']
+            mf_grad.gdf_reciprocal_derivative = response_memory[
+                'reciprocal_derivative']
+            mf_grad.gdf_response_profile = response_memory['profile']
+            mf_grad.gdf_response_workspace = _gdf_workspace_metadata(
+                response_memory)
+            components = response_memory['term_components']
+            _progress(mf_grad, 'source_fock')
+            stage_start = _profile_start(mf_grad)
+            de_fock = grad_fock_gdf(
+                mf_grad, Co, Cv, zvec, dm0, None, atmlst,
+                hcore_derivative=de_fock_hcore,
+                source_derivative=-cp.asarray(components['source']),
+                metric_derivative=-cp.asarray(components['metric']),
+                ewald_derivative=-cp.asarray(components['ewald']),
+                resolved_backend='gdf_direct_source_fock_adjoint')
+            mf_grad.de_j_fock_term_residual_max_abs = float(np.max(np.abs(
+                cp.asnumpy(-direct_fock)
+                - mf_grad.de_fock_source - mf_grad.de_fock_metric
+                - mf_grad.de_fock_ewald)))
+            _profile_stop(
+                mf_grad, profile, 'source_fock_seconds', stage_start)
+            _progress(mf_grad, 'nonvariational')
+            stage_start = _profile_start(mf_grad)
+            de_nvar = nonvariational_correction(
+                mf_grad, Co, Cv, mo_energy, zvec, s1,
+                de_fock, fvind, atmlst,
+                ovlp_response_intermediate=ovlp_response_intermediate)
+            _profile_stop(
+                mf_grad, profile, 'nonvariational_seconds', stage_start)
+            _profile_stop(mf_grad, profile, 'total_seconds', total_start)
+            mf_grad.gradient_stage_profile = profile
+            return de_skel + de_nvar
         response_mode = mf_grad.gdf_response_mode
         if response_mode not in ('auto', 'fused', 'signed', 'separate'):
             raise ValueError(
@@ -258,6 +398,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                 'GPU GDF R2SCAN separate target-J/Z-Fock channels have not '
                 'passed the optional two-channel process-safety gate; use '
                 'auto, signed, or the coupled direct-adjoint fused route')
+        _progress(mf_grad, 'gdf_native_response')
         stage_start = _profile_start(mf_grad)
         if use_separate:
             gdf_terms, response_memory = target_j_and_fock_energy_derivative(
@@ -268,14 +409,18 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                     mf_hf, dm0, dz, atmlst, return_metadata=True))
         else:
             de_j_fock_native, response_memory = target_j_fock_energy_derivative(
-                mf_hf, dm0, dz, atmlst, return_metadata=True)
+                mf_hf, dm0, dz, atmlst, return_metadata=True,
+                profile_detail=mf_grad.profile_gradient_stages)
         _profile_stop(mf_grad, profile, 'gdf_native_response_seconds',
                       stage_start)
+        mf_grad.gdf_response_workspace = _gdf_workspace_metadata(
+            response_memory)
         # The high-mesh Hcore and primitive GDF response above do not depend
         # on overlap derivatives.  Build ``S^lambda`` only after them, which
         # prevents this independent GPU4PySCF integral workspace from being
         # live during the large local-GTH grid traversal.
         s1 = -int1e.int1e_ipovlp(cell, np.zeros((1, 3)))[0]
+        _progress(mf_grad, 'skeleton')
         stage_start = _profile_start(mf_grad)
         de_skel = skeleton_gradient(
             mf_grad, dm0, foo, Co, s1, None, None, atmlst,
@@ -308,6 +453,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                 'fock': response_memory['fock_reciprocal_derivative'],
             }
             mf_grad.gdf_response_profile = response_memory['profile']
+            _progress(mf_grad, 'source_fock')
             stage_start = _profile_start(mf_grad)
             de_fock = grad_fock_gdf(
                 mf_grad, Co, Cv, zvec, dm0, None, atmlst,
@@ -342,6 +488,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             mf_grad.gdf_reciprocal_zero_order = response_memory['reciprocal_zero_order']
             mf_grad.gdf_reciprocal_derivative = response_memory['reciprocal_derivative']
             mf_grad.gdf_response_profile = response_memory['profile']
+            _progress(mf_grad, 'source_fock')
             stage_start = _profile_start(mf_grad)
             de_fock = grad_fock_gdf(
                 mf_grad, Co, Cv, zvec, dm0, None, atmlst,
@@ -368,6 +515,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
              else 'gpu4pyscf_hcore_generator_batched'))
         mf_grad.hcore_effective_batch_size = (
             None if use_analytic_hcore else hcore_batch_size)
+        _progress(mf_grad, 'hcore_pair')
         stage_start = _profile_start(mf_grad)
         hcore_profile = {} if profile is not None else None
         if use_analytic_hcore:
@@ -395,39 +543,56 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             mf_grad.de_fock_hcore_components = None
         _profile_stop(mf_grad, profile, 'hcore_pair_seconds', stage_start)
         mf_grad.hcore_stage_profile = hcore_profile
+        _progress(mf_grad, 'rsdf_native_response')
         stage_start = _profile_start(mf_grad)
         rsdf_terms, rsdf_metadata = make_gradient_response(
-            mf.with_df, dm0, dz, exxdiv=mf_hf.exxdiv)
+            mf.with_df, dm0, dz, exxdiv=mf_hf.exxdiv,
+            with_target_j=not mf.multigrid_with_j)
         _profile_stop(mf_grad, profile, 'rsdf_native_response_seconds',
                       stage_start)
+        if release_cderi:
+            # RSDF reverse-Cholesky needs central C, unlike the native GDF
+            # primitive route.  Its final source/metric scalars mark the
+            # earliest exact release point.
+            mf_grad.cderi_release_metadata = mf.with_df.release_cderi()
         # Keep the overlap primitive out of the large RSDF CUDA response
         # lifetime.  ``S^lambda`` is independent of source/metric
         # derivatives and is only needed by skeleton/nonvariational terms.
         s1 = -int1e.int1e_ipovlp(cell, np.zeros((1, 3)))[0]
-        de_j_source = rsdf_terms['de_j_source']
-        de_j_metric = rsdf_terms['de_j_metric']
+        de_j_source = (
+            None if mf.multigrid_with_j else rsdf_terms['de_j_source'])
+        de_j_metric = (
+            None if mf.multigrid_with_j else rsdf_terms['de_j_metric'])
+        _progress(mf_grad, 'skeleton')
         stage_start = _profile_start(mf_grad)
         de_skel = skeleton_gradient(
             mf_grad, dm0, foo, Co, s1, None, None, atmlst,
-            de_j_energy=de_j_source + de_j_metric,
+            de_j_energy=(
+                None if de_j_source is None
+                else de_j_source + de_j_metric),
             de_hcore_energy=de_hcore)
         _profile_stop(mf_grad, profile, 'skeleton_seconds', stage_start)
-        mf_grad.de_j_source = cp.asnumpy(de_j_source)
-        mf_grad.de_j_metric = cp.asnumpy(de_j_metric)
+        mf_grad.de_j_source = (
+            None if de_j_source is None else cp.asnumpy(de_j_source))
+        mf_grad.de_j_metric = (
+            None if de_j_metric is None else cp.asnumpy(de_j_metric))
         mf_grad.de_j_native = None
         mf_grad.de_j_backend = 'rsdf_source_metric_native_adjoint'
         mf_grad.rsdf_response_metadata = rsdf_metadata
         mf_grad.rsdf_source_reciprocal = rsdf_metadata['source'][
             'reciprocal_memory']
+        _progress(mf_grad, 'source_fock')
         stage_start = _profile_start(mf_grad)
         de_fock = grad_fock_rsdf(
             mf_grad, de_fock_hcore, rsdf_terms['de_fock_source'],
             rsdf_terms['de_fock_metric'], rsdf_terms['de_fock_ewald'],
             atmlst)
         _profile_stop(mf_grad, profile, 'source_fock_seconds', stage_start)
+    _progress(mf_grad, 'nonvariational')
     stage_start = _profile_start(mf_grad)
     de_nvar = nonvariational_correction(
-        mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst)
+        mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst,
+        ovlp_response_intermediate=ovlp_response_intermediate)
     _profile_stop(mf_grad, profile, 'nonvariational_seconds', stage_start)
     _profile_stop(mf_grad, profile, 'total_seconds', total_start)
     mf_grad.gradient_stage_profile = profile
@@ -441,14 +606,17 @@ class Gradients(gpu_rhf_grad.GradientsBase):
 
     _keys = gpu_rhf_grad.GradientsBase._keys | {
         'cphf_conv_tol', 'cphf_residual_tol', 'cphf_max_cycle',
-        'cphf_refinement_solver', 'hcore_method', 'hcore_batch_size',
+        'cphf_refinement_solver', 'df_cphf_response_mode',
+        'hcore_method', 'hcore_batch_size',
         'hcore_backend', 'hcore_effective_batch_size',
         'hcore_stage_profile', 'hcore_pp_loc_part1_plan',
         'de_hcore_components',
         'de_fock_hcore_components',
         'profile_gradient_stages', 'gradient_stage_profile',
+        'progress_callback',
         'grid_response', 'target_fock_reused', 'xc_deriv_backend',
         'de_j_backend', 'de_j_native', 'de_j_source', 'de_j_metric',
+        'de_j_xc_multigrid',
         'de_fock_backend', 'de_fock_native',
         'de_j_fock_native', 'gdf_term_partition',
         'gdf_response_mode',
@@ -456,9 +624,11 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'de_j_fock_term_residual_max_abs',
         'gdf_reciprocal_memory_plan', 'gdf_reciprocal_zero_order',
         'gdf_reciprocal_derivative', 'gdf_response_profile',
+        'gdf_response_workspace',
         'z_primary_wall_seconds', 'z_refinement_wall_seconds',
-        'z_refinement_iterations', 'z_wall_seconds',
+        'z_refinement_iterations', 'z_wall_seconds', 'z_response_backend',
         'rsdf_response_metadata', 'rsdf_source_reciprocal',
+        'cderi_release_metadata',
     }
 
     def __init__(self, mf):
@@ -475,6 +645,10 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # MINRES route avoids restarted-GMRES storage; ``rhf_zvec`` retries
         # GMRES if its independently reconstructed residual is not accepted.
         self.cphf_refinement_solver = 'minres'
+        # GDF/RSDF production accumulates only ``(J-K/2) C_occ`` before the
+        # virtual projection.  The former complete-AO J/K route is retained
+        # as an explicit numerical oracle, never selected automatically.
+        self.df_cphf_response_mode = 'direct_vo'
         # For GDF, ``auto`` uses the source-consistent analytic SR/LR
         # pseudopotential representation.  FFTDF and RSDF keep their existing
         # uniform-grid representation.  Explicit ``grid`` is the GDF
@@ -498,12 +672,16 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # request stream-synchronized stage timings through this opt-in flag.
         self.profile_gradient_stages = False
         self.gradient_stage_profile = None
+        # Optional queue/profiler callback.  It receives stage labels only;
+        # it cannot alter arrays, solver tolerances, or the term ledger.
+        self.progress_callback = None
         self.target_fock_reused = False
         self.xc_deriv_backend = None
         self.de_j_backend = None
         self.de_j_native = None
         self.de_j_source = None
         self.de_j_metric = None
+        self.de_j_xc_multigrid = None
         self.de_fock_backend = None
         self.de_fock_native = None
         self.de_j_fock_native = None
@@ -522,12 +700,15 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         self.gdf_reciprocal_zero_order = None
         self.gdf_reciprocal_derivative = None
         self.gdf_response_profile = None
+        self.gdf_response_workspace = None
         self.rsdf_response_metadata = None
         self.rsdf_source_reciprocal = None
+        self.cderi_release_metadata = None
         self.z_primary_wall_seconds = None
         self.z_refinement_wall_seconds = None
         self.z_refinement_iterations = None
         self.z_wall_seconds = None
+        self.z_response_backend = None
 
     def dump_flags(self, verbose=None):
         '''Log GPU PBC response controls in PySCF style.'''
@@ -538,6 +719,9 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         logger.info(self, 'cphf_max_cycle = %d', self.cphf_max_cycle)
         logger.info(self, 'cphf_refinement_solver = %s',
                     self.cphf_refinement_solver)
+        logger.info(self, 'df_cphf_response_mode = %s',
+                    self.df_cphf_response_mode)
+        logger.info(self, 'z_response_backend = %s', self.z_response_backend)
         logger.info(self, 'hcore_batch_size = %d', self.hcore_batch_size)
         logger.info(self, 'hcore_method = %s', self.hcore_method)
         logger.info(self, 'gdf_response_mode = %s', self.gdf_response_mode)

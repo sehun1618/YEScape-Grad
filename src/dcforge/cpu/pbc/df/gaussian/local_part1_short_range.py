@@ -37,6 +37,11 @@ class ShortRangeLocalPart1:
             / float(self.cell.vol)
             * float(self.charges.sum())
         )
+        # The G=0 overlap derivative is independent of the atom whose AO
+        # slice will be translated.  Build and, when needed, recontract its
+        # three Cartesian rows once instead of repeating the same periodic
+        # integral for every atom-axis contraction.
+        self._g0_overlap_rows = self._build_g0_overlap_rows()
         self._diffuse = self._build_diffuse_context()
 
     def matrix(self, atom_id: int, axis: int) -> np.ndarray:
@@ -120,6 +125,16 @@ class ShortRangeLocalPart1:
     def _g0_overlap_derivative(self, atom_id: int, axis: int) -> np.ndarray:
         """Differentiate the same filtered overlap used by `_RSNucBuilder`."""
 
+        rows = self._g0_overlap_rows[:, axis]
+        p0, p1 = self._ao_slices[atom_id, 2:]
+        output = np.zeros(
+            (self.nkpts, self.nao, self.nao), dtype=rows.dtype)
+        output[:, p0:p1, :] = rows[:, p0:p1, :]
+        return output + output.transpose(0, 2, 1).conj()
+
+    def _build_g0_overlap_rows(self) -> np.ndarray:
+        '''Return cached AO-row overlap derivatives for all three axes.'''
+
         filtered = (
             bool(self.builder.exclude_dd_block)
             and (
@@ -131,30 +146,23 @@ class ShortRangeLocalPart1:
             )
         )
         if not filtered:
-            overlap_rows = np.asarray(
-                pyscf_krhf_grad.get_ovlp(self.cell, self.kpts)
-            )
-            return _full_center_derivative(
-                overlap_rows, self._ao_slices, atom_id, axis
-            )
+            return np.asarray(
+                pyscf_krhf_grad.get_ovlp(self.cell, self.kpts))
 
         rs_cell = self.builder.rs_cell
         overlap_rows = np.asarray(pyscf_krhf_grad.get_ovlp(rs_cell, self.kpts))
         smooth = rs_cell.get_ao_type() == ft_ao.SMOOTH_BASIS
         smooth_block = smooth[:, None] & smooth[None, :]
         recontract = rs_cell.recontract(dim=2)
-        reconstructed = []
+        reconstructed = np.empty(
+            (self.nkpts, 3, self.nao, self.nao),
+            dtype=overlap_rows.dtype)
         for kpoint in range(self.nkpts):
-            row = overlap_rows[kpoint, axis].copy()
-            row[smooth_block] = 0
-            reconstructed.append(recontract(row))
-        reconstructed = np.asarray(reconstructed)
-        p0, p1 = self._ao_slices[atom_id, 2:]
-        output = np.zeros(
-            (self.nkpts, self.nao, self.nao), dtype=reconstructed.dtype
-        )
-        output[:, p0:p1, :] = reconstructed[:, p0:p1, :]
-        return output + output.transpose(0, 2, 1).conj()
+            for axis in range(3):
+                row = overlap_rows[kpoint, axis].copy()
+                row[smooth_block] = 0
+                reconstructed[kpoint, axis] = recontract(row)
+        return reconstructed
 
     def _build_diffuse_context(self):
         if not bool(self.builder.exclude_dd_block):
@@ -275,14 +283,6 @@ class ShortRangeLocalPart1:
         if not 0 <= axis < 3:
             raise IndexError(f"axis={axis} is outside [0, 3)")
         return atom_id, axis
-
-
-def _full_center_derivative(overlap_rows, ao_slices, atom_id, axis):
-    nkpts, _components, nao, _ = overlap_rows.shape
-    p0, p1 = ao_slices[atom_id, 2:]
-    output = np.zeros((nkpts, nao, nao), dtype=overlap_rows.dtype)
-    output[:, p0:p1, :] = overlap_rows[:, axis, p0:p1, :]
-    return output + output.transpose(0, 2, 1).conj()
 
 
 def _normalize_derivative_ao(values: np.ndarray, nkpts: int) -> np.ndarray:

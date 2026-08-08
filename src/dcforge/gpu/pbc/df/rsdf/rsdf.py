@@ -1,4 +1,4 @@
-'''Gamma-point GPU RSDF provider with explicit source and metric ownership.
+'''GPU RSDF provider with explicit source and metric ownership.
 
 GPU4PySCF exposes GPU range-separated three-center and factorization kernels
 through :mod:`gpu4pyscf.pbc.df.rsdf_builder`, but it has no public ``RSGDF``
@@ -20,13 +20,27 @@ from gpu4pyscf.pbc.df import rsdf_builder
 from pyscf.pbc.df import rsdf as cpu_rsdf
 from pyscf.pbc.df import rsdf_helper
 from pyscf.pbc.lib.kpts_helper import is_zero
+from pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 
+from dcforge.cpu.pbc.kpts import normalize_kpts
+from dcforge.gpu.pbc.df.cderi import (
+    CDERI_KEYS,
+    cderi_memory_report,
+    cleanup_cderi_storage,
+    finalize_cderi_storage,
+    init_cderi_options,
+    load_unique_gamma_cderi,
+    preflight_cderi_memory,
+    release_cderi,
+)
 from dcforge.gpu.pbc.df.gaussian.pseudo import (
     PP_LOC_PART1_KEYS,
-    get_pp,
     get_pp_loc_part1_plan,
     init_pp_loc_part1,
     reset_pp_loc_part1,
+)
+from dcforge.gpu.pbc.df.gaussian.pseudo import (
+    get_pp as get_pp_gamma,
 )
 
 _BUILDER_ADAPTER_LOCK = RLock()
@@ -40,13 +54,15 @@ _SOURCE_RECIPROCAL_BLOCK_ALIGNMENT = 32
 
 
 class RSDF(gpu_df.GDF):
-    r'''Gamma-point range-separated Gaussian density-fitting provider.
+    r'''Range-separated GPU provider for Gamma or explicit full BZ.
 
     Args:
         cell : pyscf.pbc.gto.Cell
             Built three-dimensional GTH periodic cell.
 
     Kwargs:
+        kpts : array_like or None
+            Explicit Cartesian full-BZ k-points.  ``None`` selects Gamma.
         auxbasis : str, dict, or None
             Auxiliary basis passed to the PySCF RSDF parameter witness.
 
@@ -56,7 +72,11 @@ class RSDF(gpu_df.GDF):
         resolved by a temporary PySCF ``RSGDF`` witness before the GPU
         builder starts; neither is inferred from the other.  The host metric
         primitive is an explicit, bounded ``O(naux^2)`` compatibility
-        boundary, not a host J/K or host three-center fallback.
+        boundary, not a host J/K or host three-center fallback.  For sampled
+        k-point nuclear gradients, the production response uses the resolved
+        provider-authoritative CPU source/metric derivative.  A one-split
+        GPU4PySCF full-Coulomb response remains a diagnostic probe because it
+        does not differentiate RSDF's independent finite metric settings.
     '''
 
     backend_name = 'rsdf'
@@ -72,11 +92,22 @@ class RSDF(gpu_df.GDF):
         'source_reciprocal_block_alignment',
         'source_reciprocal_gamma_conjugate_symmetry',
         'response_release_cached_blocks',
-    } | PP_LOC_PART1_KEYS
+        'response_mode', 'response_pair_block_size',
+        'response_auxiliary_block_size',
+        'sampled_k_hcore_host_calls', 'sampled_k_hcore_host_bytes',
+        'sampled_k_hcore_owner',
+        'sampled_k_response_layout_copy_count',
+        'sampled_k_response_layout_copy_bytes',
+        'kpts_reference', 'kpts_roundtrip_max_abs',
+    } | PP_LOC_PART1_KEYS | CDERI_KEYS
 
-    def __init__(self, cell, auxbasis=None):
-        gpu_df.GDF.__init__(self, cell, kpts=np.zeros((1, 3)))
-        witness = cpu_rsdf.RSGDF(cell, kpts=np.zeros((1, 3)))
+    def __init__(self, cell, kpts=None, auxbasis=None):
+        kpts = normalize_kpts(kpts, required=False)
+        gpu_df.GDF.__init__(self, cell, kpts=kpts)
+        self.kpts_reference = kpts.copy()
+        self.kpts_roundtrip_max_abs = float(np.max(np.abs(
+            np.asarray(self.kpts) - self.kpts_reference)))
+        witness = cpu_rsdf.RSGDF(cell, kpts=kpts)
         if auxbasis is not None:
             witness.auxbasis = auxbasis
         self.auxbasis = witness.auxbasis
@@ -116,16 +147,51 @@ class RSDF(gpu_df.GDF):
         # resident high-water mark of the next one.  Live arrays are retained
         # by CuPy and are therefore unaffected mathematically.
         self.response_release_cached_blocks = True
+        # The production response keeps the central factor and reverse
+        # adjoints in unique real-Gamma AO-pair storage and consumes target-J
+        # and source-Fock observables sequentially.  ``dense`` remains the
+        # algebraically independent validation oracle.
+        self.response_mode = 'sequential_packed'
+        self.response_pair_block_size = 8192
+        self.response_auxiliary_block_size = 32
+        self.sampled_k_hcore_host_calls = 0
+        self.sampled_k_hcore_host_bytes = 0
+        self.sampled_k_hcore_owner = None
+        self.sampled_k_response_layout_copy_count = 0
+        self.sampled_k_response_layout_copy_bytes = 0
+        init_cderi_options(self)
         # The one-electron GTH operator is independent of the RSDF source and
         # metric range separations.  It owns a separate PySCF-derived local
         # part-1 plan that is shared by zero-order Hcore and its derivative.
         init_pp_loc_part1(self)
 
     get_pp_loc_part1_plan = get_pp_loc_part1_plan
-    get_pp = get_pp
+
+    def get_pp(self, kpts=None):
+        '''Return provider-consistent GTH matrices for Gamma or sampled k.'''
+        requested = self.kpts if kpts is None else np.asarray(kpts)
+        sampled_k = (
+            np.asarray(requested).reshape(-1, 3).shape[0] > 1
+            or np.any(np.asarray(requested) != 0))
+        if not sampled_k:
+            return get_pp_gamma(self, kpts)
+
+        witness = cpu_rsdf.RSGDF(self.cell, kpts=self.kpts)
+        witness.auxbasis = self.auxbasis
+        for name in (
+                'use_bvk', 'precision_R', 'precision_G', 'npw_max',
+                '_omega_min', 'omega', 'ke_cutoff', 'mesh_compact',
+                'omega_j2c', 'mesh_j2c', 'precision_j2c',
+                'j2c_eig_always'):
+            setattr(witness, name, getattr(self, name))
+        host = np.asarray(witness.get_pp(requested))
+        self.sampled_k_hcore_host_calls += 1
+        self.sampled_k_hcore_host_bytes += int(host.nbytes)
+        self.sampled_k_hcore_owner = 'PySCF RSGDF.get_pp sampled-k'
+        return cp.asarray(host)
 
     def build(self, j_only=None, kpts_band=None):
-        r'''Build Gamma RSDF factors with PySCF-resolved source/metric data.
+        r'''Build RSDF factors with PySCF-resolved source/metric data.
 
         The compressed GPU factors have the ordinary GPU4PySCF ``GDF``
         layout.  Consequently inherited GPU J/K contractions remain device
@@ -139,7 +205,8 @@ class RSDF(gpu_df.GDF):
         if self._j_only:
             raise NotImplementedError(
                 'GPU RSDF currently builds exchange-capable Gamma factors only')
-        _check_gamma_cell(self)
+        _check_cell(self)
+        preflight_cderi_memory(self)
         witness = self._build_parameter_witness()
         if witness.j2c_eig_always:
             raise NotImplementedError(
@@ -148,17 +215,19 @@ class RSDF(gpu_df.GDF):
         self._adopt_witness_settings(witness)
         state = _BuildState()
         start = perf_counter()
+        kmesh = np.asarray(kpts_to_kmesh(
+            self.cell, self.kpts, precision=self.cell.precision), dtype=int)
         with _cpu_equivalent_builder(
                 self, witness.auxcell, state):
             cderi, cderip, cderi_idx = rsdf_builder.build_cderi(
-                self.cell, witness.auxcell, kpts=None,
-                kmesh=np.ones(3, dtype=int), j_only=False, omega=None,
+                self.cell, witness.auxcell, kpts=self.kpts,
+                kmesh=kmesh, j_only=False, omega=None,
                 linear_dep_threshold=float(self.linear_dep_threshold),
                 compress=True)
         cp.cuda.Stream.null.synchronize()
         self.auxcell = witness.auxcell
         self.nao = int(self.cell.nao_nr())
-        self.kmesh = np.ones(3, dtype=int)
+        self.kmesh = kmesh
         self._omega = None
         self._cderi = cderi
         self._cderip = cderip
@@ -167,7 +236,7 @@ class RSDF(gpu_df.GDF):
         self._j_only = False
         self._central_metric = state.central_metric
         self.central_build_metadata = {
-            'builder': 'dcforge Gamma RSDF exact central adapter',
+            'builder': 'dcforge sampled-k RSDF exact central adapter',
             'source_owner': 'GPU4PySCF CUDA three-center builder',
             'short_range_metric_owner': 'PySCF rsdf_helper.intor_j2c',
             'long_range_metric_owner': 'GPU4PySCF reciprocal kernels',
@@ -181,10 +250,12 @@ class RSDF(gpu_df.GDF):
             'metric_block_plans': state.metric_block_plans,
             'total_build_seconds': perf_counter() - start,
         }
+        finalize_cderi_storage(self)
         return self
 
     def reset(self, cell=None):
         '''Reset geometry-dependent GPU factors and RSDF build diagnostics.'''
+        cleanup_cderi_storage(self)
         gpu_df.GDF.reset(self, cell)
         # Match PySCF GDF/RSGDF reset semantics.  GPU4PySCF's GDF reset does
         # not clear ``auxcell`` even though its centers and environment belong
@@ -192,8 +263,25 @@ class RSDF(gpu_df.GDF):
         self.auxcell = None
         self.central_build_metadata = None
         self._central_metric = None
+        self.sampled_k_hcore_host_calls = 0
+        self.sampled_k_hcore_host_bytes = 0
+        self.sampled_k_hcore_owner = None
+        self.sampled_k_response_layout_copy_count = 0
+        self.sampled_k_response_layout_copy_bytes = 0
         reset_pp_loc_part1(self)
         return self
+
+    def cderi_memory_report(self, response_observables=2):
+        '''Return exact central-factor and dense-response memory telemetry.'''
+        return cderi_memory_report(self, response_observables)
+
+    def release_cderi(self):
+        '''Release central factors after all source-HF response actions.'''
+        return release_cderi(self)
+
+    def packed_cderi(self, auxiliary_block_size=256):
+        '''Return unique real-Gamma AO-pair CDERI and its symmetry layout.'''
+        return load_unique_gamma_cderi(self, auxiliary_block_size)
 
     def canonical_cderi(self):
         r'''Expand the compressed Gamma CDERI into its device tensor form.
@@ -213,23 +301,24 @@ class RSDF(gpu_df.GDF):
             is not retained by the provider, so its storage can be released
             before the native source contraction starts on a large system.
         '''
+        kpts = np.asarray(self.kpts, dtype=float).reshape(-1, 3)
+        if len(kpts) != 1 or not is_zero(kpts[0]):
+            raise NotImplementedError(
+                'canonical_cderi is the real-Gamma RSDF response primitive')
         if self._cderi is None:
             self.build(j_only=False)
         if self._cderip is not None:
             raise NotImplementedError(
                 'GPU RSDF response does not support an indefinite metric')
-        packed = self._cderi.get(0)
-        if packed is None:
-            raise RuntimeError('Gamma RSDF compressed CDERI block is missing')
-        pair_address = self._cderi_idx[0]
-        nao = int(self.cell.nao_nr())
+        packed, layout = self.packed_cderi()
+        nao = int(layout['nao'])
         # This is the real-Gamma triangular expansion of GPU4PySCF's
         # compressed central factor.  It is deliberately separate from the
         # provider's fast compressed J/K route: source-HF SCF and CPHF keep
         # their native GPU4PySCF contractions, while reverse adjoints need
         # one common ``(P,i,j)`` factor representation.
-        packed = cp.asarray(packed)
-        row, column = divmod(cp.asarray(pair_address), nao)
+        row = cp.asarray(layout['row'], dtype=cp.int32)
+        column = cp.asarray(layout['column'], dtype=cp.int32)
         expanded = cp.zeros((packed.shape[0], nao, nao), dtype=packed.dtype)
         expanded[:, row, column] = packed
         expanded[:, column, row] = packed
@@ -248,7 +337,7 @@ class RSDF(gpu_df.GDF):
         return cp.linalg.cholesky(self._central_metric)
 
     def capability(self):
-        '''Return the resolved Gamma GPU RSDF capability boundary.
+        '''Return the resolved GPU RSDF capability boundary.
 
         The compact source mesh is an accuracy/performance setting resolved by
         PySCF's RSGDF policy.  It is not a CUDA safety discriminator: small
@@ -256,20 +345,31 @@ class RSDF(gpu_df.GDF):
         but the same native source endpoint remains mathematically valid.
         '''
         mesh = getattr(self, 'mesh_compact', None)
+        sampled_k = len(self.kpts) > 1 or np.any(np.asarray(self.kpts) != 0)
         source_mesh = None if mesh is None else [int(value) for value in mesh]
         return {
             'backend': self.backend_name,
             'device': self.device,
-            'sampling': 'gamma',
-            'reference': 'RHF',
+            'sampling': 'full_bz' if sampled_k else 'gamma',
+            'reference': 'KRHF' if sampled_k else 'RHF',
             'target': ['PBE', 'R2SCAN'],
             'energy': True,
             'analytic_gradient': True,
             'analytic_gradient_process_scope': 'same_process_reentrant',
             'analytic_gradient_requirements': (
+                'sampled-k provider-exact resolved CPU response'
+                if sampled_k else
                 'Gamma real-orbital RSDF with CUDA task batches <= POOL_SIZE'),
+            'sampled_k_response': (
+                'DC-Forge CPU provider-authoritative source/metric response'
+                if sampled_k else None),
+            'sampled_k_full_coulomb_probe': (
+                'GPU4PySCF native combined; not production eligible'
+                if sampled_k else None),
             'source_mesh': source_mesh,
             'stress': False,
+            'sampled_k_hcore_host_boundary': sampled_k,
+            'kpts_roundtrip_max_abs': self.kpts_roundtrip_max_abs,
             'auxbasis': self.auxbasis,
             'source_omega': self.omega,
             'metric_omega': self.omega_j2c,
@@ -277,6 +377,13 @@ class RSDF(gpu_df.GDF):
                 self.source_reciprocal_gamma_conjugate_symmetry),
             'response_release_cached_blocks': (
                 self.response_release_cached_blocks),
+            'response_mode': self.response_mode,
+            'response_pair_block_size': self.response_pair_block_size,
+            'response_auxiliary_block_size': (
+                self.response_auxiliary_block_size),
+            'cderi_storage': self.cderi_storage,
+            'cderi_memory_metadata': self.cderi_memory_metadata,
+            'release_cderi_after_response': self.release_cderi_after_response,
             'pp_loc_part1_omega': self.pp_loc_part1_omega,
             'pp_loc_part1_omega_resolved': self.pp_loc_part1_omega_resolved,
             'pp_loc_part1_ke_cutoff': self.pp_loc_part1_ke_cutoff,
@@ -302,7 +409,7 @@ class RSDF(gpu_df.GDF):
         }
 
     def _build_parameter_witness(self):
-        witness = cpu_rsdf.RSGDF(self.cell, kpts=np.zeros((1, 3)))
+        witness = cpu_rsdf.RSGDF(self.cell, kpts=self.kpts)
         witness.auxbasis = self.auxbasis
         for name in (
                 'use_bvk', 'precision_R', 'precision_G', 'npw_max',
@@ -472,10 +579,7 @@ def _metric_block_plan(ngrids, naux):
     }
 
 
-def _check_gamma_cell(provider):
-    '''Reject unsupported representations before mutating the builder state.'''
+def _check_cell(provider):
+    '''Reject unsupported dimensions before mutating the builder state.'''
     if provider.cell.dimension != 3:
         raise NotImplementedError('GPU RSDF currently requires a 3D Cell')
-    kpts = np.asarray(provider.kpts, dtype=float).reshape(-1, 3)
-    if len(kpts) != 1 or not is_zero(kpts[0]):
-        raise NotImplementedError('GPU RSDF currently requires Gamma point')

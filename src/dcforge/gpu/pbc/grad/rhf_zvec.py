@@ -347,5 +347,6 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         'primary_wall_seconds': primary_wall_seconds,
         'refinement_wall_seconds': refinement_wall_seconds,
         'refinement_iterations': refinement_iterations,
+        'response_backend': getattr(vind, 'backend', 'ao_density_gen_response'),
         'wall_seconds': time.perf_counter() - total_start,
     }

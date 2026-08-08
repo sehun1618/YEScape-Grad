@@ -12,6 +12,7 @@ from dcforge.gpu.pbc.df.gdf.native_gamma import (
     coulomb_energy_derivative as native_coulomb_energy_derivative,
 )
 from dcforge.gpu.pbc.df.gdf.native_gamma import (
+    fock_bilinear_derivative,
     signed_hf_bilinear_derivative,
     target_j_and_fock_derivative,
     target_j_fock_derivative,
@@ -99,8 +100,30 @@ def restricted_hf_bilinear_derivative(mf_hf, dm0, dz, atmlst=None):
     return signed_hf_bilinear_derivative(mf_hf, dm0, dz, atmlst)
 
 
+def restricted_hf_bilinear_derivative_direct(
+        mf_hf, dm0, dz, atmlst=None, return_metadata=False,
+        profile_detail=False):
+    r'''Return the source-HF cross derivative through one direct adjoint.
+
+    This has the same value and sign as
+    :func:`restricted_hf_bilinear_derivative`; it avoids constructing the
+    two signed full-rank primitive tensors and exposes source/metric/Ewald
+    metadata for the MG target-J partition.  ``profile_detail=True`` adds
+    validation-only metric/adjoint timers without changing the contraction.
+    '''
+    dm0 = cp.asarray(dm0)
+    dz = cp.asarray(dz)
+    if dm0.shape != dz.shape:
+        raise ValueError(
+            'reference and adjoint densities must have identical AO shape')
+    return fock_bilinear_derivative(
+        mf_hf, dm0, dz, atmlst, return_metadata=return_metadata,
+        profile_detail=profile_detail)
+
+
 def target_j_fock_energy_derivative(mf_hf, dm0, dz, atmlst=None,
-                                    return_metadata=False):
+                                    return_metadata=False,
+                                    profile_detail=False):
     '''Return fused ``de_j + de_fock_native`` from one GDF traversal.
 
     See :func:`dcforge.gpu.pbc.df.gdf.native_gamma.target_j_fock_derivative`
@@ -110,10 +133,12 @@ def target_j_fock_energy_derivative(mf_hf, dm0, dz, atmlst=None,
     ``metadata['term_components']`` contains the exact source-primitive,
     auxiliary-metric, and Ewald components of this *fused* observable.  It
     does not imply that target-J and Z-Fock were evaluated in separate native
-    dispatches.
+    dispatches.  ``profile_detail=True`` only decomposes the existing
+    metric/adjoint timing stage.
     '''
     return target_j_fock_derivative(
-        mf_hf, dm0, dz, atmlst, return_metadata=return_metadata)
+        mf_hf, dm0, dz, atmlst, return_metadata=return_metadata,
+        profile_detail=profile_detail)
 
 
 def target_j_fock_signed_energy_derivative(

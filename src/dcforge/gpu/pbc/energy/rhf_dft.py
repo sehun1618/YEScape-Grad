@@ -16,6 +16,7 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.pbc import gto
 
+from dcforge.gpu.pbc import multigrid as dc_multigrid
 from dcforge.gpu.pbc.df.fft import FFTDF
 from dcforge.gpu.pbc.df.gdf import GDF
 from dcforge.gpu.pbc.df.rsdf import RSDF
@@ -69,9 +70,6 @@ def _check_input(mf):
             'FFTDF energy requires with_df.mesh == cell.mesh'
         )
     if isinstance(mf._numint, multigrid_v2.MultiGridNumInt):
-        if not isinstance(mf.with_df, (GDF, RSDF)):
-            raise NotImplementedError(
-                'GPU XC-only multigrid requires a GDF or RSDF Hartree provider')
         if cell.ke_cutoff is None or cell.ke_cutoff <= 0:
             raise ValueError(
                 'GPU multigrid XC requires a positive cell.ke_cutoff set '
@@ -82,6 +80,9 @@ def _check_input(mf):
                 np.asarray(mf._numint.mesh), np.asarray(cell.mesh)):
             raise ValueError(
                 'GPU multigrid XC mesh must equal the resolved cell.mesh')
+    elif mf.multigrid_with_j:
+        raise ValueError(
+            'multigrid_with_j=True requires multigrid_numint(with_j=True)')
     if mf._numint.libxc.is_hybrid_xc(mf.xc):
         raise NotImplementedError(
             'periodic target functionals must be pure semilocal PBE or R2SCAN')
@@ -142,6 +143,7 @@ class RHFDFT(rks.RKS):
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'dm_hf', 'target_fock',
         'target_fock_signature', '_source_converged', 'multigrid_backend',
+        'multigrid_with_j', 'source_jk_backend',
     }
     _hf_options = (
         'max_memory', 'verbose', 'stdout', 'chkfile', 'conv_tol',
@@ -176,6 +178,8 @@ class RHFDFT(rks.RKS):
         self.target_fock_signature = None
         self._source_converged = False
         self.multigrid_backend = None
+        self.multigrid_with_j = False
+        self.source_jk_backend = self.with_df.backend_name
 
     @property
     def device(self):
@@ -262,19 +266,18 @@ class RHFDFT(rks.RKS):
 
     def get_veff(self, cell=None, dm=None, dm_last=None, vhf_last=None,
                  hermi=1, kpt=None, kpts_band=None):
-        r'''Return target ``J_DF[P] + V_xc^MG[P]`` when MG is selected.
+        r'''Return the selected target Hartree-plus-XC potential.
 
         GPU4PySCF multigrid normally owns both Coulomb and XC.  DC-Forge
-        deliberately requests its XC-only ``nr_rks(..., with_j=False)``
-        value and obtains Hartree from the same explicit GDF or RSDF provider that
-        built the source RHF and CPHF action.  The returned tagged energy
-        fields likewise use the provider Hartree energy and multigrid XC
-        energy, so inherited ``RKS.energy_tot`` remains the fixed-density
-        target-DFA@RHF functional rather than a mixed-owner calculation.
+        ``multigrid_with_j=False`` requests XC only and obtains target Hartree
+        from the source FFTDF/GDF/RSDF provider.  ``True``
+        requests the fused multigrid J+XC potential and Coulomb energy.
+        Source RHF and CPHF keep their original provider/backend in either
+        case.
 
         The arguments mirror GPU4PySCF ``RKS.get_veff``.  Incremental
-        ``dm_last``/``vhf_last`` reuse is intentionally not claimed for the
-        XC-only split because the fixed-density target is evaluated once.
+        ``dm_last``/``vhf_last`` reuse is intentionally not claimed for this
+        target split because the fixed-density target is evaluated once.
         '''
         if not isinstance(self._numint, multigrid_v2.MultiGridNumInt):
             return rks.RKS.get_veff(
@@ -288,14 +291,19 @@ class RHFDFT(rks.RKS):
         if kpt is None:
             kpt = self.kpt
         ni = self._numint
+        with_j = bool(self.multigrid_with_j)
         _nelec, exc, vxc = ni.nr_rks(
             cell, self.grids, self.xc, dm, 0, hermi, kpt, kpts_band,
-            with_j=False, verbose=self.verbose)
-        vj, _vk = self.with_df.get_jk(
-            cp.asarray(dm), hermi=hermi, kpts=kpt, kpts_band=kpts_band,
-            with_j=True, with_k=False, exxdiv=self.exxdiv)
+            with_j=with_j, verbose=self.verbose)
+        if with_j:
+            return vxc
+        # The source SCF object is the authoritative J/K dispatcher and
+        # delegates target Hartree to the shared FFTDF/GDF/RSDF provider.
+        vj, _vk = self.mf_hf.get_jk(
+            cell=cell, dm=cp.asarray(dm), hermi=hermi, kpt=kpt,
+            kpts_band=kpts_band, with_j=True, with_k=False)
         if vj is None:
-            raise RuntimeError('Gaussian DF provider did not return target Hartree J')
+            raise RuntimeError('active DF provider did not return target Hartree J')
         vj = cp.asarray(vj)
         ecoul = .5 * cp.einsum('ij,ji->', cp.asarray(dm), vj).real
         return tag_array(cp.asarray(vxc) + vj, ecoul=ecoul, exc=exc)
@@ -331,13 +339,13 @@ class RHFDFT(rks.RKS):
         return self._set_provider(with_df)
 
     def multigrid_numint(self, mesh=None, ntasks=None, ke_ratio=None,
-                         rel_cutoff=None):
-        r'''Return a copy whose target XC uses GPU multigrid-v2 only.
+                         rel_cutoff=None, with_j=False):
+        r'''Return a copy whose target XC optionally includes multigrid J.
 
-        Source RHF, source CPHF, target Hartree, Hcore and their derivatives
-        remain owned by the shared GPU GDF or RSDF provider.  Only ``E_xc``, ``V_xc``
-        and its explicit nuclear derivative are delegated to GPU4PySCF's
-        ``multigrid_v2.MultiGridNumInt`` on the existing ``cell.mesh``.
+        Source RHF and source CPHF always remain owned by the shared GPU
+        provider.  ``with_j=False`` delegates only target XC to multigrid;
+        ``with_j=True`` delegates fixed-density target J+XC and its explicit
+        derivative together.
 
         Args:
             mesh : None
@@ -349,11 +357,14 @@ class RHFDFT(rks.RKS):
                 1.8.0 multigrid-v2 does not expose these hierarchy controls;
                 passing them is rejected instead of silently ignoring a
                 requested numerical representation.
+            with_j : bool
+                Select fused target multigrid J+XC instead of XC only.
 
         Returns:
             RHFDFT
                 A shallow copied fixed-density workflow with the same source
-                RHF and Gaussian-DF provider but a new XC-only multigrid integrator.
+                RHF and DF provider but a new multigrid integrator with the
+                requested target-Hartree ownership.
         '''
         if mesh is not None:
             raise ValueError(
@@ -363,19 +374,21 @@ class RHFDFT(rks.RKS):
             raise NotImplementedError(
                 'GPU4PySCF multigrid-v2 does not expose ntasks, ke_ratio, '
                 'or rel_cutoff controls')
-        if not isinstance(self.with_df, (GDF, RSDF)):
-            raise NotImplementedError(
-                'GPU XC-only multigrid requires GDF or RSDF; FFTDF Hartree '
-                'is not part of this split-provider implementation')
+        if not isinstance(with_j, (bool, np.bool_)):
+            raise TypeError('multigrid with_j must be boolean')
+        with_j = bool(with_j)
         if self.cell.ke_cutoff is None or self.cell.ke_cutoff <= 0:
             raise ValueError(
                 'multigrid_numint requires a positive cell.ke_cutoff set '
                 'before cell.build()')
         mf = self.copy()
-        ni = multigrid_v2.MultiGridNumInt(self.cell)
+        ni = dc_multigrid.MultiGridNumInt(self.cell)
         ni.mesh = np.asarray(self.cell.mesh, dtype=int).copy()
         mf._numint = ni
-        mf.multigrid_backend = 'gpu4pyscf_multigrid_v2_xc_only'
+        mf.multigrid_with_j = with_j
+        mf.multigrid_backend = (
+            'gpu4pyscf_multigrid_v2_j_xc' if with_j
+            else 'gpu4pyscf_multigrid_v2_xc_only')
         mf.e_dft = mf.dm_hf = mf.target_fock = None
         mf.target_fock_signature = None
         if mf.e_hf is not None:
@@ -407,14 +420,16 @@ class RHFDFT(rks.RKS):
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None
         self._source_converged = False
+        self.source_jk_backend = self.with_df.backend_name
         self.multigrid_backend = (
-            'gpu4pyscf_multigrid_v2_xc_only'
+            ('gpu4pyscf_multigrid_v2_j_xc' if self.multigrid_with_j
+             else 'gpu4pyscf_multigrid_v2_xc_only')
             if isinstance(self._numint, multigrid_v2.MultiGridNumInt)
             else None)
         return self
 
     def nuc_grad_method(self):
-        '''Return the Gamma-point GPU FFTDF/GDF/RSDF analytic gradient driver.'''
+        '''Return the Gamma FFTDF/GDF/RSDF gradient driver.'''
         if not isinstance(self.with_df, (FFTDF, GDF, RSDF)):
             raise NotImplementedError('unsupported GPU PBC analytic-gradient provider')
         from dcforge.gpu.pbc.grad.rhf_dft import Gradients
@@ -468,6 +483,7 @@ class RHFDFT(rks.RKS):
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None
         self._source_converged = False
+        self.source_jk_backend = provider.backend_name
         self.converged = False
         return self
 
@@ -575,7 +591,7 @@ def _target_fock_signature(mf, dm):
     '''Return immutable state that defines a reusable GPU target Fock.'''
     provider = mf.with_df
     values = [
-        str(mf.xc), id(provider),
+        str(mf.xc), id(provider), bool(mf.multigrid_with_j),
         np.asarray(mf.cell.atom_coords()).tobytes(),
         np.asarray(mf.cell.lattice_vectors()).tobytes(),
         float(mf.cell.ke_cutoff) if mf.cell.ke_cutoff is not None else None,
@@ -593,7 +609,7 @@ def _target_fock_signature(mf, dm):
             values.append(np.asarray(value).tobytes())
     if isinstance(mf._numint, multigrid_v2.MultiGridNumInt):
         values.extend((
-            'gpu4pyscf_multigrid_v2_xc_only',
+            mf.multigrid_backend,
             np.asarray(mf._numint.mesh, dtype=int).tobytes(),
         ))
     else:

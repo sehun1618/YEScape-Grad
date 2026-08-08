@@ -11,6 +11,7 @@ from pyscf.pbc.df.incore import libpbc
 from dcforge.cpu.pbc.df.gaussian.metric import (
     g0_metric,
     gen_grad_long_range_metric,
+    grad_long_range_metric,
     long_range_metric,
 )
 
@@ -32,6 +33,24 @@ def auxiliary_metric(cell, auxcell, omega, mesh):
     )
 
 
+def auxiliary_metric_kpts(cell, auxcell, omega, mesh, q):
+    r'''Return the exact public-RSDF metric :math:`M(q)`.
+
+    The screened real-space integral, reciprocal complement and zero-transfer
+    auxiliary-charge correction all use the same Cartesian momentum transfer
+    ``q=k_j-k_i``.  Source and metric omega/mesh ownership remains external to
+    this function; K6 passes the independently resolved metric settings.
+    '''
+    q = _qpoint(q)
+    short_range = np.asarray(rsdf_helper.intor_j2c(
+        auxcell, float(omega), kpts=q.reshape(1, 3)))[0]
+    return (
+        short_range
+        + long_range_metric(cell, auxcell, omega, mesh, q)
+        + g0_metric(cell, auxcell, omega, q)
+    )
+
+
 def grad_auxiliary_metric(cell, auxcell, omega, mesh, atmlst=None):
     r'''Return the exact fixed-cell RSDF metric derivative :math:`M^\lambda`.
 
@@ -43,6 +62,39 @@ def grad_auxiliary_metric(cell, auxcell, omega, mesh, atmlst=None):
     '''
     metric1 = gen_grad_auxiliary_metric(cell, auxcell, omega, mesh)
     return metric1(atmlst)
+
+
+def grad_auxiliary_metric_kpts(
+        cell, auxcell, omega, mesh, q, atmlst=None):
+    r'''Return the exact sampled-k RSDF metric derivative :math:`M^\lambda(q)`.'''
+    q = _qpoint(q)
+    short_range1 = grad_short_range_metric_kpts(
+        auxcell, omega, q, atmlst)
+    long_range1 = grad_long_range_metric(
+        cell, auxcell, omega, mesh, q, atmlst)
+    return short_range1 + long_range1
+
+
+def grad_short_range_metric_kpts(auxcell, omega, q, atmlst=None):
+    r'''Return atom-resolved screened metric derivatives at transfer ``q``.'''
+    q = _qpoint(q)
+    ip1 = _short_range_integral(
+        auxcell, omega, 'int2c2e_ip1', q)
+    ip2 = _short_range_integral(
+        auxcell, omega, 'int2c2e_ip2', q)
+    naux = auxcell.nao_nr()
+    if atmlst is None:
+        atmlst = range(auxcell.natm)
+    atmlst = [int(ia) for ia in atmlst]
+    value = np.zeros(
+        (len(atmlst), 3, naux, naux),
+        dtype=np.result_type(ip1, ip2))
+    aoslices = auxcell.aoslice_nr_by_atom()
+    for k, ia in enumerate(atmlst):
+        p0, p1 = aoslices[ia, 2:]
+        value[k, :, p0:p1] -= ip1[:, p0:p1]
+        value[k, :, :, p0:p1] -= ip2[:, :, p0:p1]
+    return _real_if_close(value)
 
 
 def gen_grad_auxiliary_metric(cell, auxcell, omega, mesh):
@@ -111,7 +163,7 @@ def gen_grad_short_range_metric(auxcell, omega):
     return metric1
 
 
-def _short_range_integral(auxcell, omega, intor):
+def _short_range_integral(auxcell, omega, intor, kpt=None):
     precision = float(auxcell.precision)
     ref_map, unique_atoms, unique_basis, unique_basis_loc = (
         rsdf_helper._get_refuniq_map(auxcell))
@@ -138,8 +190,10 @@ def _short_range_integral(auxcell, omega, intor):
     ni = int(ao_loc[i1] - ao_loc[i0])
     nj = int(ao_loc[j1] - ao_loc[j0])
     output = np.empty((1, comp, ni, nj), dtype=np.complex128)
+    kpt = _qpoint(kpt)
     phase = np.asarray(
-        np.exp(1j * np.dot(np.zeros((1, 3)), lattice_vectors.T)), order='C')
+        np.exp(1j * np.dot(kpt.reshape(1, 3), lattice_vectors.T)),
+        order='C')
 
     libpbc.PBCsr2c_k_drv(
         getattr(mol_gto.moleintor.libcgto, intor),
@@ -158,6 +212,13 @@ def _short_range_integral(auxcell, omega, intor):
         env.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(env.size),
     )
     return output[0]
+
+
+def _qpoint(q):
+    q = np.zeros(3) if q is None else np.asarray(q, dtype=float)
+    if q.shape != (3,):
+        raise ValueError(f'q must have shape (3,), got {q.shape}')
+    return q
 
 
 def _real_if_close(value, tol=1e-10):

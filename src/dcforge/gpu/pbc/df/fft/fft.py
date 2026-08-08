@@ -3,6 +3,8 @@
 import numpy as np
 from gpu4pyscf.pbc import df
 
+from dcforge.cpu.pbc.kpts import normalize_kpts
+
 
 class FFTDF(df.FFTDF):
     '''Gamma-point GPU FFTDF provider shared by source and target.
@@ -24,9 +26,19 @@ class FFTDF(df.FFTDF):
 
     backend_name = 'fftdf'
     device = 'gpu'
+    _keys = df.FFTDF._keys | {
+        'kpts_reference', 'kpts_roundtrip_max_abs',
+    }
 
-    def __init__(self, cell, mesh=None):
-        df.FFTDF.__init__(self, cell, kpts=np.zeros((1, 3)))
+    def __init__(self, cell, mesh=None, kpts=None):
+        kpts = normalize_kpts(kpts, required=False)
+        df.FFTDF.__init__(self, cell, kpts=kpts)
+        # GPU4PySCF stores scaled coordinates and exposes Cartesian k-points
+        # through a round trip.  Retain the exact user array for state
+        # identity and report the harmless numerical round-trip residual.
+        self.kpts_reference = kpts.copy()
+        self.kpts_roundtrip_max_abs = float(np.max(np.abs(
+            np.asarray(self.kpts) - self.kpts_reference)))
         if mesh is not None:
             mesh = np.asarray(mesh, dtype=int).reshape(3)
             if np.any(mesh <= 0):
@@ -35,14 +47,16 @@ class FFTDF(df.FFTDF):
 
     def capability(self):
         '''Return the validated GPU FFTDF capability boundary.'''
+        sampled_k = len(self.kpts) > 1 or np.any(np.asarray(self.kpts) != 0)
         return {
             'backend': self.backend_name,
             'device': self.device,
-            'sampling': 'gamma',
-            'reference': 'RHF',
+            'sampling': 'full_bz' if sampled_k else 'gamma',
+            'reference': 'KRHF' if sampled_k else 'RHF',
             'target': ['PBE', 'R2SCAN'],
             'energy': True,
             'analytic_gradient': True,
             'stress': False,
             'mesh': [int(value) for value in self.mesh],
+            'kpts_roundtrip_max_abs': self.kpts_roundtrip_max_abs,
         }

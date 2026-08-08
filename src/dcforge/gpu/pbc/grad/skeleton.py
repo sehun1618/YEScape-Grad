@@ -15,7 +15,7 @@ from pyscf.pbc.gto.pseudo.pp import get_alphas, get_vlocG
 from dcforge.gpu.pbc.df.gaussian.nonlocal_pseudo import (
     contract_nonlocal_pseudo_batch,
 )
-from dcforge.gpu.pbc.grad.multigrid import get_vxc_deriv as get_multigrid_vxc_deriv
+from dcforge.gpu.pbc.grad.multigrid import get_veff_deriv as get_multigrid_veff_deriv
 
 # Match GPU4PySCF ``KNumInt.block_loop``'s upper grid-block bound while
 # retaining one AO evaluator across all atom batches below.  The latter is
@@ -771,11 +771,16 @@ def grad_vxc(mf_grad, dm0, atmlst):
     derivative.  When :meth:`RHFDFT.multigrid_numint` selected GPU
     multigrid-v2, the adapter supplies an already density-contracted
     XC-only value; its Hartree and local-pseudopotential pieces have been
-    explicitly disabled so GDF remains their sole owner.
+    explicitly disabled so the active FFTDF/GDF/RSDF provider remains the
+    sole Hartree owner.
     '''
     mf = mf_grad.base
     if isinstance(mf._numint, multigrid_v2.MultiGridNumInt):
-        de = get_multigrid_vxc_deriv(mf_grad, dm0)[atmlst]
+        if mf.multigrid_with_j:
+            raise ValueError(
+                'grad_vxc cannot split a fused multigrid J+XC derivative; '
+                'use skeleton_gradient')
+        de = get_multigrid_veff_deriv(mf_grad, dm0)[atmlst]
         mf_grad.de_vxc = cp.asnumpy(de)
         return de
     grids = mf.grids
@@ -814,10 +819,23 @@ def skeleton_gradient(mf_grad, dm0, foo, Co, s1, hcore_gen, vj1, atmlst,
     grad_hcore(
         mf_grad, dm0, hcore_gen, atmlst,
         energy_derivative=de_hcore_energy)
-    de_j = grad_j(
-        mf_grad, dm0, vj1, atmlst, energy_derivative=de_j_energy)
-    de_vxc = grad_vxc(mf_grad, dm0, atmlst)
-    de_veff = de_j + de_vxc
+    mf = mf_grad.base
+    if (isinstance(mf._numint, multigrid_v2.MultiGridNumInt)
+            and mf.multigrid_with_j):
+        de_veff = get_multigrid_veff_deriv(mf_grad, dm0)[atmlst]
+        mf_grad.de_j = None
+        mf_grad.de_vxc = None
+        mf_grad.de_j_native = None
+        mf_grad.de_j_source = None
+        mf_grad.de_j_metric = None
+        mf_grad.de_j_xc_multigrid = cp.asnumpy(de_veff)
+        mf_grad.de_j_backend = 'multigrid_v2_j_xc_combined'
+    else:
+        de_j = grad_j(
+            mf_grad, dm0, vj1, atmlst, energy_derivative=de_j_energy)
+        de_vxc = grad_vxc(mf_grad, dm0, atmlst)
+        de_veff = de_j + de_vxc
+        mf_grad.de_j_xc_multigrid = None
     de_ovlp = grad_ovlp(mf_grad.cell, Co, foo, s1, atmlst)
 
     mf_grad.de_veff = cp.asnumpy(de_veff)
