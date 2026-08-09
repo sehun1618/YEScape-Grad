@@ -5,6 +5,6 @@ runtime and GPU4PySCF, whereas ``import dcforge`` and ``import dcforge.cpu``
 must remain usable in a CPU-only environment.
 '''
 
-from dcforge.gpu.pbc import df, energy, jk
+from dcforge.gpu.pbc import df, energy
 
-__all__ = ['df', 'energy', 'jk']
+__all__ = ['df', 'energy']
