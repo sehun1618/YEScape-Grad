@@ -68,6 +68,27 @@ def _profile_stop(mf_grad, profile, label, start):
     profile[label] = time.perf_counter() - start
 
 
+def _gdf_response_boundary_start(mf_grad):
+    '''Start the opt-in profiler-off GDF response boundary timer.
+
+    This validation timer introduces exactly one synchronization before the
+    native response.  Unlike ``profile_gradient_stages``, it does not enable
+    any timer inside the GDF implementation.
+    '''
+    if not mf_grad.measure_gdf_response_boundary:
+        return None
+    cp.cuda.Stream.null.synchronize()
+    return time.perf_counter()
+
+
+def _gdf_response_boundary_stop(mf_grad, start):
+    '''Finish the opt-in GDF response boundary with one synchronization.'''
+    if start is None:
+        return
+    cp.cuda.Stream.null.synchronize()
+    mf_grad.gdf_response_boundary_seconds = time.perf_counter() - start
+
+
 def _progress(mf_grad, label):
     '''Publish one optional non-scientific queue/profiler stage marker.'''
     callback = getattr(mf_grad, 'progress_callback', None)
@@ -79,11 +100,13 @@ def _gdf_workspace_metadata(metadata):
     '''Return only bounded-workspace diagnostics from native GDF metadata.'''
     names = (
         'three_center_workspace_plan',
+        'short_range_source_workspace_plan',
         'metric_solve_workspace_plan',
         'metric_solve_workspace_plans',
         'solved_three_center_bytes',
         'dense_solved_three_center_bytes_avoided',
         'signed_state_full_rank_bytes_avoided',
+        'reciprocal_pair_cache',
     )
     workspace = {
         name: metadata[name] for name in names if name in metadata}
@@ -144,10 +167,24 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     # deliberately opt-in because it is validation telemetry, not part of
     # the production mathematical path or a performance optimization.
     profile = {} if mf_grad.profile_gradient_stages else None
+    mf_grad.z_response_profile = None
+    mf_grad.z_warm_start_metadata = None
     mf_grad.hcore_stage_profile = None
     mf_grad.hcore_pp_loc_part1_plan = None
     mf_grad.de_hcore_components = None
     mf_grad.de_fock_hcore_components = None
+    mf_grad.gdf_adjoint_backend_used = None
+    mf_grad.gdf_adjoint_backend_fallback_reason = None
+    mf_grad.gdf_response_boundary_seconds = None
+    if (mf_grad.measure_gdf_response_boundary
+            and mf_grad.profile_gradient_stages):
+        raise ValueError(
+            'measure_gdf_response_boundary requires '
+            'profile_gradient_stages=False')
+    if (mf_grad.measure_gdf_response_boundary
+            and not isinstance(mf.with_df, GDF)):
+        raise NotImplementedError(
+            'measure_gdf_response_boundary requires a GPU GDF provider')
     if mf_grad.hcore_method not in ('auto', 'gdf', 'grid'):
         raise ValueError("hcore_method must be 'auto', 'gdf', or 'grid'")
     if mf_grad.hcore_method == 'gdf' and not isinstance(mf.with_df, GDF):
@@ -193,7 +230,17 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         # ``gen_response`` contract or the orbital-Hessian equation.
         response_mode = mf_grad.df_cphf_response_mode
         if response_mode == 'direct_vo':
-            vind = gen_df_vind(mf_hf, Co, Cv)
+            cache_mode = (
+                mf_grad.df_cphf_response_cache
+                if isinstance(mf.with_df, GDF) else 'recompute')
+            vind = gen_df_vind(
+                mf_hf, Co, Cv, cache_mode=cache_mode,
+                memory_fraction=mf_grad.df_cphf_response_memory_fraction,
+                minimum_reserve_bytes=(
+                    mf_grad.df_cphf_response_minimum_reserve_bytes),
+                profile_detail=(
+                    mf_grad.profile_gradient_stages
+                    or mf_grad.profile_df_cphf_response))
         elif response_mode == 'ao_oracle':
             vind = gen_df_vind_ao_oracle(mf_hf, Co, Cv)
         else:
@@ -203,14 +250,22 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         vind = gen_vind(Co, Cv, fvind)
     _progress(mf_grad, 'z_vector')
     stage_start = _profile_start(mf_grad)
-    zvec, z_info = solve_z_vector(
-        mo_energy, mo_occ, fvo, vind,
-        conv_tol=mf_grad.cphf_conv_tol,
-        residual_tol=mf_grad.cphf_residual_tol,
-        max_cycle=mf_grad.cphf_max_cycle,
-        refinement_solver=mf_grad.cphf_refinement_solver,
-        log=log,
-    )
+    try:
+        zvec, z_info = solve_z_vector(
+            mo_energy, mo_occ, fvo, vind,
+            conv_tol=mf_grad.cphf_conv_tol,
+            residual_tol=mf_grad.cphf_residual_tol,
+            max_cycle=mf_grad.cphf_max_cycle,
+            refinement_solver=mf_grad.cphf_refinement_solver,
+            initial_guess=mf_grad.z_initial_guess,
+            log=log,
+        )
+    finally:
+        close_response = getattr(vind, 'close', None)
+        if close_response is not None:
+            mf_grad.z_response_profile = close_response()
+        if 'z_info' not in locals():
+            mf_grad.z_initial_guess = None
     _profile_stop(mf_grad, profile, 'z_vector_seconds', stage_start)
     mf_grad.zvec = zvec
     mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
@@ -223,7 +278,23 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     mf_grad.z_refinement_iterations = z_info['refinement_iterations']
     mf_grad.z_wall_seconds = z_info['wall_seconds']
     mf_grad.z_response_backend = z_info['response_backend']
-    dz = Cv @ zvec @ Co.conj().T
+    mf_grad.z_warm_start_metadata = {
+        **(mf_grad.z_warm_start_projection or {}),
+        'requested': z_info['initial_guess_requested'],
+        'used': z_info['initial_guess_used'],
+        'fallback_reason': z_info['initial_guess_fallback_reason'],
+        'initial_residual_max_abs': z_info['initial_residual_max_abs'],
+        'diagonal_initial_residual_max_abs': (
+            z_info['diagonal_initial_residual_max_abs']),
+    }
+    # A projected guess belongs to exactly one geometry and one solve.
+    mf_grad.z_initial_guess = None
+    # ``U=C_v Z`` is both the natural response-orbital factor of
+    # ``D_Z=U C_o^T+C_o U^T`` and the existing first half of the AO-density
+    # construction.  Retain it so the optional MO-factorized GDF adjoint can
+    # consume the exact physical factors without refactorizing ``D_Z``.
+    response_orbitals = Cv @ zvec
+    dz = response_orbitals @ Co.conj().T
     dz = dz + dz.conj().T
     ovlp_response_intermediate = None
     release_cderi = (
@@ -275,6 +346,21 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         # but is deliberately retained as its own coupled ledger field.
         mf_grad.vj1 = None
         mf_grad.vk1 = None
+        response_mode = mf_grad.gdf_response_mode
+        if response_mode not in ('auto', 'fused', 'signed', 'separate'):
+            raise ValueError(
+                'gdf_response_mode must be auto, fused, signed, or separate')
+        adjoint_backend = mf_grad.gdf_adjoint_backend
+        if adjoint_backend not in (
+                'auto', 'packed', 'mo_factorized', 'mo_direct'):
+            raise ValueError(
+                'gdf_adjoint_backend must be auto, packed, mo_factorized, '
+                'or mo_direct')
+        if (adjoint_backend in ('mo_factorized', 'mo_direct')
+                and response_mode in ('signed', 'separate')):
+            raise ValueError(
+                f"gdf_adjoint_backend='{adjoint_backend}' requires the direct "
+                "gdf_response_mode='auto' or 'fused' route")
         # ``P`` and ``D_Z`` contract the identical local H1.  ``auto`` uses
         # the analytic GDF-operator SR/LR pseudopotential representation and
         # never materializes the all-atom H1 tensor.  ``grid`` retains the
@@ -327,10 +413,17 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             # avoids building the two full-rank ``P+D_Z``/``P-D_Z`` tensors.
             _progress(mf_grad, 'gdf_native_response')
             stage_start = _profile_start(mf_grad)
-            direct_fock, response_memory = (
-                restricted_hf_bilinear_derivative_direct(
-                    mf_hf, dm0, dz, atmlst, return_metadata=True,
-                    profile_detail=mf_grad.profile_gradient_stages))
+            boundary_start = _gdf_response_boundary_start(mf_grad)
+            try:
+                direct_fock, response_memory = (
+                    restricted_hf_bilinear_derivative_direct(
+                        mf_hf, dm0, dz, atmlst, return_metadata=True,
+                        profile_detail=mf_grad.profile_gradient_stages,
+                        occupied_coefficients=Co,
+                        response_orbitals=response_orbitals,
+                        adjoint_backend=adjoint_backend))
+            finally:
+                _gdf_response_boundary_stop(mf_grad, boundary_start)
             _profile_stop(
                 mf_grad, profile, 'gdf_native_response_seconds', stage_start)
             s1 = -int1e.int1e_ipovlp(cell, np.zeros((1, 3)))[0]
@@ -355,6 +448,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             mf_grad.gdf_response_profile = response_memory['profile']
             mf_grad.gdf_response_workspace = _gdf_workspace_metadata(
                 response_memory)
+            adjoint_metadata = response_memory['adjoint']
+            mf_grad.gdf_adjoint_backend_used = adjoint_metadata[
+                'backend_resolved']
+            mf_grad.gdf_adjoint_backend_fallback_reason = adjoint_metadata[
+                'backend_fallback_reason']
             components = response_memory['term_components']
             _progress(mf_grad, 'source_fock')
             stage_start = _profile_start(mf_grad)
@@ -382,10 +480,6 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             _profile_stop(mf_grad, profile, 'total_seconds', total_start)
             mf_grad.gradient_stage_profile = profile
             return de_skel + de_nvar
-        response_mode = mf_grad.gdf_response_mode
-        if response_mode not in ('auto', 'fused', 'signed', 'separate'):
-            raise ValueError(
-                'gdf_response_mode must be auto, fused, signed, or separate')
         target_xc = _target_xc_name(mf)
         use_signed = response_mode == 'signed'
         use_separate = not use_signed and (
@@ -400,17 +494,25 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                 'auto, signed, or the coupled direct-adjoint fused route')
         _progress(mf_grad, 'gdf_native_response')
         stage_start = _profile_start(mf_grad)
-        if use_separate:
-            gdf_terms, response_memory = target_j_and_fock_energy_derivative(
-                mf_hf, dm0, dz, atmlst)
-        elif use_signed:
-            de_j_fock_native, response_memory = (
-                target_j_fock_signed_energy_derivative(
-                    mf_hf, dm0, dz, atmlst, return_metadata=True))
-        else:
-            de_j_fock_native, response_memory = target_j_fock_energy_derivative(
-                mf_hf, dm0, dz, atmlst, return_metadata=True,
-                profile_detail=mf_grad.profile_gradient_stages)
+        boundary_start = _gdf_response_boundary_start(mf_grad)
+        try:
+            if use_separate:
+                gdf_terms, response_memory = target_j_and_fock_energy_derivative(
+                    mf_hf, dm0, dz, atmlst)
+            elif use_signed:
+                de_j_fock_native, response_memory = (
+                    target_j_fock_signed_energy_derivative(
+                        mf_hf, dm0, dz, atmlst, return_metadata=True))
+            else:
+                de_j_fock_native, response_memory = (
+                    target_j_fock_energy_derivative(
+                        mf_hf, dm0, dz, atmlst, return_metadata=True,
+                        profile_detail=mf_grad.profile_gradient_stages,
+                        occupied_coefficients=Co,
+                        response_orbitals=response_orbitals,
+                        adjoint_backend=adjoint_backend))
+        finally:
+            _gdf_response_boundary_stop(mf_grad, boundary_start)
         _profile_stop(mf_grad, profile, 'gdf_native_response_seconds',
                       stage_start)
         mf_grad.gdf_response_workspace = _gdf_workspace_metadata(
@@ -463,6 +565,12 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                 ewald_derivative=gdf_terms['de_fock_ewald'])
             _profile_stop(mf_grad, profile, 'source_fock_seconds', stage_start)
         else:
+            if not use_signed:
+                adjoint_metadata = response_memory['adjoint']
+                mf_grad.gdf_adjoint_backend_used = adjoint_metadata[
+                    'backend_resolved']
+                mf_grad.gdf_adjoint_backend_fallback_reason = (
+                    adjoint_metadata['backend_fallback_reason'])
             mf_grad.de_j = None
             mf_grad.de_j_native = None
             mf_grad.de_j_backend = (
@@ -607,6 +715,13 @@ class Gradients(gpu_rhf_grad.GradientsBase):
     _keys = gpu_rhf_grad.GradientsBase._keys | {
         'cphf_conv_tol', 'cphf_residual_tol', 'cphf_max_cycle',
         'cphf_refinement_solver', 'df_cphf_response_mode',
+        'df_cphf_response_cache',
+        'df_cphf_response_memory_fraction',
+        'df_cphf_response_minimum_reserve_bytes',
+        'profile_df_cphf_response', 'z_response_profile',
+        'z_warm_start', 'z_warm_start_min_subspace_overlap',
+        'z_initial_guess', 'z_warm_start_projection',
+        'z_warm_start_metadata',
         'hcore_method', 'hcore_batch_size',
         'hcore_backend', 'hcore_effective_batch_size',
         'hcore_stage_profile', 'hcore_pp_loc_part1_plan',
@@ -619,7 +734,10 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'de_j_xc_multigrid',
         'de_fock_backend', 'de_fock_native',
         'de_j_fock_native', 'gdf_term_partition',
-        'gdf_response_mode',
+        'gdf_response_mode', 'gdf_adjoint_backend',
+        'gdf_adjoint_backend_used',
+        'gdf_adjoint_backend_fallback_reason',
+        'measure_gdf_response_boundary', 'gdf_response_boundary_seconds',
         'de_j_fock_source', 'de_j_fock_metric', 'de_j_fock_ewald',
         'de_j_fock_term_residual_max_abs',
         'gdf_reciprocal_memory_plan', 'gdf_reciprocal_zero_order',
@@ -649,6 +767,24 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # virtual projection.  The former complete-AO J/K route is retained
         # as an explicit numerical oracle, never selected automatically.
         self.df_cphf_response_mode = 'direct_vo'
+        # Adaptive GDF Z-response cache.  ``recompute`` remains the exact
+        # storage oracle.  Production ``auto`` selects only a bounded cache
+        # that leaves both the predicted action workspace and an explicit
+        # device reserve; any allocation failure falls back to recomputation.
+        self.df_cphf_response_cache = 'auto'
+        self.df_cphf_response_memory_fraction = 0.8
+        self.df_cphf_response_minimum_reserve_bytes = 4 * 1024**3
+        self.profile_df_cphf_response = False
+        self.z_response_profile = None
+        # Scanner-only response warm start.  The previous raw VO amplitude is
+        # never reused directly: :class:`RHFDFTGradScanner` transports it
+        # through current/previous AO cross-overlaps and the solver accepts it
+        # only when its current physical residual improves on the gap guess.
+        self.z_warm_start = False
+        self.z_warm_start_min_subspace_overlap = 0.5
+        self.z_initial_guess = None
+        self.z_warm_start_projection = None
+        self.z_warm_start_metadata = None
         # For GDF, ``auto`` uses the source-consistent analytic SR/LR
         # pseudopotential representation.  FFTDF and RSDF keep their existing
         # uniform-grid representation.  Explicit ``grid`` is the GDF
@@ -692,6 +828,20 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # representations for auditing;
         # signed remains the algebraic R2SCAN oracle/fallback.
         self.gdf_response_mode = 'auto'
+        # ``auto`` selects the exact packed-source-free MO-direct adjoint for
+        # supported closed-shell real-Gamma GDF response.  The established
+        # density-based ``packed`` route remains the explicit numerical
+        # oracle and the exact fallback when an internal auto caller cannot
+        # supply real ``C_o`` and ``U=C_v Z`` factors.  ``mo_factorized`` is
+        # retained as the isolated packed-backed algebra experiment.
+        self.gdf_adjoint_backend = 'auto'
+        self.gdf_adjoint_backend_used = None
+        self.gdf_adjoint_backend_fallback_reason = None
+        # Validation-only production boundary.  When enabled it performs one
+        # synchronization immediately before and after the complete native
+        # response while leaving every internal detailed profiler disabled.
+        self.measure_gdf_response_boundary = False
+        self.gdf_response_boundary_seconds = None
         self.de_j_fock_source = None
         self.de_j_fock_metric = None
         self.de_j_fock_ewald = None
@@ -721,10 +871,25 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                     self.cphf_refinement_solver)
         logger.info(self, 'df_cphf_response_mode = %s',
                     self.df_cphf_response_mode)
+        logger.info(self, 'df_cphf_response_cache = %s',
+                    self.df_cphf_response_cache)
+        logger.info(self, 'df_cphf_response_memory_fraction = %.3f',
+                    self.df_cphf_response_memory_fraction)
+        logger.info(self, 'df_cphf_response_minimum_reserve_bytes = %d',
+                    self.df_cphf_response_minimum_reserve_bytes)
+        logger.info(self, 'profile_df_cphf_response = %s',
+                    self.profile_df_cphf_response)
+        logger.info(self, 'z_warm_start = %s', self.z_warm_start)
+        logger.info(self, 'z_warm_start_min_subspace_overlap = %.3f',
+                    self.z_warm_start_min_subspace_overlap)
         logger.info(self, 'z_response_backend = %s', self.z_response_backend)
         logger.info(self, 'hcore_batch_size = %d', self.hcore_batch_size)
         logger.info(self, 'hcore_method = %s', self.hcore_method)
         logger.info(self, 'gdf_response_mode = %s', self.gdf_response_mode)
+        logger.info(self, 'gdf_adjoint_backend = %s',
+                    self.gdf_adjoint_backend)
+        logger.info(self, 'measure_gdf_response_boundary = %s',
+                    self.measure_gdf_response_boundary)
         logger.info(self, 'profile_gradient_stages = %s',
                     self.profile_gradient_stages)
         return self
@@ -812,10 +977,109 @@ class RHFDFTGradScanner(lib.GradScanner):
         else:
             cell = self.cell.set_geom_(cell_or_geom, inplace=False)
 
+        previous_response = _capture_previous_z_response(self)
+
         # Follow PySCF's gradient-scanner order.  ``reset`` invalidates this
         # driver's old term ledger; the base energy scanner then rebuilds the
         # source/provider state before ``kernel`` consumes it.
         self.reset(cell)
         energy = self.base(cell)
+        self.z_initial_guess = None
+        self.z_warm_start_projection = {
+            'available': False,
+            'fallback_reason': 'warm start disabled or no previous Z-vector',
+        }
+        if previous_response is not None:
+            try:
+                guess, projection = _project_previous_z_response(
+                    previous_response, self.base, cell,
+                    self.z_warm_start_min_subspace_overlap)
+                self.z_initial_guess = guess
+                self.z_warm_start_projection = projection
+            except (ValueError, RuntimeError, NotImplementedError) as error:
+                self.z_warm_start_projection = {
+                    'available': False,
+                    'fallback_reason': str(error),
+                }
         gradient = self.kernel(**kwargs)
         return energy, gradient
+
+
+def _capture_previous_z_response(scanner):
+    '''Retain one old-geometry VO response only when warm start is requested.'''
+    if not bool(getattr(scanner, 'z_warm_start', False)):
+        return None
+    zvec = getattr(scanner, 'zvec', None)
+    mo_coeff = getattr(scanner.base, 'mo_coeff', None)
+    mo_occ = getattr(scanner.base, 'mo_occ', None)
+    if zvec is None or mo_coeff is None or mo_occ is None:
+        return None
+    mo_coeff = cp.asarray(mo_coeff)
+    mo_occ = cp.asarray(mo_occ)
+    return {
+        'cell': scanner.cell,
+        'provider_class': type(scanner.base.with_df),
+        'Co': mo_coeff[:, mo_occ > 0].copy(),
+        'Cv': mo_coeff[:, mo_occ == 0].copy(),
+        'zvec': cp.asarray(zvec).copy(),
+    }
+
+
+def _project_previous_z_response(previous, current_mf, current_cell,
+                                 minimum_overlap):
+    r'''Project an old VO response through the current--old AO cross overlap.
+
+    If ``S^{new,old}`` is the cross-geometry AO overlap, this constructs
+
+    ``Z_new = (Cv_new^T S_new,old Cv_old)``
+    ``        Z_old (Co_old^T S_old,new Co_new)``.
+
+    Thus MO phases, occupied rotations and virtual rotations are transported
+    explicitly.  The previous raw ``Z_ai`` is never interpreted in the new
+    orbital basis without this transformation.
+    '''
+    old_cell = previous['cell']
+    if type(current_mf.with_df) is not previous['provider_class']:
+        raise ValueError('DF provider class changed between scanner calls')
+    if not np.allclose(
+            old_cell.lattice_vectors(), current_cell.lattice_vectors(),
+            atol=1.e-12, rtol=0.):
+        raise NotImplementedError('Z warm start requires a fixed lattice')
+    if not np.array_equal(old_cell.ao_loc, current_cell.ao_loc):
+        raise ValueError('AO topology changed between scanner calls')
+    mo_coeff = cp.asarray(current_mf.mo_coeff)
+    mo_occ = cp.asarray(current_mf.mo_occ)
+    Co = mo_coeff[:, mo_occ > 0]
+    Cv = mo_coeff[:, mo_occ == 0]
+    if Co.shape[1] != previous['Co'].shape[1]:
+        raise ValueError('occupied topology changed between scanner calls')
+    if Cv.shape[1] != previous['Cv'].shape[1]:
+        raise ValueError('virtual topology changed between scanner calls')
+    overlap = np.asarray(gto.intor_cross(
+        'int1e_ovlp', current_cell, old_cell, kpt=np.zeros(3)))
+    imaginary = float(np.max(np.abs(overlap.imag)))
+    if imaginary > 1.e-10:
+        raise NotImplementedError(
+            f'Gamma cross overlap has imaginary component {imaginary:.3e}')
+    overlap = cp.asarray(overlap.real)
+    virtual_transport = Cv.T @ overlap @ previous['Cv']
+    occupied_transport = previous['Co'].T @ overlap.T @ Co
+    virtual_singular = cp.linalg.svd(
+        virtual_transport, compute_uv=False)
+    occupied_singular = cp.linalg.svd(
+        occupied_transport, compute_uv=False)
+    minimum_virtual = float(cp.min(virtual_singular).get())
+    minimum_occupied = float(cp.min(occupied_singular).get())
+    quality = min(minimum_virtual, minimum_occupied)
+    if quality < float(minimum_overlap):
+        raise ValueError(
+            f'MO-subspace overlap {quality:.3f} is below '
+            f'{float(minimum_overlap):.3f}')
+    guess = virtual_transport @ previous['zvec'] @ occupied_transport
+    return guess, {
+        'available': True,
+        'projection': 'cross_ao_overlap_virtual_and_occupied',
+        'minimum_virtual_subspace_overlap': minimum_virtual,
+        'minimum_occupied_subspace_overlap': minimum_occupied,
+        'minimum_required_subspace_overlap': float(minimum_overlap),
+    }

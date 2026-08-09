@@ -54,14 +54,14 @@ mf.with_df.reciprocal_block_alignment = 32
 # of each pair with its multiplicity; False is the slower full-grid oracle.
 mf.with_df.reciprocal_gamma_conjugate_symmetry = True
 
-# The real-Gamma packed reverse source uses the exact transpose identity
-# T W P = (P W T)^T and expands 128 auxiliary rows at once.  Its production
-# default caches the first-pass packed source in CUDA-mapped host memory,
-# avoiding a second dense source-algebra pass.  The cache is an execution
-# policy only: it does not change the density, GDF metric or gradient.  The
-# live planner may use at most 80% of currently available host memory while
-# preserving 4 GiB.  If the source does not fit, the default fallback repeats
-# the exact algebra in two passes instead of risking host OOM.
+# The explicit packed oracle/fallback uses the exact transpose identity
+# T W P = (P W T)^T and expands 128 auxiliary rows at once.  When that route
+# is selected, it caches the first-pass packed source in CUDA-mapped host
+# memory, avoiding a second dense source-algebra pass.  The cache is an
+# execution policy only: it does not change the density, GDF metric or
+# gradient.  The live planner may use at most 80% of currently available host
+# memory while preserving 4 GiB.  If the source does not fit, its fallback
+# repeats the exact algebra in two passes instead of risking host OOM.
 #
 # This option family applies only to the real one-Gamma native response.
 # Sampled-k response retains its complex native path.
@@ -101,7 +101,38 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
     df_cphf_response_mode='direct_vo',
+    # ``auto`` is already the production default; it is written explicitly
+    # here only because this file documents the available controls.  It may
+    # retain the invariant A_P=L_P C_occ, H_P=A_P^T C_occ and/or compressed
+    # CDERI on device for this Z solve only.  The planner accounts for the
+    # action workspace plus a 4-GiB reserve and safely falls back to
+    # recompute.  No cache survives into the native nuclear-response stage or
+    # a later scanner geometry.
+    #
+    # In a 96-GiB Water64 GTH-DZVP/Weigend test, auto resolved to ``all``:
+    #
+    #   cache       Z-vector / s    complete gradient / s
+    #   recompute        177.21                  433.51
+    #   occupied         112.58                  368.83
+    #   cderi            171.70                  428.26
+    #   all              103.90                  360.49
+    #   auto -> all      103.72                  359.93
+    #
+    # This is a memory-dependent execution result, not a reason to hard-code
+    # ``all``.  A larger system or smaller GPU can resolve auto to occupied,
+    # cderi, or recompute without changing the GDF equations.
+    df_cphf_response_cache='auto',
+    df_cphf_response_memory_fraction=.80,
+    df_cphf_response_minimum_reserve_bytes=4 * 1024**3,
+    # Validation-only synchronized action timings.  Leave False for ordinary
+    # production timing; queue record_stage_timings also enables this ledger.
+    profile_df_cphf_response=False,
     gdf_response_mode='auto',
+    # For supported closed-shell real-Gamma GDF, auto selects the exact
+    # packed-source-free MO-direct response.  Set 'packed' to pin the former
+    # density-packed numerical oracle.  'mo_factorized' is the packed-backed
+    # algebra experiment; explicit 'mo_direct' is useful for A/B validation.
+    gdf_adjoint_backend='auto',
     hcore_method='auto',
     hcore_batch_size=4,
 ).run()
@@ -117,10 +148,19 @@ print(f'  native build memory plan = '
       f'{mf.with_df.native_build_memory_plan}')
 print(f'  central CDERI = {mf.with_df.cderi_memory_report()}')
 print(f'  GDF response partition = {mf_grad.gdf_term_partition}')
+print(f'  GDF adjoint requested/used = '
+      f'{mf_grad.gdf_adjoint_backend}/'
+      f'{mf_grad.gdf_adjoint_backend_used}')
+print(f'  GDF adjoint fallback = '
+      f'{mf_grad.gdf_adjoint_backend_fallback_reason}')
 print(f'  Hcore backend = {mf_grad.hcore_backend}')
 print(f'  reciprocal memory plan = {mf_grad.gdf_reciprocal_memory_plan}')
 print(f'  packed-adjoint host plan = '
       f'{mf.with_df.adjoint_host_cache_plan}')
+print(f'  Z-response cache/action plan = {mf_grad.z_response_profile}')
+print(f'  Z cache requested/resolved = '
+      f'{mf_grad.df_cphf_response_cache}/'
+      f'{mf_grad.z_response_profile["resolved_cache_mode"]}')
 print('Result invariants')
 print(f'  E_PBE@HF = {mf.e_dft:.15f} Ha')
 print(f'  Z residual max abs = {mf_grad.z_residual_max_abs:.6e}')
@@ -146,12 +186,32 @@ print('  term recomposition max abs = '
 # mf_grad = mf.nuc_grad_method()
 # mf_grad.df_cphf_response_mode = 'ao_oracle'  # former full-AO J/K action
 # mf_grad.gdf_response_mode = 'signed'  # quadratic-state oracle
+# mf_grad.gdf_adjoint_backend = 'packed'  # fused AO-pair oracle
 # mf_grad.hcore_method = 'grid'         # finite-grid Hcore oracle
 # mf_grad.run()
 
 
 #
-# Case 4: pinned-host-limited out-of-core calculation
+# Case 4: reproduce one Z-response storage mode
+#
+# Production code should normally retain ``auto``.  Explicit modes are useful
+# for profiling, memory diagnosis, and like-for-like regression tests:
+#
+# mf_grad = mf.nuc_grad_method()
+# mf_grad.df_cphf_response_cache = 'recompute'  # minimum persistent cache
+# mf_grad.df_cphf_response_cache = 'occupied'   # cache A_P and H_P
+# mf_grad.df_cphf_response_cache = 'cderi'      # cache compressed CDERI
+# mf_grad.df_cphf_response_cache = 'all'        # cache both when they fit
+# mf_grad.run()
+# print(mf_grad.z_response_profile['resolved_cache_mode'])
+#
+# Even an explicit request is checked against the bounded-memory plan.  If it
+# cannot fit, the recorded resolved mode is recompute rather than an unsafe
+# allocation attempt.
+
+
+#
+# Case 5: pinned-host-limited out-of-core calculation
 #
 # mf = RHFDFT(cell, xc='PBE').density_fit(auxbasis='gth-szv')
 # mf.with_df.cderi_storage = 'hdf5'

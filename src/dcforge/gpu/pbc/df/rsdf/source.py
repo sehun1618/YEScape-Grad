@@ -20,7 +20,6 @@ from gpu4pyscf.pbc.df import aft_jk, ft_ao
 from gpu4pyscf.pbc.df.grad.rhf import (
     _split_l_ctr_pattern,
     get_ao_pair_loc,
-    int3c2e_scheme,
 )
 from gpu4pyscf.pbc.df.int3c2e import (
     MAX_IMGS_PER_TASK,
@@ -32,6 +31,7 @@ from gpu4pyscf.pbc.df.rsdf_builder import _weighted_coulG_kpts
 from pyscf import lib
 from pyscf.gto import ATOM_OF
 
+from dcforge.gpu.pbc.df.compatibility import derivative_int3c2e_scheme
 from dcforge.gpu.pbc.df.gaussian.reciprocal import (
     execute_gamma_reciprocal_blocks,
     gamma_conjugate_reciprocal_indices,
@@ -159,7 +159,7 @@ class _ShortRangeContext:
         auxcell = optimizer.auxcell
         auxiliary_limit = max(1, min(int(auxcell.nbas), POOL_SIZE))
         shell_pair_limit = max(1, POOL_SIZE // auxiliary_limit)
-        _unused, gout_stride, shared_sizes = int3c2e_scheme(-1, 54)
+        _unused, gout_stride, shared_sizes = derivative_int3c2e_scheme()
         lmax = int(cell.uniq_l_ctr[:, 0].max())
         laux = int(auxcell.uniq_l_ctr[:, 0].max())
         shared_memory = int(

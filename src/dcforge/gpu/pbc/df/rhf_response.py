@@ -15,17 +15,23 @@ implementation remains available as :func:`gen_vind_ao_oracle`; it is an
 explicit numerical oracle, not the production default.
 '''
 
+import time
+
 import cupy as cp
 import numpy as np
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, get_avail_mem
 from gpu4pyscf.pbc import tools
 from gpu4pyscf.pbc.df.fft_jk import _ewald_exxdiv_for_G0
 from gpu4pyscf.pbc.gto.int1e import int1e_ovlp
 from pyscf import lib
 from pyscf.pbc.lib.kpts_helper import is_zero
 
+_CACHE_MODES = ('recompute', 'occupied', 'cderi', 'all', 'auto')
 
-def gen_vind(mf_hf, Co, Cv):
+
+def gen_vind(mf_hf, Co, Cv, cache_mode='recompute',
+             memory_fraction=0.8, minimum_reserve_bytes=4 * 1024**3,
+             profile_detail=False):
     r'''Return the direct-VO Gaussian-DF RHF Hessian action.
 
     Args:
@@ -54,26 +60,363 @@ def gen_vind(mf_hf, Co, Cv):
         ``(nao,nao)`` AO matrices.  :func:`gen_vind_ao_oracle` retains those
         matrices for regression tests and numerical diagnosis.
     '''
-    provider = mf_hf.with_df
-    Co = _real_gamma_matrix(Co, 'Co')
-    Cv = _real_gamma_matrix(Cv, 'Cv')
-    if Co.shape[0] != Cv.shape[0]:
-        raise ValueError('occupied and virtual AO dimensions differ')
-    _check_provider(provider, Co.shape[0])
-    nvir = int(Cv.shape[1])
-    nocc = int(Co.shape[1])
-    ewald = _make_ewald_intermediate(provider, Co, mf_hf.exxdiv)
+    return _DirectVOResponse(
+        mf_hf, Co, Cv, cache_mode=cache_mode,
+        memory_fraction=memory_fraction,
+        minimum_reserve_bytes=minimum_reserve_bytes,
+        profile_detail=profile_detail)
 
-    def vind(x):
+
+class _DirectVOResponse:
+    r'''One bounded-lifetime direct-VO response execution context.
+
+    ``A_P = L_P C_o`` and ``H_P = A_P^T C_o`` do not depend on the Krylov
+    trial vector.  The ``occupied`` cache retains those two tensors, while
+    the ``cderi`` cache retains only the compressed device CDERI.  ``all``
+    combines both.  Dense ``(naux,nao,nao)`` CDERI is never persistent.
+
+    The object is intentionally owned by one Z-vector solve.  Call
+    :meth:`close` in ``finally`` so no orbital- or geometry-dependent cache
+    can leak into a later scanner call or the nuclear-response stage.
+    '''
+
+    backend = 'gaussian_df_direct_vo'
+
+    def __init__(self, mf_hf, Co, Cv, cache_mode='recompute',
+                 memory_fraction=0.8,
+                 minimum_reserve_bytes=4 * 1024**3,
+                 profile_detail=False):
+        self.provider = mf_hf.with_df
+        self.Co = _real_gamma_matrix(Co, 'Co')
+        self.Cv = _real_gamma_matrix(Cv, 'Cv')
+        if self.Co.shape[0] != self.Cv.shape[0]:
+            raise ValueError('occupied and virtual AO dimensions differ')
+        _check_provider(self.provider, self.Co.shape[0])
+        self.nvir = int(self.Cv.shape[1])
+        self.nocc = int(self.Co.shape[1])
+        self.nao = int(self.Co.shape[0])
+        self.naux = int(self.provider.get_naoaux())
+        self.ewald = _make_ewald_intermediate(
+            self.provider, self.Co, mf_hf.exxdiv)
+        self.profile_detail = bool(profile_detail)
+        self.requested_cache_mode = str(cache_mode).lower()
+        if self.requested_cache_mode not in _CACHE_MODES:
+            raise ValueError(
+                'cache_mode must be recompute, occupied, cderi, all, or auto')
+        if not 0.0 < float(memory_fraction) <= 1.0:
+            raise ValueError('memory_fraction must be in (0,1]')
+        self.memory_fraction = float(memory_fraction)
+        self.minimum_reserve_bytes = max(0, int(minimum_reserve_bytes))
+        self._entries = []
+        self._prepared = False
+        self._closed = False
+        self.profile = self._make_profile()
+
+    def _make_profile(self):
+        '''Build the stable, JSON-serializable action/cache ledger.'''
+        available = int(get_avail_mem(exclude_memory_pool=True))
+        itemsize = np.dtype(np.float64).itemsize
+        occupied = self.naux * (
+            self.nao * self.nocc + self.nocc * self.nocc) * itemsize
+        raw = self.provider._cderi[0]
+        cderi = int(raw.size) * np.dtype(raw.dtype).itemsize
+        extra = 2 * self.nao * self.nocc + self.nocc * self.nocc
+        block_size = int(self.provider.get_blksize(extra=extra))
+        working = block_size * (
+            self.nao * self.nao + 2 * self.nao * self.nocc
+            + self.nocc * self.nocc) * itemsize
+        working += 2 * self.nao * self.nocc * itemsize
+        reserve = max(
+            self.minimum_reserve_bytes,
+            int((1.0 - self.memory_fraction) * available))
+        budget = max(0, available - reserve - working)
+        estimates = {
+            'recompute': 0,
+            'occupied': int(occupied),
+            'cderi': int(cderi),
+            'all': int(occupied + cderi),
+        }
+        requested = self.requested_cache_mode
+        if requested == 'auto':
+            resolved = next((name for name in ('all', 'occupied', 'cderi')
+                             if estimates[name] <= budget), 'recompute')
+        elif estimates[requested] <= budget:
+            resolved = requested
+        else:
+            resolved = 'recompute'
+        fallback = None
+        if resolved != requested and requested != 'auto':
+            fallback = (
+                f'predicted cache {estimates[requested]} bytes exceeds '
+                f'bounded budget {budget} bytes')
+        elif requested == 'auto' and resolved != 'all':
+            fallback = (
+                f'auto selected {resolved}; larger cache modes exceed '
+                f'bounded budget {budget} bytes')
+        pool = cp.get_default_memory_pool()
+        return {
+            'requested_cache_mode': requested,
+            'resolved_cache_mode': resolved,
+            'fallback_reason': fallback,
+            'available_device_bytes': available,
+            'minimum_reserve_bytes': self.minimum_reserve_bytes,
+            'resolved_reserve_bytes': reserve,
+            'predicted_action_working_bytes': int(working),
+            'cache_budget_bytes': int(budget),
+            'predicted_cache_bytes': estimates,
+            'predicted_resolved_cache_bytes': int(estimates[resolved]),
+            'cache_identity': {
+                'provider_object_id': id(self.provider),
+                'cderi_object_id': id(raw),
+                'cderi_layout_object_id': id(self.provider._cderi_idx),
+                'occupied_device_pointer': int(self.Co.data.ptr),
+                'occupied_shape': [int(value) for value in self.Co.shape],
+                'virtual_shape': [int(value) for value in self.Cv.shape],
+                'ao_ordering': 'provider_compressed_pair_mapping',
+            },
+            'actual_cache_bytes': 0,
+            'block_size': block_size,
+            'action_count': 0,
+            'cache_hit_count': 0,
+            'cache_miss_count': 0,
+            'cache_build_seconds': 0.0,
+            'cache_release_seconds': 0.0,
+            'host_to_device_cderi_bytes': 0,
+            'host_to_device_cderi_seconds': 0.0,
+            'cderi_unpack_seconds': 0.0,
+            'left_contraction_seconds': 0.0,
+            'b_contraction_seconds': 0.0,
+            'a_contraction_seconds': 0.0,
+            'occupied_metric_seconds': 0.0,
+            'remaining_jk_contraction_seconds': 0.0,
+            'ewald_seconds': 0.0,
+            'final_projection_seconds': 0.0,
+            'action_seconds': 0.0,
+            'unattributed_action_seconds': 0.0,
+            'pool_used_bytes_initial': int(pool.used_bytes()),
+            'pool_total_bytes_initial': int(pool.total_bytes()),
+            'pool_actions': [],
+            'pool_used_bytes_after_close': None,
+            'pool_total_bytes_after_close': None,
+            'closed': False,
+        }
+
+    def __call__(self, x):
+        if self._closed:
+            raise RuntimeError('direct-VO response cache is already closed')
+        self._prepare()
         shape = cp.asarray(x).shape
-        amplitudes = cp.asarray(x, dtype=cp.float64).reshape(-1, nvir, nocc)
-        values = [_contract_one_direct_vo(
-            provider, Co, Cv, amplitude, ewald)
-                  for amplitude in amplitudes]
+        amplitudes = cp.asarray(
+            x, dtype=cp.float64).reshape(-1, self.nvir, self.nocc)
+        values = [self._contract_one(amplitude) for amplitude in amplitudes]
         return cp.stack(values).reshape(shape)
 
-    vind.backend = 'gaussian_df_direct_vo'
-    return vind
+    def _prepare(self):
+        '''Construct only the cache selected by the bounded memory plan.'''
+        if self._prepared:
+            return
+        self._prepared = True
+        mode = self.profile['resolved_cache_mode']
+        if mode == 'recompute':
+            return
+        start = self._clock_start()
+        try:
+            for cderi, packed, sign in self._iter_provider_blocks():
+                entry = {'sign': float(sign)}
+                if mode in ('cderi', 'all'):
+                    entry['packed'] = packed.copy()
+                if mode in ('occupied', 'all'):
+                    a_p = contract('Lpq,qi->Lpi', cderi, self.Co)
+                    h_p = contract('Lpi,pj->Lij', a_p, self.Co)
+                    entry['a_p'] = a_p
+                    entry['h_p'] = h_p
+                entry['width'] = int(cderi.shape[0])
+                self._entries.append(entry)
+            self.profile['actual_cache_bytes'] = int(sum(
+                value.nbytes for entry in self._entries
+                for value in entry.values() if isinstance(value, cp.ndarray)))
+        except (cp.cuda.memory.OutOfMemoryError, MemoryError) as error:
+            self._entries.clear()
+            self.profile['resolved_cache_mode'] = 'recompute'
+            self.profile['fallback_reason'] = (
+                f'cache construction failed safely: {type(error).__name__}: '
+                f'{error}')
+            self.profile['actual_cache_bytes'] = 0
+        finally:
+            self.profile['cache_build_seconds'] += self._clock_stop(start)
+
+    def _contract_one(self, amplitude):
+        '''Contract one Krylov vector and accumulate an optional time ledger.'''
+        action_start = self._clock_start()
+        component_names = (
+            'left_contraction_seconds', 'host_to_device_cderi_seconds',
+            'cderi_unpack_seconds', 'b_contraction_seconds',
+            'a_contraction_seconds', 'occupied_metric_seconds',
+            'remaining_jk_contraction_seconds', 'ewald_seconds',
+            'final_projection_seconds')
+        components_before = sum(
+            self.profile[name] for name in component_names)
+        pool = cp.get_default_memory_pool()
+        action_record = None
+        if self.profile_detail:
+            action_record = {
+                'pool_used_bytes_before': int(pool.used_bytes()),
+                'pool_total_bytes_before': int(pool.total_bytes()),
+            }
+        start = self._clock_start()
+        left = contract('pa,ai->pi', self.Cv, amplitude)
+        self.profile['left_contraction_seconds'] += self._clock_stop(start)
+        response_occ = cp.zeros(
+            (self.nao, self.nocc), dtype=cp.float64)
+        mode = self.profile['resolved_cache_mode']
+        if mode == 'recompute':
+            iterator = (
+                (cderi, None, None, sign)
+                for cderi, _packed, sign in self._iter_provider_blocks())
+            self.profile['cache_miss_count'] += 1
+        else:
+            iterator = self._iter_cached_blocks(mode)
+            self.profile['cache_hit_count'] += 1
+        for cderi, a_p, h_p, sign in iterator:
+            start = self._clock_start()
+            b_p = contract('Lpq,qi->Lpi', cderi, left)
+            self.profile['b_contraction_seconds'] += self._clock_stop(start)
+            if a_p is None:
+                start = self._clock_start()
+                a_p = contract('Lpq,qi->Lpi', cderi, self.Co)
+                self.profile['a_contraction_seconds'] += self._clock_stop(start)
+            start = self._clock_start()
+            rho = contract('Lpi,pi->L', b_p, self.Co)
+            if h_p is None:
+                h_p = contract('Lpi,pj->Lij', a_p, self.Co)
+            self.profile['occupied_metric_seconds'] += self._clock_stop(start)
+            start = self._clock_start()
+            contract('L,Lpi->pi', rho, a_p, alpha=4.0 * sign,
+                     beta=1.0, out=response_occ)
+            contract('Lpi,Lij->pj', b_p, h_p, alpha=-sign,
+                     beta=1.0, out=response_occ)
+            b_metric = contract('Lpi,pj->Lij', b_p, self.Co)
+            contract('Lpi,Lij->pj', a_p, b_metric, alpha=-sign,
+                     beta=1.0, out=response_occ)
+            self.profile['remaining_jk_contraction_seconds'] += (
+                self._clock_stop(start))
+        start = self._clock_start()
+        if self.ewald is not None:
+            overlap, overlap_occ, madelung = self.ewald
+            overlap_left = contract('pq,qi->pi', overlap, left)
+            occ_metric = contract('pi,pj->ij', self.Co, overlap_occ)
+            left_metric = contract('pi,pj->ij', left, overlap_occ)
+            contract('pi,ij->pj', overlap_left, occ_metric,
+                     alpha=-madelung, beta=1.0, out=response_occ)
+            contract('pi,ij->pj', overlap_occ, left_metric,
+                     alpha=-madelung, beta=1.0, out=response_occ)
+        self.profile['ewald_seconds'] += self._clock_stop(start)
+        start = self._clock_start()
+        result = contract('ap,pi->ai', self.Cv.T, response_occ)
+        self.profile['final_projection_seconds'] += self._clock_stop(start)
+        action_seconds = self._clock_stop(action_start)
+        self.profile['action_seconds'] += action_seconds
+        components_after = sum(
+            self.profile[name] for name in component_names)
+        self.profile['unattributed_action_seconds'] += max(
+            0.0, action_seconds - (components_after - components_before))
+        self.profile['action_count'] += 1
+        if action_record is not None:
+            self._synchronize()
+            action_record.update({
+                'pool_used_bytes_after': int(pool.used_bytes()),
+                'pool_total_bytes_after': int(pool.total_bytes()),
+            })
+            self.profile['pool_actions'].append(action_record)
+        return result
+
+    def _iter_provider_blocks(self):
+        '''Copy and unpack provider factors with an auditable byte ledger.'''
+        block_size = self.profile['block_size']
+        raw = self.provider._cderi[0]
+        mapping, _diag = self.provider._cderi_idx
+        mapping = asarray(mapping)
+        rows, cols = divmod(mapping, self.nao)
+        dense = cp.zeros((block_size, self.nao, self.nao), dtype=cp.float64)
+        for p0, p1 in lib.prange(0, self.naux, block_size):
+            start = self._clock_start()
+            # ``asarray`` is GPU4PySCF's explicit NumPy/HDF5-to-device copy,
+            # not a mapped-host zero-copy view.  This preserves its workaround
+            # for large mapped allocations while accepting device factors too.
+            packed = asarray(raw[p0:p1])
+            self.profile['host_to_device_cderi_seconds'] += (
+                self._clock_stop(start))
+            self.profile['host_to_device_cderi_bytes'] += int(packed.nbytes)
+            start = self._clock_start()
+            cderi = dense[:p1-p0]
+            cderi[:, cols, rows] = cderi[:, rows, cols] = packed
+            self.profile['cderi_unpack_seconds'] += self._clock_stop(start)
+            yield cderi, packed, 1.0
+
+    def _iter_cached_blocks(self, mode):
+        '''Reconstruct one dense block from compressed cache when required.'''
+        mapping, _diag = self.provider._cderi_idx
+        mapping = cp.asarray(mapping)
+        rows, cols = divmod(mapping, self.nao)
+        for index, entry in enumerate(self._entries):
+            a_p = entry.get('a_p')
+            h_p = entry.get('h_p')
+            if mode == 'occupied':
+                # B_P still needs L_P, so reload the compressed host block.
+                p0 = index * self.profile['block_size']
+                p1 = min(self.naux, p0 + entry['width'])
+                raw = self.provider._cderi[0][p0:p1]
+                start = self._clock_start()
+                packed = asarray(raw)
+                self.profile['host_to_device_cderi_seconds'] += (
+                    self._clock_stop(start))
+                self.profile['host_to_device_cderi_bytes'] += int(packed.nbytes)
+            else:
+                packed = entry['packed']
+            start = self._clock_start()
+            cderi = cp.zeros((entry['width'], self.nao, self.nao),
+                             dtype=cp.float64)
+            cderi[:, cols, rows] = cderi[:, rows, cols] = packed
+            self.profile['cderi_unpack_seconds'] += self._clock_stop(start)
+            yield cderi, a_p, h_p, entry['sign']
+
+    def close(self):
+        '''Release all geometry/orbital-dependent device cache references.'''
+        if self._closed:
+            return self.profile
+        start = self._clock_start()
+        self._entries.clear()
+        # The response context belongs to one Z solve.  Clear even the
+        # non-cache references so a retained callable cannot keep an old
+        # provider, orbital matrices, or Ewald intermediate alive after a
+        # scanner reset, solver exception, or ``KeyboardInterrupt``.
+        self.provider = None
+        self.Co = None
+        self.Cv = None
+        self.ewald = None
+        self._closed = True
+        self.profile['cache_release_seconds'] += self._clock_stop(start)
+        pool = cp.get_default_memory_pool()
+        self.profile['pool_used_bytes_after_close'] = int(pool.used_bytes())
+        self.profile['pool_total_bytes_after_close'] = int(pool.total_bytes())
+        self.profile['closed'] = True
+        return self.profile
+
+    def _clock_start(self):
+        if not self.profile_detail:
+            return None
+        self._synchronize()
+        return time.perf_counter()
+
+    def _clock_stop(self, start):
+        if start is None:
+            return 0.0
+        self._synchronize()
+        return time.perf_counter() - start
+
+    @staticmethod
+    def _synchronize():
+        cp.cuda.Stream.null.synchronize()
 
 
 def gen_vind_ao_oracle(mf_hf, Co, Cv):

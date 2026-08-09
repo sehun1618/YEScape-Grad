@@ -18,6 +18,8 @@ DEFAULT_MEMORY_FRACTION = .10
 DEFAULT_MINIMUM_RESERVE_BYTES = 512 * 1024 ** 2
 DEFAULT_BLOCK_ALIGNMENT = 32
 DEFAULT_MAX_BLOCK_SIZE = 512
+DEFAULT_WORKSPACE_MODEL = 'generic'
+RHF_MO_DIRECT_WORKSPACE_MODEL = 'rhf_mo_direct'
 
 
 def gamma_conjugate_reciprocal_indices(mesh):
@@ -78,7 +80,10 @@ class ReciprocalBlockPlan:
                  memory_fraction, minimum_reserve_bytes, budget_bytes,
                  reserve_bytes, build_bytes_per_grid,
                  derivative_bytes_per_grid, block_alignment,
-                 initial_block_size, maximum_block_size):
+                 initial_block_size, maximum_block_size,
+                 workspace_model=DEFAULT_WORKSPACE_MODEL,
+                 build_values_per_grid=None,
+                 derivative_values_per_grid=None):
         self.ngrids = int(ngrids)
         self.nao = int(nao)
         self.naux = int(naux)
@@ -90,6 +95,13 @@ class ReciprocalBlockPlan:
         self.reserve_bytes = int(reserve_bytes)
         self.build_bytes_per_grid = int(build_bytes_per_grid)
         self.derivative_bytes_per_grid = int(derivative_bytes_per_grid)
+        self.workspace_model = str(workspace_model)
+        self.build_values_per_grid = (
+            None if build_values_per_grid is None
+            else dict(build_values_per_grid))
+        self.derivative_values_per_grid = (
+            None if derivative_values_per_grid is None
+            else dict(derivative_values_per_grid))
         self.bytes_per_grid = max(
             self.build_bytes_per_grid, self.derivative_bytes_per_grid)
         self.block_alignment = int(block_alignment)
@@ -113,6 +125,9 @@ class ReciprocalBlockPlan:
             'build_bytes_per_grid': self.build_bytes_per_grid,
             'derivative_bytes_per_grid': self.derivative_bytes_per_grid,
             'bytes_per_grid': self.bytes_per_grid,
+            'workspace_model': self.workspace_model,
+            'build_values_per_grid': self.build_values_per_grid,
+            'derivative_values_per_grid': self.derivative_values_per_grid,
             'block_alignment': self.block_alignment,
             'initial_block_size': self.initial_block_size,
             'maximum_block_size': self.maximum_block_size,
@@ -212,7 +227,8 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
                                  minimum_reserve_bytes=
                                  DEFAULT_MINIMUM_RESERVE_BYTES,
                                  block_alignment=DEFAULT_BLOCK_ALIGNMENT,
-                                 maximum_block_size=DEFAULT_MAX_BLOCK_SIZE):
+                                 maximum_block_size=DEFAULT_MAX_BLOCK_SIZE,
+                                 workspace_model=DEFAULT_WORKSPACE_MODEL):
     r'''Plan a bounded Gamma reciprocal block from its largest live tensors.
 
     Args:
@@ -239,6 +255,12 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
             Preferred SIMD-friendly G-vector alignment.
         maximum_block_size : int or None
             Absolute cap on one transaction.  ``None`` disables the cap.
+        workspace_model : {'generic', 'rhf_mo_direct'}
+            Live-tensor accounting model.  The default preserves the
+            established signed/packed planner.  ``'rhf_mo_direct'`` includes
+            both occupied projections in zero order and the complete
+            ``C/U/A/K`` contraction workspace of the exact MO-factorized
+            long-range derivative.
 
     Returns:
         ReciprocalBlockPlan
@@ -264,14 +286,46 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
     if maximum_block_size is not None and int(maximum_block_size) < 1:
         raise ValueError('maximum_block_size must be positive when set')
 
-    build_values_per_grid = (
-        int(nao) ** 2 + int(nocc_max) * int(nao)
-        + int(nocc_max) ** 2 + 2 * int(naux))
-    derivative_values_per_grid = (
-        2 * int(nao) ** 2 + int(nocc_max) * int(nao)
-        + int(nocc_max) ** 2 + 4 * int(naux) + 2)
-    build_bytes = build_values_per_grid * COMPLEX128_BYTES
-    derivative_bytes = derivative_values_per_grid * COMPLEX128_BYTES
+    workspace_model = str(workspace_model).lower()
+    if workspace_model == DEFAULT_WORKSPACE_MODEL:
+        build_components = {
+            'ao_pair_fourier': int(nao) ** 2,
+            'occupied_ao_transform': int(nocc_max) * int(nao),
+            'occupied_pair_projection': int(nocc_max) ** 2,
+            'auxiliary_fourier_channels': 2 * int(naux),
+        }
+        derivative_components = {
+            'ao_pair_and_derivative_source': 2 * int(nao) ** 2,
+            'occupied_ao_transform': int(nocc_max) * int(nao),
+            'occupied_pair_projection': int(nocc_max) ** 2,
+            'auxiliary_fourier_and_sources': 4 * int(naux),
+            'reciprocal_vector_coordinates': 2,
+        }
+    elif workspace_model == RHF_MO_DIRECT_WORKSPACE_MODEL:
+        build_components = {
+            'ao_pair_fourier': int(nao) ** 2,
+            'occupied_ao_transform': int(nocc_max) * int(nao),
+            'occupied_and_mixed_pair_projections': 2 * int(nocc_max) ** 2,
+            'auxiliary_fourier_channels': 2 * int(naux),
+        }
+        derivative_components = {
+            'ao_pair_and_derivative_source': 2 * int(nao) ** 2,
+            # C/U transforms and A/K back-transforms are distinct live
+            # contraction channels in the transactional MO consumer.
+            'occupied_ao_contraction_channels': (
+                2 * int(nocc_max) * int(nao)),
+            'occupied_pair_contraction_channels': 4 * int(nocc_max) ** 2,
+            'auxiliary_fourier_and_sources': 4 * int(naux),
+            'reciprocal_vector_coordinates': 2,
+        }
+    else:
+        raise ValueError(
+            'workspace_model must be generic or rhf_mo_direct')
+
+    build_values = sum(build_components.values())
+    derivative_values = sum(derivative_components.values())
+    build_bytes = build_values * COMPLEX128_BYTES
+    derivative_bytes = derivative_values * COMPLEX128_BYTES
     bytes_per_grid = max(build_bytes, derivative_bytes)
     fraction_budget = int(int(free_device_bytes) * float(memory_fraction))
     reserve_budget = max(0, int(free_device_bytes) - int(minimum_reserve_bytes))
@@ -293,7 +347,10 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
         ngrids, nao, naux, nocc_max, free_device_bytes, memory_fraction,
         minimum_reserve_bytes, budget, reserve, build_bytes, derivative_bytes,
         block_alignment, block_size,
-        int(ngrids) if maximum_block_size is None else maximum_block_size)
+        int(ngrids) if maximum_block_size is None else maximum_block_size,
+        workspace_model=workspace_model,
+        build_values_per_grid=build_components,
+        derivative_values_per_grid=derivative_components)
 
 
 def execute_gamma_reciprocal_blocks(total_count, initial_block_size, worker,

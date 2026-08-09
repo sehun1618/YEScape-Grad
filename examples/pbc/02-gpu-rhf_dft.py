@@ -65,6 +65,10 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_residual_tol=1e-8,
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
+    # The GDF default is df_cphf_response_cache='auto'.  It keeps compressed
+    # CDERI and/or its occupied-space projection only when both the predicted
+    # response workspace and a device-memory reserve still fit.  Ordinary
+    # calculations should leave this adaptive default unchanged.
     gdf_response_mode='auto',
 ).run()
 
@@ -76,6 +80,9 @@ print(f'Target PBE@RHF energy = {mf.e_dft:.15f} Ha')
 print('Gradient dE/dR [Ha/Bohr]')
 print(mf_grad.de)
 print(f'GDF response partition = {mf_grad.gdf_term_partition}')
+print(f'Z cache requested/resolved = '
+      f'{mf_grad.df_cphf_response_cache}/'
+      f'{mf_grad.z_response_profile["resolved_cache_mode"]}')
 print(f'Hcore backend = {mf_grad.hcore_backend}')
 print(f'Z residual max abs = {mf_grad.z_residual_max_abs:.6e}')
 print('Term recomposition max abs = '

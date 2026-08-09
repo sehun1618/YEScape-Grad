@@ -59,6 +59,13 @@ scanner = mf.nuc_grad_method().set(
     cphf_residual_tol=1e-8,
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
+    # For a large matrix-free Z solve, a previous response can be transported
+    # with the old/new AO cross-overlap.  MO phases and occupied/virtual
+    # rotations are therefore handled explicitly.  The current physical
+    # residual must still improve on the diagonal-gap guess.  This small-water
+    # example uses the dense/CPHF oracle and reports a deliberate fallback.
+    z_warm_start=True,
+    z_warm_start_min_subspace_overlap=.5,
 ).as_scanner()
 
 
@@ -74,14 +81,16 @@ for bond_length in (.90, .96, 1.02):
         gradient[1, 2],
         scanner.base.cycles,
         scanner.z_residual_max_abs,
+        scanner.z_warm_start_metadata['used'],
     ))
 
 minimum = min(record[1] for record in records)
-print('R_OH(A)  E_PBE@HF(Ha)     Delta(mEh)  g(H1,z)(Ha/Bohr)  cycles  Z residual')
-for bond_length, energy, component, cycles, residual in records:
+print('R_OH(A)  E_PBE@HF(Ha)     Delta(mEh)  g(H1,z)(Ha/Bohr)  cycles  '
+      'Z residual  warm')
+for bond_length, energy, component, cycles, residual, warm in records:
     print(f'{bond_length:7.3f}  {energy:16.10f}  '
           f'{(energy - minimum) * 1e3:10.4f}  '
-          f'{component:17.9e}  {cycles:6d}  {residual:.3e}')
+          f'{component:17.9e}  {cycles:6d}  {residual:.3e}  {warm}')
 
 
 #

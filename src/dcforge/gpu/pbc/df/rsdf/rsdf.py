@@ -33,6 +33,9 @@ from dcforge.gpu.pbc.df.cderi import (
     preflight_cderi_memory,
     release_cderi,
 )
+from dcforge.gpu.pbc.df.compatibility import (
+    derivative_int3c2e_scheme_metadata,
+)
 from dcforge.gpu.pbc.df.gaussian.pseudo import (
     PP_LOC_PART1_KEYS,
     get_pp_loc_part1_plan,
@@ -356,6 +359,8 @@ class RSDF(gpu_df.GDF):
             'energy': True,
             'analytic_gradient': True,
             'analytic_gradient_process_scope': 'same_process_reentrant',
+            'derivative_int3c2e_scheme': (
+                derivative_int3c2e_scheme_metadata()),
             'analytic_gradient_requirements': (
                 'sampled-k provider-exact resolved CPU response'
                 if sampled_k else

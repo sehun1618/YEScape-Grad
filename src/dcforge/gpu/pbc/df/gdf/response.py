@@ -102,7 +102,8 @@ def restricted_hf_bilinear_derivative(mf_hf, dm0, dz, atmlst=None):
 
 def restricted_hf_bilinear_derivative_direct(
         mf_hf, dm0, dz, atmlst=None, return_metadata=False,
-        profile_detail=False):
+        profile_detail=False, occupied_coefficients=None,
+        response_orbitals=None, adjoint_backend='auto'):
     r'''Return the source-HF cross derivative through one direct adjoint.
 
     This has the same value and sign as
@@ -118,12 +119,18 @@ def restricted_hf_bilinear_derivative_direct(
             'reference and adjoint densities must have identical AO shape')
     return fock_bilinear_derivative(
         mf_hf, dm0, dz, atmlst, return_metadata=return_metadata,
-        profile_detail=profile_detail)
+        profile_detail=profile_detail,
+        occupied_coefficients=occupied_coefficients,
+        response_orbitals=response_orbitals,
+        adjoint_backend=adjoint_backend)
 
 
 def target_j_fock_energy_derivative(mf_hf, dm0, dz, atmlst=None,
                                     return_metadata=False,
-                                    profile_detail=False):
+                                    profile_detail=False,
+                                    occupied_coefficients=None,
+                                    response_orbitals=None,
+                                    adjoint_backend='auto'):
     '''Return fused ``de_j + de_fock_native`` from one GDF traversal.
 
     See :func:`dcforge.gpu.pbc.df.gdf.native_gamma.target_j_fock_derivative`
@@ -138,7 +145,10 @@ def target_j_fock_energy_derivative(mf_hf, dm0, dz, atmlst=None,
     '''
     return target_j_fock_derivative(
         mf_hf, dm0, dz, atmlst, return_metadata=return_metadata,
-        profile_detail=profile_detail)
+        profile_detail=profile_detail,
+        occupied_coefficients=occupied_coefficients,
+        response_orbitals=response_orbitals,
+        adjoint_backend=adjoint_backend)
 
 
 def target_j_fock_signed_energy_derivative(

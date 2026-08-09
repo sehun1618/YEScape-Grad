@@ -15,6 +15,9 @@ from dcforge.gpu.pbc.df.cderi import (
     preflight_cderi_memory,
     release_cderi,
 )
+from dcforge.gpu.pbc.df.compatibility import (
+    derivative_int3c2e_scheme_metadata,
+)
 from dcforge.gpu.pbc.df.gaussian.pseudo import (
     PP_LOC_PART1_KEYS,
     get_pp_loc_part1_plan,
@@ -124,14 +127,31 @@ class GDF(df.GDF):
         # multiplicity.  Setting this False retains the full-grid numerical
         # oracle; it changes work only, never the GDF mesh or cutoff.
         self.reciprocal_gamma_conjugate_symmetry = True
+        # Optional G7 validation route.  The zero-order and LR derivative
+        # traverse the same real-Gamma AO-pair Fourier values, but the global
+        # metric solve lies between them.  ``cache``/``auto`` may retain only
+        # the selected unique-pair values in bounded host memory; the full
+        # dense AO-pair Fourier tensor is never persistent.  Recompute remains
+        # the default because the exact cache slowed both Water20 and Water64
+        # complete-gradient gates; this policy is independent of the promoted
+        # MO-direct primitive-source representation.
+        self._experimental_reciprocal_pair_cache = 'recompute'
+        self._experimental_reciprocal_pair_cache_host = 'pageable'
+        self._experimental_reciprocal_pair_cache_host_memory_fraction = .5
+        self._experimental_reciprocal_pair_cache_host_minimum_reserve_bytes = (
+            8 * 1024**3)
+        self._experimental_reciprocal_pair_cache_host_max_bytes = None
+        self._experimental_reciprocal_pair_cache_fallback = True
+        self._experimental_reciprocal_pair_cache_plan = None
         # The direct real-Gamma reverse source is exact under the enforced
         # real-symmetric density contract.  A 128-row dense AO block reuses
         # the transpose-related exchange product.  By default, the first-pass
         # packed source is retained in mapped host memory so the expensive
-        # source algebra is evaluated once.  The live host-memory planner
-        # preserves a reserve and falls back to the exact double-pass route
-        # when that cache does not fit.  Sampled-k response does not enter
-        # this real-Gamma-only path.
+        # source algebra is evaluated once.  These controls apply only within
+        # the explicit/fallback packed route; production ``auto`` normally
+        # selects MO-direct.  The live host-memory planner preserves a reserve
+        # and falls back to the exact double-pass route when that cache does
+        # not fit.  Sampled-k response does not enter this real-Gamma path.
         self.adjoint_auxiliary_block_size = (
             DEFAULT_ADJOINT_AUXILIARY_BLOCK_SIZE)
         self.adjoint_storage = DEFAULT_ADJOINT_STORAGE
@@ -144,6 +164,7 @@ class GDF(df.GDF):
         self.adjoint_host_cache_fallback = (
             DEFAULT_ADJOINT_HOST_CACHE_FALLBACK)
         self.adjoint_host_cache_plan = None
+        self._experimental_reciprocal_pair_cache_plan = None
         # The installed GPU4PySCF 1.8.0 short-range derivative ABI has one
         # packed source/output channel.  A separately built, audited CUDA
         # extension may opt into a two-channel target-J/Z-Fock ledger through
@@ -254,6 +275,8 @@ class GDF(df.GDF):
             'energy': True,
             'analytic_gradient': True,
             'analytic_gradient_process_scope': 'same_process_reentrant',
+            'derivative_int3c2e_scheme': (
+                derivative_int3c2e_scheme_metadata()),
             'native_multi_observable': (
                 self.native_multi_observable_library is not None),
             'stress': False,

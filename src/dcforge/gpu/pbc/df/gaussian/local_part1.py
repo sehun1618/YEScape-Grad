@@ -9,7 +9,6 @@ from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.df.int3c2e_bdiv import _split_l_ctr_pattern
 from gpu4pyscf.lib.cupy_helper import contract, empty_aligned, get_avail_mem
 from gpu4pyscf.pbc.df import aft_jk, ft_ao, rsdf_builder
-from gpu4pyscf.pbc.df.grad.rhf import int3c2e_scheme
 from gpu4pyscf.pbc.df.int3c2e import (
     MAX_IMGS_PER_TASK,
     POOL_SIZE,
@@ -19,6 +18,8 @@ from gpu4pyscf.pbc.df.int3c2e import (
 from pyscf import lib
 from pyscf.pbc.df import aft as cpu_aft
 from pyscf.pbc.lib.kpts_helper import is_zero
+
+from dcforge.gpu.pbc.df.compatibility import derivative_int3c2e_scheme
 
 _AUTO_OMEGA_INITIAL = .4
 _AUTO_RECIPROCAL_GRID_TARGET = 3000.
@@ -342,7 +343,7 @@ class LocalPart1Derivative:
         opt = self.short_range
         cell = opt.cell
         auxcell = opt.auxcell
-        _nsp, gout_stride, shared_memory = int3c2e_scheme(-1, 54)
+        _nsp, gout_stride, shared_memory = derivative_int3c2e_scheme()
         lmax = int(cell.uniq_l_ctr[:, 0].max())
         laux = int(auxcell.uniq_l_ctr[:, 0].max())
         shared_memory_size = int(

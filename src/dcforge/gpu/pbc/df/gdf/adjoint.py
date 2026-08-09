@@ -277,8 +277,8 @@ def build_rhf_packed_primitive_adjoint(
 
        T W_P P = (P W_P T)^T.
 
-    Production reuses that transpose and evaluates two rather than four
-    dense GEMMs per source block.  ``storage='host_cache'`` additionally
+    The packed oracle/fallback reuses that transpose and evaluates two rather
+    than four dense GEMMs per source block.  ``storage='host_cache'`` additionally
     retains each first-pass packed source in host memory, avoiding the second
     algebra pass before ``solved_three_center`` is overwritten.  A host-memory
     plan is resolved before allocation; an insufficient plan falls back to

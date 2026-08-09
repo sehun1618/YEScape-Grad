@@ -104,7 +104,8 @@ def _dense_solve(mo_energy, mo_occ, fvo, vind):
     return zvec, asymmetry
 
 
-def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle):
+def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+                 initial_guess=None):
     '''Solve the device-resident VO adjoint equation after CPHF stagnation.
 
     The operator is evaluated as ``D x + vind(x)``, where ``D`` is the
@@ -159,14 +160,17 @@ def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle):
         # GPU4PySCF GDF low-rank density factorizer.  The latter has no AO
         # rank to reshape for an exactly zero trial density.  No approximation
         # is introduced: GMRES still solves the full ``gap + vind`` operator.
-        x0=fvo.ravel() / gap, callback=count_iteration,
+        x0=(fvo.ravel() / gap if initial_guess is None
+            else cp.asarray(initial_guess).ravel()),
+        callback=count_iteration,
         callback_type='pr_norm')
     if info < 0:
         raise RuntimeError(f'GPU GMRES failed with info={info}')
     return cp.asarray(zvec).reshape(nvir, nocc), int(info), iteration_count
 
 
-def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle):
+def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+                  initial_guess=None):
     '''Solve the real-symmetric Gamma adjoint with preconditioned MINRES.
 
     At real Gamma, the restricted orbital Hessian is self-adjoint in the real
@@ -209,7 +213,9 @@ def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle):
         # A nonzero diagonal-gap initial guess preserves the GDF provider
         # contract just as in GMRES: its factorizer cannot reshape an exact
         # zero transition density, although the mathematical action is zero.
-        x0=fvo.ravel() / gap, callback=count_iteration)
+        x0=(fvo.ravel() / gap if initial_guess is None
+            else cp.asarray(initial_guess).ravel()),
+        callback=count_iteration)
     if info < 0:
         raise RuntimeError(f'GPU MINRES failed with info={info}')
     return cp.asarray(zvec).reshape(nvir, nocc), int(info), iteration_count
@@ -218,7 +224,7 @@ def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle):
 def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
                    residual_tol=1e-8, max_cycle=200,
                    dense_oracle_size=256, refinement_solver='minres',
-                   log=None):
+                   initial_guess=None, log=None):
     '''Solve ``[(A+B)^HF]^T Z = F^PBE_vo`` with a residual gate.
 
     ``s1=None`` is deliberate: this is the geometry-independent adjoint
@@ -253,6 +259,11 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
             real-Gamma restricted Hessian.  If MINRES completes but does not
             pass the independently reconstructed residual gate, DC-Forge
             retries the same equation with GMRES before rejecting it.
+        initial_guess : cupy.ndarray or None
+            Optional geometry-scanner guess already projected into the
+            current virtual--occupied basis.  It is accepted only for the
+            large matrix-free route and only when its independently evaluated
+            physical residual is no worse than the diagonal-gap guess.
         log : gpu4pyscf.lib.logger.Logger or None
             Logger passed to the primary GPU4PySCF CPHF solve.
 
@@ -271,12 +282,45 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         raise ValueError("refinement_solver must be 'gmres' or 'minres'")
 
     total_start = time.perf_counter()
+    gap = (mo_energy[mo_occ == 0, None] - mo_energy[mo_occ > 0])
+    diagonal_guess = fvo / gap
+    initial_guess_requested = initial_guess is not None
+    initial_guess_used = False
+    initial_guess_fallback_reason = None
+    initial_residual_max_abs = None
+    diagonal_initial_residual_max_abs = None
     # The dense-oracle threshold is also the safe cost boundary for the
     # upstream CPHF primary.  Above it, one CPHF attempt followed by MINRES
     # evaluates the same expensive Gamma GDF response operator twice.  The
     # direct matrix-free route remains exact and is accepted only through the
     # same independently reconstructed residual below.
     use_cphf_primary = fvo.size <= dense_oracle_size
+    selected_initial_guess = None
+    if initial_guess_requested and use_cphf_primary:
+        initial_guess_fallback_reason = (
+            'small VO space uses the GPU4PySCF CPHF/dense oracle route')
+    elif initial_guess_requested:
+        candidate = cp.asarray(initial_guess, dtype=fvo.dtype)
+        if candidate.shape != fvo.shape:
+            initial_guess_fallback_reason = (
+                f'projected shape {candidate.shape} differs from {fvo.shape}')
+        elif not bool(cp.all(cp.isfinite(candidate))):
+            initial_guess_fallback_reason = 'projected guess is not finite'
+        else:
+            candidate_residual = get_z_residual(
+                candidate, mo_energy, mo_occ, fvo, vind)
+            diagonal_residual = get_z_residual(
+                diagonal_guess, mo_energy, mo_occ, fvo, vind)
+            initial_residual_max_abs = float(
+                cp.max(cp.abs(candidate_residual)).get())
+            diagonal_initial_residual_max_abs = float(
+                cp.max(cp.abs(diagonal_residual)).get())
+            if initial_residual_max_abs <= diagonal_initial_residual_max_abs:
+                selected_initial_guess = candidate
+                initial_guess_used = True
+            else:
+                initial_guess_fallback_reason = (
+                    'projected physical residual exceeds diagonal-gap guess')
     primary_wall_seconds = 0.
     if use_cphf_primary:
         primary_start = total_start
@@ -310,7 +354,8 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         iterative_solve = (
             _minres_solve if refinement_solver == 'minres' else _gmres_solve)
         zvec, iterative_info, refinement_iterations = iterative_solve(
-            mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle)
+            mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+            initial_guess=selected_initial_guess)
         refinement_wall_seconds = time.perf_counter() - refinement_start
         solver = f'cupyx_{refinement_solver}(info={iterative_info})'
         residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, vind)
@@ -324,7 +369,8 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         if residual_max_abs > residual_tol and refinement_solver == 'minres':
             refinement_start = time.perf_counter()
             zvec, gmres_info, gmres_iterations = _gmres_solve(
-                mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle)
+                mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+                initial_guess=selected_initial_guess)
             refinement_wall_seconds += time.perf_counter() - refinement_start
             refinement_iterations += gmres_iterations
             solver += f'->cupyx_gmres(info={gmres_info})'
@@ -348,5 +394,11 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         'refinement_wall_seconds': refinement_wall_seconds,
         'refinement_iterations': refinement_iterations,
         'response_backend': getattr(vind, 'backend', 'ao_density_gen_response'),
+        'initial_guess_requested': initial_guess_requested,
+        'initial_guess_used': initial_guess_used,
+        'initial_guess_fallback_reason': initial_guess_fallback_reason,
+        'initial_residual_max_abs': initial_residual_max_abs,
+        'diagonal_initial_residual_max_abs': (
+            diagonal_initial_residual_max_abs),
         'wall_seconds': time.perf_counter() - total_start,
     }

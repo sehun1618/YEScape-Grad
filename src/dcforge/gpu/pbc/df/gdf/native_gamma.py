@@ -29,12 +29,17 @@ import numpy as np
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.df.grad.rhf import factorize_dm
 from gpu4pyscf.gto.mole import groupby
-from gpu4pyscf.lib.cupy_helper import asarray, contract, empty_aligned, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import (
+    asarray,
+    contract,
+    empty_aligned,
+    empty_mapped,
+    get_avail_mem,
+)
 from gpu4pyscf.pbc.df import aft_jk, ft_ao
 from gpu4pyscf.pbc.df.grad.rhf import (
     _split_l_ctr_pattern,
     get_ao_pair_loc,
-    int3c2e_scheme,
 )
 from gpu4pyscf.pbc.df.int2c2e import Int2c2eOpt, _estimate_sr_2c2e_rcut
 from gpu4pyscf.pbc.df.int3c2e import MAX_IMGS_PER_TASK, POOL_SIZE, SRInt3c2eOpt, libpbc
@@ -43,6 +48,7 @@ from pyscf import lib
 from pyscf.gto import ATOM_OF
 
 from dcforge.gpu.pbc.df.cderi import canonical_pair_layout
+from dcforge.gpu.pbc.df.compatibility import derivative_int3c2e_scheme
 from dcforge.gpu.pbc.df.gaussian.ewald import (
     cross_derivative as ewald_cross_derivative,
 )
@@ -57,6 +63,22 @@ from dcforge.gpu.pbc.df.gaussian.reciprocal import (
 from dcforge.gpu.pbc.df.gdf.adjoint import (
     build_rhf_packed_primitive_adjoint,
     build_rhf_primitive_adjoint_channels,
+    plan_adjoint_host_cache,
+)
+from dcforge.gpu.pbc.df.gdf.rhf_factorized import (
+    build_rhf_mo_factorized_packed_adjoint,
+)
+from dcforge.gpu.pbc.df.gdf.rhf_factorized_consumers import (
+    DEFAULT_RAW_PAIR_BLOCK_SIZE,
+    build_rhf_mo_response_short_range_source_block,
+    contract_rhf_mo_response_long_range_block,
+    prepare_rhf_mo_short_range_pair_indices,
+)
+from dcforge.gpu.pbc.df.gdf.rhf_mo_response import (
+    add_reciprocal_rhf_mo_projections,
+    build_short_range_rhf_mo_projections,
+    make_rhf_mo_response_factors,
+    solve_rhf_mo_projections_inplace,
 )
 from dcforge.gpu.pbc.df.gdf.two_channel import get_short_range_kernel
 
@@ -175,8 +197,10 @@ def coulomb_energy_derivative(mf_hf, dm, atmlst=None, return_metadata=False):
     return value
 
 
-def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
-                             return_metadata=False, profile_detail=False):
+def target_j_fock_derivative(
+        mf_hf, dm0, dz, atmlst=None, return_metadata=False,
+        profile_detail=False, occupied_coefficients=None,
+        response_orbitals=None, adjoint_backend='auto'):
     r'''Return the fused target-J and signed source-Fock two-electron term.
 
     The result is
@@ -186,13 +210,15 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
        E_J[P]^\lambda-
        \{Q[P+D_Z]^\lambda-Q[P-D_Z]^\lambda\}.
 
-    A single primitive traversal builds the metric-solved three-center tensor
-    once, then contracts its derivative with the direct ``P,D_Z`` reverse
-    adjoint.  This is algebraically identical to a target ``P`` state plus
-    the signed ``P+D_Z`` and ``P-D_Z`` polarization states, but avoids their
-    two full-rank signed three-center tensors.  It also avoids the mutable
-    native derivative state that makes separately dispatched GDF observables
-    unsafe.
+    The ``packed`` and ``mo_factorized`` routes build packed ``B`` and
+    ``W=M^{-1}B`` once before applying their reverse adjoint.  Production
+    ``mo_direct`` instead projects each primitive transaction to
+    ``Boo=C.T@B@C`` and ``Bou=C.T@B@U`` and solves the same metric only for
+    those occupied-space right-hand sides.  Both are algebraically identical
+    to a target ``P`` state plus the signed ``P+D_Z`` and ``P-D_Z``
+    polarization states, but avoid their two full-rank signed three-center
+    tensors.  The coupled traversal also avoids the mutable native derivative
+    state that makes separately dispatched GDF observables unsafe.
 
     The returned target-J plus Z-Fock observable is intentionally coupled and
     must remain ``de_j_fock_native``.  With ``return_metadata=True``, the
@@ -201,28 +227,38 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
     the fused observable; they are not a claim that target J and source Fock
     were dispatched as separate native derivatives.
 
-    ``profile_detail=True`` is a validation-only timing request.  It splits
-    metric inversion, ``M^{-1}B`` solution and packed-adjoint construction;
-    it changes no GDF tensor, block size or derivative term.
+    ``profile_detail=True`` is a validation-only timing request.  It records
+    backend-specific zero-order projection, metric solve, adjoint and
+    long-range Fourier/contraction/reduction work; it changes no GDF tensor,
+    block size or derivative term.
     '''
     provider = mf_hf.with_df
     _check_gamma_gdf(provider, dm0, dz)
     if provider.auxcell is None:
         provider.build(j_only=False)
     cell = provider.cell
-    profile = {}
-    stage_start = time.perf_counter()
+    optimizer_profile = {} if profile_detail else None
+    stage_start = time.perf_counter() if profile_detail else None
     intopt = SRInt3c2eOpt(
         cell, provider.auxcell, float(_guess_omega(cell)), None).build()
-    _finish_profile_stage(profile, 'optimizer_seconds', stage_start)
+    if profile_detail:
+        _finish_profile_stage(
+            optimizer_profile, 'optimizer_seconds', stage_start)
     value, metadata = _direct_adjoint_derivative(
         intopt, dm0, dz, exxdiv=mf_hf.exxdiv,
         reciprocal_options=_reciprocal_options(provider),
         adjoint_options=_adjoint_options(provider),
+        occupied_coefficients=occupied_coefficients,
+        response_orbitals=response_orbitals,
+        adjoint_backend=adjoint_backend,
         profile_detail=profile_detail)
     provider.adjoint_host_cache_plan = metadata['adjoint'].get(
         'host_cache_plan')
-    metadata['profile']['optimizer_seconds'] = profile['optimizer_seconds']
+    provider._experimental_reciprocal_pair_cache_plan = metadata.get(
+        'reciprocal_pair_cache')
+    if profile_detail:
+        metadata['profile']['optimizer_seconds'] = optimizer_profile[
+            'optimizer_seconds']
     atoms = _atmlst(cell, atmlst)
     value = cp.asarray(value[atoms])
     if return_metadata:
@@ -237,8 +273,10 @@ def target_j_fock_derivative(mf_hf, dm0, dz, atmlst=None,
     return value
 
 
-def fock_bilinear_derivative(mf_hf, dm0, dz, atmlst=None,
-                             return_metadata=False, profile_detail=False):
+def fock_bilinear_derivative(
+        mf_hf, dm0, dz, atmlst=None, return_metadata=False,
+        profile_detail=False, occupied_coefficients=None,
+        response_orbitals=None, adjoint_backend='auto'):
     r'''Return ``Q[P+D_Z]^lambda-Q[P-D_Z]^lambda`` by direct adjoint.
 
     This is the source-Fock-only counterpart of
@@ -263,9 +301,14 @@ def fock_bilinear_derivative(mf_hf, dm0, dz, atmlst=None,
         reciprocal_options=_reciprocal_options(provider),
         adjoint_options=_adjoint_options(provider),
         include_target_j=False, response_sign=1.,
+        occupied_coefficients=occupied_coefficients,
+        response_orbitals=response_orbitals,
+        adjoint_backend=adjoint_backend,
         profile_detail=profile_detail)
     provider.adjoint_host_cache_plan = metadata['adjoint'].get(
         'host_cache_plan')
+    provider._experimental_reciprocal_pair_cache_plan = metadata.get(
+        'reciprocal_pair_cache')
     atoms = _atmlst(cell, atmlst)
     value = cp.asarray(value[atoms])
     if return_metadata:
@@ -421,9 +464,29 @@ def _reciprocal_options(provider):
         'maximum_block_size': provider.reciprocal_max_block_size,
         'gamma_conjugate_symmetry': bool(
             provider.reciprocal_gamma_conjugate_symmetry),
+        'pair_cache': str(provider._experimental_reciprocal_pair_cache),
+        'pair_cache_host': str(
+            provider._experimental_reciprocal_pair_cache_host),
+        'pair_cache_host_memory_fraction': float(
+            provider._experimental_reciprocal_pair_cache_host_memory_fraction),
+        'pair_cache_host_minimum_reserve_bytes': int(
+            provider._experimental_reciprocal_pair_cache_host_minimum_reserve_bytes),
+        'pair_cache_host_max_bytes': (
+            provider._experimental_reciprocal_pair_cache_host_max_bytes),
+        'pair_cache_fallback': bool(
+            provider._experimental_reciprocal_pair_cache_fallback),
     }
     if options['maximum_block_size'] is not None:
         options['maximum_block_size'] = int(options['maximum_block_size'])
+    if options['pair_cache_host_max_bytes'] is not None:
+        options['pair_cache_host_max_bytes'] = int(
+            options['pair_cache_host_max_bytes'])
+    if options['pair_cache'] not in ('recompute', 'cache', 'auto'):
+        raise ValueError(
+            'reciprocal_pair_cache must be recompute, cache, or auto')
+    if options['pair_cache_host'] not in ('pageable', 'mapped'):
+        raise ValueError(
+            'reciprocal_pair_cache_host must be pageable or mapped')
     return options
 
 
@@ -457,6 +520,66 @@ def _is_gpu_out_of_memory(error):
     )
 
 
+def _resolve_adjoint_backend(adjoint_backend):
+    '''Resolve the real-Gamma primitive-source representation.'''
+    requested = str(adjoint_backend).lower()
+    if requested not in ('auto', 'packed', 'mo_factorized', 'mo_direct'):
+        raise ValueError(
+            'adjoint_backend must be auto, packed, mo_factorized, or '
+            'mo_direct')
+    if requested == 'auto':
+        return requested, 'mo_direct', None
+    return requested, requested, None
+
+
+def _sorted_rhf_mo_factors(
+        cell, occupied_coefficients, response_orbitals,
+        backend='mo_factorized'):
+    r'''Map physical ``C_o`` and ``U=C_v Z`` to native sorted real AOs.
+
+    The factorized source is exact only when these factors define the same
+    physical densities passed to the rest of the derivative,
+
+    ``P=2 C_o C_o^T`` and ``D_Z=U C_o^T+C_o U^T``.
+
+    Missing or genuinely complex factors are rejected for an explicitly
+    selected factorized backend.  There is intentionally no silent fallback
+    to the packed oracle under an explicit request; only ``auto`` may record
+    and take that exact representation fallback.
+    '''
+    if occupied_coefficients is None or response_orbitals is None:
+        raise ValueError(
+            f"adjoint_backend='{backend}' requires "
+            'occupied_coefficients and response_orbitals')
+    occupied = cp.asarray(occupied_coefficients)
+    response = cp.asarray(response_orbitals)
+    if occupied.ndim != 2 or response.ndim != 2:
+        raise ValueError('occupied_coefficients and response_orbitals must be 2D')
+    if occupied.shape != response.shape:
+        raise ValueError(
+            'occupied_coefficients and response_orbitals must have the same '
+            f'shape, got {occupied.shape} and {response.shape}')
+    physical_nao = int(cell.cell.nao_nr())
+    if occupied.shape[0] != physical_nao:
+        raise ValueError(
+            'MO factors must use the physical AO dimension '
+            f'{physical_nao}, got {occupied.shape[0]}')
+    real_factors = []
+    for name, factor in (
+            ('occupied_coefficients', occupied),
+            ('response_orbitals', response)):
+        if cp.iscomplexobj(factor):
+            imaginary = float(cp.max(cp.abs(factor.imag)).get())
+            if imaginary > 1.e-10:
+                raise NotImplementedError(
+                    f"adjoint_backend='{backend}' requires real Gamma "
+                    f'{name}; maximum imaginary component is {imaginary:.3e}')
+            factor = factor.real
+        real_factors.append(cp.asarray(factor, dtype=cp.float64))
+    return tuple(
+        cell.apply_C_dot(factor, axis=0) for factor in real_factors)
+
+
 def _release_cached_gpu_blocks(_start, _stop, _error):
     '''Return failed transaction buffers to CuPy before retrying the interval.'''
     cp.get_default_memory_pool().free_all_blocks()
@@ -474,6 +597,91 @@ def _finish_profile_stage(profile, name, start):
     cp.cuda.Stream.null.synchronize()
     profile[name] = time.perf_counter() - start
     return time.perf_counter()
+
+
+class _LongRangeDetailProfiler:
+    '''Collect opt-in LR derivative GPU events without per-stage barriers.
+
+    The reciprocal derivative runs many small G-vector transactions.  A host
+    synchronization around every operation would make the diagnostic change
+    the launch schedule it is intended to measure.  Instead, this helper
+    records pairs of CUDA events for each logical operation and resolves all
+    pairs at the end of the traversal.  Host/device atom reduction is timed
+    only after that resolution, so its blocking transfers do not double count
+    queued Fourier or contraction work.
+
+    This object is constructed only for ``profile_detail=True``.  The normal
+    path therefore creates no events and adds no synchronization.
+    '''
+
+    _GPU_CATEGORIES = (
+        'ao_pair_ft',
+        'auxiliary_ft',
+        'source_contraction',
+        'metric_contraction',
+        'atom_reduction',
+    )
+
+    def __init__(self):
+        cp.cuda.Stream.null.synchronize()
+        self._wall_start = time.perf_counter()
+        self._events = {name: [] for name in self._GPU_CATEGORIES}
+        self._gpu_seconds = None
+        self._atom_reduction_host_seconds = 0.
+
+    def begin(self, category):
+        '''Record the start event for one queued GPU operation group.'''
+        if category not in self._events:
+            raise KeyError(f'unknown long-range profile category {category!r}')
+        start = cp.cuda.Event()
+        start.record()
+        return start
+
+    def end(self, category, start):
+        '''Record an end event paired with ``start`` in ``category``.'''
+        stop = cp.cuda.Event()
+        stop.record()
+        self._events[category].append((start, stop))
+
+    def resolve_gpu(self):
+        '''Synchronize once and convert every queued event pair to seconds.'''
+        if self._gpu_seconds is not None:
+            return
+        cp.cuda.Stream.null.synchronize()
+        self._gpu_seconds = {
+            name: sum(
+                cp.cuda.get_elapsed_time(start, stop)
+                for start, stop in events) * 1.e-3
+            for name, events in self._events.items()
+        }
+
+    def add_atom_reduction_host_seconds(self, seconds):
+        '''Add D2H/grouping wall time after queued GPU work has completed.'''
+        self._atom_reduction_host_seconds += float(seconds)
+
+    def finish(self, block_count):
+        '''Return the flat response-profile fields for the completed LR pass.'''
+        self.resolve_gpu()
+        seconds = dict(self._gpu_seconds)
+        seconds['atom_reduction'] += self._atom_reduction_host_seconds
+        wall_seconds = time.perf_counter() - self._wall_start
+        accounted = sum(seconds.values())
+        allocation_other = max(0., wall_seconds - accounted)
+        detail_total = accounted + allocation_other
+        return {
+            'long_range_ao_pair_ft_seconds': seconds['ao_pair_ft'],
+            'long_range_auxiliary_ft_seconds': seconds['auxiliary_ft'],
+            'long_range_source_contraction_seconds': (
+                seconds['source_contraction']),
+            'long_range_metric_contraction_seconds': (
+                seconds['metric_contraction']),
+            'long_range_atom_reduction_seconds': seconds['atom_reduction'],
+            'long_range_allocation_other_seconds': allocation_other,
+            'long_range_detail_accounted_seconds': accounted,
+            'long_range_detail_total_seconds': detail_total,
+            'long_range_detail_wall_seconds': wall_seconds,
+            'long_range_detail_block_count': int(block_count),
+        }
 
 
 def _make_state(cell, density, coulomb_weight, exchange_weight):
@@ -583,7 +791,9 @@ def _signed_derivative(intopt, states, exxdiv, reciprocal_options):
 def _direct_adjoint_derivative(
         intopt, reference_density, response_density, exxdiv,
         reciprocal_options, include_target_j=True, response_sign=-1.,
-        profile_detail=False, adjoint_options=None):
+        profile_detail=False, adjoint_options=None,
+        occupied_coefficients=None, response_orbitals=None,
+        adjoint_backend='auto'):
     r'''Apply the fused target-J/Z term through one primitive reverse adjoint.
 
     ``_signed_derivative`` is retained as the polarization reference route for
@@ -614,15 +824,30 @@ def _direct_adjoint_derivative(
             Provider-owned real-Gamma source block, host-cache and fallback
             policy.  ``None`` retains the low-level two-pass defaults used by
             algebra tests and internal oracles.
+        occupied_coefficients, response_orbitals : cupy.ndarray or None
+            Physical-AO ``C_o`` and ``U=C_v Z`` factors.  They are required
+            by explicit ``mo_factorized``/``mo_direct`` and by production
+            ``auto`` when it resolves to ``mo_direct``.  They are mapped to
+            the same sorted AO basis as the native three-center tensor.
+        adjoint_backend : {'auto', 'packed', 'mo_factorized', 'mo_direct'}
+            Primitive-source representation.  ``auto`` selects exact
+            ``mo_direct`` for the supported closed-shell real-Gamma factors
+            and falls back to the established density-packed oracle only
+            when those representation inputs are unavailable or genuinely
+            complex.  ``mo_factorized`` changes the adjoint algebra but
+            retains the packed zero-order ``B/W`` tensor.  ``mo_direct`` also
+            projects zero-order and derivative transactions directly through
+            ``C`` and ``U``, so no persistent packed AO-pair tensor is built.
         include_target_j : bool
             Include the target ``E_J[P]^lambda`` derivative.  False selects
             the source-Fock polarization alone for an MG-owned target J.
         response_sign : {+1., -1.}
             Sign of ``Q[P+D_Z]^lambda-Q[P-D_Z]^lambda``.
         profile_detail : bool
-            Split the combined metric/adjoint wall time and record packed-
-            adjoint pass timings.  This adds synchronization and CUDA events
-            for profiling only; the mathematical and memory schedulers are
+            Split backend-specific zero-order, metric/adjoint and derivative
+            wall times.  Packed routes additionally record packed-adjoint
+            pass timings.  This adds synchronization and CUDA events for
+            profiling only; the mathematical and memory schedulers are
             unchanged.
 
     Returns:
@@ -630,12 +855,37 @@ def _direct_adjoint_derivative(
             All-atom Ha/Bohr derivative and resolved scheduler/adjoint
             metadata.
     '''
-    profile = {}
+    profile = {} if profile_detail else None
     adjoint_options = {} if adjoint_options is None else dict(adjoint_options)
+    backend_requested, backend_resolved, backend_fallback_reason = (
+        _resolve_adjoint_backend(adjoint_backend))
     response_sign = float(response_sign)
     if response_sign not in (-1., 1.):
         raise ValueError('response_sign must be +1 or -1')
-    total_start = time.perf_counter()
+    if backend_resolved == 'mo_direct':
+        try:
+            sorted_mo_factors = _sorted_rhf_mo_factors(
+                intopt.cell, occupied_coefficients, response_orbitals,
+                backend='mo_direct')
+        except (ValueError, NotImplementedError) as error:
+            if backend_requested != 'auto':
+                raise
+            # ``auto`` may be reached by an internal caller that does not
+            # provide the closed-shell real-Gamma MO factors, or by a Gamma
+            # calculation whose orbitals are genuinely complex.  Those are
+            # representation limitations rather than changed physics, so the
+            # established density-packed oracle remains the exact fallback.
+            backend_resolved = 'packed'
+            backend_fallback_reason = f'{type(error).__name__}: {error}'
+        else:
+            return _direct_rhf_mo_adjoint_derivative(
+                intopt, reference_density, response_density, exxdiv,
+                reciprocal_options, include_target_j=include_target_j,
+                response_sign=response_sign, profile_detail=profile_detail,
+                sorted_mo_factors=sorted_mo_factors,
+                backend_requested=backend_requested,
+                backend_fallback_reason=backend_fallback_reason)
+    total_start = time.perf_counter() if profile_detail else None
     stage_start = total_start
     cell = intopt.cell
     auxcell = intopt.auxcell
@@ -652,8 +902,9 @@ def _direct_adjoint_derivative(
         len(intopt.bvkmesh_Ls), nao)
     solved = _build_three_center_packed(
         intopt, pair_layout, batch_size=batch_size, aux_block=aux_block)
-    stage_start = _finish_profile_stage(
-        profile, 'three_center_short_range_seconds', stage_start)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'three_center_short_range_seconds', stage_start)
 
     auxcell.rcut = _estimate_sr_2c2e_rcut(
         auxcell, intopt.omega, auxcell.precision * 1e-6)
@@ -661,10 +912,10 @@ def _direct_adjoint_derivative(
     metric = int2opt.int2c2e(sort_output=False)
     reciprocal = _add_zero_order_reciprocal_packed(
         intopt, solved, pair_layout, metric, i_addr, j_addr,
-        reciprocal_options)
-    stage_start = _finish_profile_stage(
-        profile, 'three_center_reciprocal_seconds', stage_start)
-    combined_start = stage_start
+        reciprocal_options, profile_detail=profile_detail)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'three_center_reciprocal_seconds', stage_start)
     metric_inverse_start = stage_start
     metric_inverse = _metric_inverse(auxcell, metric)
     del metric
@@ -678,13 +929,35 @@ def _direct_adjoint_derivative(
         stage_start = _finish_profile_stage(
             profile, 'metric_solve_seconds', metric_solve_start)
     adjoint_start = stage_start
-    source, metric_source, adjoint_metadata = (
-        build_rhf_packed_primitive_adjoint(
-        solved, pair_layout, reference_state.density_sorted,
-        response_state.density_sorted,
-        include_target_j=include_target_j, response_sign=response_sign,
-        overwrite_solved=True, profile_detail=profile_detail,
-        **adjoint_options))
+    if backend_resolved == 'mo_factorized':
+        occupied_sorted, response_sorted = _sorted_rhf_mo_factors(
+            cell, occupied_coefficients, response_orbitals)
+        # The density-packed block/cache controls describe a different
+        # two-pass algorithm.  Keep the independently benchmarked MO defaults
+        # (32 auxiliary rows and 8192 AO pairs) until this experimental route
+        # receives its own provider-level tuning controls.
+        source, metric_source, adjoint_metadata = (
+            build_rhf_mo_factorized_packed_adjoint(
+                solved, pair_layout, occupied_sorted, response_sorted,
+                include_target_j=include_target_j,
+                response_sign=response_sign,
+                overwrite_solved=True))
+    else:
+        source, metric_source, adjoint_metadata = (
+            build_rhf_packed_primitive_adjoint(
+                solved, pair_layout, reference_state.density_sorted,
+                response_state.density_sorted,
+                include_target_j=include_target_j,
+                response_sign=response_sign, overwrite_solved=True,
+                profile_detail=profile_detail, **adjoint_options))
+    adjoint_metadata.update({
+        'backend_requested': backend_requested,
+        'backend_resolved': backend_resolved,
+        'backend_fallback_reason': backend_fallback_reason,
+        'gradient_integration': (
+            'explicit_experimental' if backend_resolved == 'mo_factorized'
+            else 'production_packed'),
+    })
     if profile_detail:
         stage_start = _finish_profile_stage(
             profile, 'adjoint_seconds', adjoint_start)
@@ -696,9 +969,6 @@ def _direct_adjoint_derivative(
             profile[name] for name in (
                 'metric_inverse_seconds', 'metric_solve_seconds',
                 'adjoint_seconds'))
-    else:
-        stage_start = _finish_profile_stage(
-            profile, 'metric_solve_and_adjoint_seconds', combined_start)
     solved_bytes = int(solved.nbytes)
     del solved
     # Returning ``solved`` to CuPy's pool is enough: the ensuing LR/SR
@@ -715,29 +985,53 @@ def _direct_adjoint_derivative(
     metric_derivative = np.asarray(
         -int2opt.energy_ip1_per_atom(metric_source), dtype=float)
     value = metric_derivative.copy()
-    stage_start = _finish_profile_stage(
-        profile, 'metric_derivative_seconds', stage_start)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_derivative_seconds', stage_start)
     long_range, derivative_execution, long_range_components = _long_range_derivative(
         intopt, reciprocal, (), metric_source, nao, naux,
         primitive_source=_PackedPrimitiveSource(source, pair_layout),
-        return_components=True)
-    stage_start = _finish_profile_stage(
-        profile, 'long_range_derivative_seconds', stage_start)
+        return_components=True,
+        detail_profile=profile if profile_detail else None)
+    reciprocal_pair_cache = reciprocal.release_pair_cache()
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'long_range_derivative_seconds', stage_start)
+        # Reconcile the event-accounted inner traversal with the existing
+        # public LR wall stage.  The difference contains allocations, Python
+        # scheduling, cache release and timing overhead, so the six reported
+        # categories partition ``long_range_derivative_seconds`` whenever
+        # ordinary timing noise leaves a non-negative residual.
+        long_range_accounted = sum(profile[name] for name in (
+            'long_range_ao_pair_ft_seconds',
+            'long_range_auxiliary_ft_seconds',
+            'long_range_source_contraction_seconds',
+            'long_range_metric_contraction_seconds',
+            'long_range_atom_reduction_seconds'))
+        profile['long_range_detail_accounted_seconds'] = long_range_accounted
+        profile['long_range_allocation_other_seconds'] = max(
+            0., profile['long_range_derivative_seconds']
+            - long_range_accounted)
+        profile['long_range_detail_total_seconds'] = (
+            long_range_accounted
+            + profile['long_range_allocation_other_seconds'])
     value += long_range
     short_range, short_range_components = _short_range_derivative(
         intopt, (), pair_addresses, batch_size, aux_block, nao, naux,
         primitive_source=_PackedPrimitiveSource(source, pair_layout),
         return_components=True)
     value += short_range
-    stage_start = _finish_profile_stage(
-        profile, 'short_range_derivative_seconds', stage_start)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'short_range_derivative_seconds', stage_start)
     ewald = -response_sign * ewald_cross_derivative(
         cell, reference_state.density_physical,
         response_state.density_physical, exxdiv)
     value += ewald
-    profile_end = _finish_profile_stage(
-        profile, 'ewald_derivative_seconds', stage_start)
-    profile['total_seconds'] = profile_end - total_start
+    if profile_detail:
+        profile_end = _finish_profile_stage(
+            profile, 'ewald_derivative_seconds', stage_start)
+        profile['total_seconds'] = profile_end - total_start
     term_components = {
         # ``source`` contracts the primitive three-center derivative ``dB``.
         # ``metric`` contracts ``dM`` and therefore includes the direct
@@ -759,6 +1053,7 @@ def _direct_adjoint_derivative(
         'reciprocal_plan': reciprocal.plan_metadata(),
         'reciprocal_zero_order': reciprocal.zero_order_execution.as_dict(),
         'reciprocal_derivative': derivative_execution.as_dict(),
+        'reciprocal_pair_cache': reciprocal_pair_cache,
         'three_center_workspace_plan': three_center_plan,
         'metric_solve_workspace_plan': metric_solve_plan,
         'adjoint': adjoint_metadata,
@@ -775,6 +1070,226 @@ def _direct_adjoint_derivative(
             np.asarray(value, dtype=float) - component_sum))),
     }
     return np.asarray(value, dtype=float), metadata
+
+
+def _direct_rhf_mo_adjoint_derivative(
+        intopt, reference_density, response_density, exxdiv,
+        reciprocal_options, include_target_j=True, response_sign=-1.,
+        profile_detail=False, sorted_mo_factors=None,
+        backend_requested='mo_direct',
+        backend_fallback_reason=None):
+    r'''Evaluate the exact RHF adjoint without persistent packed AO pairs.
+
+    This is the promoted production NR3/NR4 path.  Short-range and
+    reciprocal zero-order three-center blocks are projected immediately to
+    ``Boo=C.T@B@C`` and ``Bou=C.T@B@U``.  The native primitive metric inverse
+    is then applied only to these occupied-space right-hand sides.  Long- and
+    short-range derivative kernels consume ``C,U,A,K,Gamma`` directly and
+    construct only their transaction-local AO source.
+
+    The packed implementation in :func:`_direct_adjoint_derivative` remains
+    the numerical oracle and unsupported-representation fallback.  After the
+    Water1/8/20/64 accuracy, scale, OOM, reentry and scanner gates, this
+    routine is the supported real-Gamma RHF ``auto`` route as well as the
+    explicit ``adjoint_backend='mo_direct'`` route.
+    '''
+    profile = {} if profile_detail else None
+    total_start = time.perf_counter() if profile_detail else None
+    stage_start = total_start
+    cell = intopt.cell
+    auxcell = intopt.auxcell
+    if sorted_mo_factors is None or len(sorted_mo_factors) != 2:
+        raise ValueError(
+            'mo_direct requires two prevalidated sorted MO factors')
+    occupied, response = sorted_mo_factors
+    reference_physical = cp.asarray(
+        cp.asarray(reference_density).real, dtype=cp.float64)
+    response_physical = cp.asarray(
+        cp.asarray(response_density).real, dtype=cp.float64)
+    nao = int(occupied.shape[0])
+    naux = int(auxcell.ao_loc[-1])
+    pair_addresses = intopt.pair_and_diag_indices(
+        cart=True, original_ao_order=False)[0]
+
+    occupied_projection, mixed_projection, short_range_plan = (
+        build_short_range_rhf_mo_projections(
+            intopt, occupied, response))
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'three_center_short_range_seconds', stage_start)
+
+    auxcell.rcut = _estimate_sr_2c2e_rcut(
+        auxcell, intopt.omega, auxcell.precision * 1.e-6)
+    int2opt = Int2c2eOpt(auxcell)
+    metric = int2opt.int2c2e(sort_output=False)
+    reciprocal = add_reciprocal_rhf_mo_projections(
+        intopt, occupied_projection, mixed_projection, metric,
+        occupied, response, reciprocal_options)
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'three_center_reciprocal_seconds', stage_start)
+
+    metric_inverse_start = stage_start
+    metric_inverse = _metric_inverse(auxcell, metric)
+    del metric
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_inverse_seconds', metric_inverse_start)
+    metric_solve_start = stage_start
+    occupied_solve_plan, mixed_solve_plan = (
+        solve_rhf_mo_projections_inplace(
+            metric_inverse, occupied_projection, mixed_projection))
+    del metric_inverse
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_solve_seconds', metric_solve_start)
+
+    adjoint_start = stage_start
+    factors = make_rhf_mo_response_factors(
+        occupied, response, occupied_projection, mixed_projection,
+        include_target_j=include_target_j, response_sign=response_sign,
+        overwrite_projections=True)
+    projection_bytes = int(
+        occupied_projection.nbytes + mixed_projection.nbytes)
+    factor_bytes = int(
+        factors.source_factor.nbytes + factors.response_factor.nbytes
+        + factors.metric_source.nbytes)
+    # O/R values have served their purpose once Gamma is complete.  Their two
+    # device buffers are reused in place as K/A rather than allocating a
+    # second pair of persistent occupied-space stacks.
+    del occupied_projection, mixed_projection
+    adjoint_metadata = {
+        'route': 'real_gamma_rhf_mo_direct_adjoint',
+        'domain': 'real_gamma_closed_shell_rhf',
+        'source_storage': 'factorized_mo_transaction_local_ao_source',
+        'include_target_j': bool(include_target_j),
+        'response_sign': float(response_sign),
+        'nao': nao,
+        'nocc': int(occupied.shape[1]),
+        'naux': naux,
+        'projection_storage_bytes_reused_for_factors': projection_bytes,
+        'persistent_factor_bytes': factor_bytes,
+        'projection_storage_reused_for_factors': True,
+        'persistent_packed_source_bytes': 0,
+        'production_auto_selected': backend_requested == 'auto',
+        'profile': None,
+        'backend_requested': backend_requested,
+        'backend_resolved': 'mo_direct',
+        'backend_fallback_reason': backend_fallback_reason,
+        'gradient_integration': (
+            'production_mo_direct' if backend_requested == 'auto'
+            else 'explicit_validation'),
+    }
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'adjoint_seconds', adjoint_start)
+        profile['metric_solve_and_adjoint_seconds'] = sum(
+            profile[name] for name in (
+                'metric_inverse_seconds', 'metric_solve_seconds',
+                'adjoint_seconds'))
+
+    metric_source = factors.metric_source
+    metric_derivative = np.asarray(
+        -int2opt.energy_ip1_per_atom(metric_source), dtype=float)
+    value = metric_derivative.copy()
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'metric_derivative_seconds', stage_start)
+
+    long_range, derivative_execution, long_range_components = (
+        _long_range_derivative(
+            intopt, reciprocal, (), metric_source, nao, naux,
+            mo_response_factors=factors, return_components=True,
+            detail_profile=profile if profile_detail else None))
+    value += long_range
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'long_range_derivative_seconds', stage_start)
+        long_range_accounted = sum(profile[name] for name in (
+            'long_range_ao_pair_ft_seconds',
+            'long_range_auxiliary_ft_seconds',
+            'long_range_source_contraction_seconds',
+            'long_range_metric_contraction_seconds',
+            'long_range_atom_reduction_seconds'))
+        profile['long_range_detail_accounted_seconds'] = long_range_accounted
+        profile['long_range_allocation_other_seconds'] = max(
+            0., profile['long_range_derivative_seconds']
+            - long_range_accounted)
+        profile['long_range_detail_total_seconds'] = (
+            long_range_accounted
+            + profile['long_range_allocation_other_seconds'])
+
+    batch_size, auxiliary_block_size, derivative_source_plan = (
+        _work_block_rhf_mo_short_range_source(
+            len(pair_addresses), naux, nao, occupied.shape[1]))
+    short_range, short_range_components = _short_range_derivative(
+        intopt, (), pair_addresses, batch_size, auxiliary_block_size,
+        nao, naux, mo_response_factors=factors, return_components=True)
+    value += short_range
+    if profile_detail:
+        stage_start = _finish_profile_stage(
+            profile, 'short_range_derivative_seconds', stage_start)
+
+    ewald = -response_sign * ewald_cross_derivative(
+        cell, reference_physical, response_physical, exxdiv)
+    value += ewald
+    if profile_detail:
+        profile_end = _finish_profile_stage(
+            profile, 'ewald_derivative_seconds', stage_start)
+        profile['total_seconds'] = profile_end - total_start
+
+    term_components = {
+        'source': (long_range_components['source']
+                   + short_range_components['source']),
+        'metric': (metric_derivative + long_range_components['metric']
+                   + short_range_components['metric']),
+        'ewald': np.asarray(ewald, dtype=float),
+    }
+    component_sum = sum(term_components.values())
+    reciprocal_pair_cache = _mo_direct_pair_cache_metadata(
+        reciprocal_options)
+    metadata = {
+        'reciprocal_plan': reciprocal.plan_metadata(),
+        'reciprocal_zero_order': reciprocal.zero_order_execution.as_dict(),
+        'reciprocal_derivative': derivative_execution.as_dict(),
+        'reciprocal_pair_cache': reciprocal_pair_cache,
+        'three_center_workspace_plan': short_range_plan,
+        'short_range_source_workspace_plan': derivative_source_plan,
+        'metric_solve_workspace_plans': {
+            'occupied_projection': occupied_solve_plan,
+            'mixed_projection': mixed_solve_plan,
+        },
+        'adjoint': adjoint_metadata,
+        'include_target_j': bool(include_target_j),
+        'response_sign': float(response_sign),
+        'profile': profile,
+        'solved_three_center_bytes': 0,
+        # The direct route intentionally does not construct a canonical
+        # unique-pair layout merely to report its size.  Doing so would add a
+        # device-to-host copy and NumPy unique pass to the optimized path.
+        'raw_derivative_pair_count': len(pair_addresses),
+        'dense_solved_three_center_bytes_avoided': int(
+            naux * nao ** 2 * np.dtype(np.float64).itemsize),
+        'signed_state_full_rank_bytes_avoided': 2 * naux * nao ** 2 * 8,
+        'term_components': term_components,
+        'term_component_residual_max_abs': float(np.max(np.abs(
+            np.asarray(value, dtype=float) - component_sum))),
+    }
+    return np.asarray(value, dtype=float), metadata
+
+
+def _mo_direct_pair_cache_metadata(reciprocal_options):
+    '''Report why the packed reciprocal host cache is bypassed by MO direct.'''
+    return {
+        'applicable': False,
+        'bypassed': True,
+        'requested_mode': str(
+            reciprocal_options.get('pair_cache', 'recompute')),
+        'resolved_mode': 'not_applicable_mo_direct',
+        'reason': (
+            'mo_direct consumes the complete transaction-local AO-pair '
+            'Fourier matrix; the packed unique-pair host cache is not used'),
+    }
 
 
 def _direct_adjoint_derivative_channels(intopt, reference_density,
@@ -1016,6 +1531,72 @@ def _work_blocks_packed(
     }
 
 
+def _work_block_rhf_mo_short_range_source(
+        raw_pair_count, naux, nao, nocc):
+    '''Plan the NR4 raw-pair source independently of zero-order projection.
+
+    The zero-order projection temporary scales mainly as ``nao**2`` per
+    auxiliary row.  The SR derivative consumer instead holds
+    ``pair_tile*nocc`` values per row while the complete native raw-pair batch
+    is live.  Reusing the former block size can therefore oversubscribe large
+    occupied spaces even when zero order succeeded.
+    '''
+    raw_pair_count = int(raw_pair_count)
+    naux = int(naux)
+    nao = int(nao)
+    nocc = int(nocc)
+    if min(raw_pair_count, naux, nao, nocc) < 1:
+        raise ValueError(
+            'raw-pair, auxiliary, AO, and occupied dimensions must be '
+            'positive')
+    available = int(get_avail_mem(exclude_memory_pool=True))
+    itemsize = np.dtype(np.float64).itemsize
+    reserve = min(512 * 1024**2, max(0, available // 8))
+    usable = max(0, available - reserve)
+    packed_bytes_per_aux = raw_pair_count * itemsize
+    pair_block = min(raw_pair_count, DEFAULT_RAW_PAIR_BLOCK_SIZE)
+    bytes_per_aux = (
+        nao * nocc + pair_block * (nocc + 1)) * itemsize
+    minimum_required = packed_bytes_per_aux + bytes_per_aux
+    if usable < minimum_required:
+        raise MemoryError(
+            'insufficient GPU memory for one mo_direct Gamma GDF '
+            'short-range source row: '
+            f'usable={usable} bytes, required={minimum_required} bytes '
+            f'(raw_source={packed_bytes_per_aux}, '
+            f'factor_contraction={bytes_per_aux}), '
+            f'free={available} bytes, reserve={reserve} bytes')
+    packed_budget = max(packed_bytes_per_aux, int(.35 * usable))
+    batch = max(
+        1, min(naux, packed_budget // packed_bytes_per_aux))
+    factor_budget = max(bytes_per_aux, int(.20 * usable))
+    block = max(1, min(naux, factor_budget // bytes_per_aux))
+    # Avoid very large factor contractions even on high-memory devices.  The
+    # native raw-pair batch has its own budget above; both final tails are exact.
+    block = min(block, 64)
+    if block >= 8:
+        block = max(8, block // 8 * 8)
+    return int(batch), int(block), {
+        'layout': 'rhf_mo_raw_pair_transaction',
+        'available_bytes': available,
+        'reserve_bytes': reserve,
+        'usable_workspace_bytes': usable,
+        'minimum_raw_source_row_bytes': packed_bytes_per_aux,
+        'minimum_factor_contraction_row_bytes': bytes_per_aux,
+        'minimum_combined_row_bytes': minimum_required,
+        'packed_buffer_budget_bytes': packed_budget,
+        'factor_contraction_budget_bytes': factor_budget,
+        'raw_pair_count': raw_pair_count,
+        'auxiliary_batch_size': int(batch),
+        'estimated_packed_buffer_bytes': int(batch * packed_bytes_per_aux),
+        'raw_pair_block_size': pair_block,
+        'ao_count': int(nao),
+        'occupied_count': int(nocc),
+        'auxiliary_block_size': int(block),
+        'estimated_factor_contraction_bytes': int(block * bytes_per_aux),
+    }
+
+
 def _build_three_center_occupied(intopt, states, pair_addresses, i_addr,
                                  j_addr, batch_size, aux_block):
     '''Build ``B_r,ij`` for both signed states from one SR primitive pass.'''
@@ -1111,7 +1692,8 @@ class _Reciprocal:
 
     def __init__(self, ft_opt, evaluator, vectors, coulomb, block_size,
                  memory_plan, zero_order_execution, full_grid_count,
-                 gamma_conjugate_symmetry):
+                 gamma_conjugate_symmetry, pair_cache=None,
+                 pair_cache_plan=None, profile_detail=False):
         self.ft_opt = ft_opt
         self.evaluator = evaluator
         self.vectors = vectors
@@ -1121,6 +1703,9 @@ class _Reciprocal:
         self.zero_order_execution = zero_order_execution
         self.full_grid_count = int(full_grid_count)
         self.gamma_conjugate_symmetry = bool(gamma_conjugate_symmetry)
+        self.pair_cache = pair_cache
+        self.pair_cache_plan = pair_cache_plan
+        self.profile_detail = bool(profile_detail)
 
     def plan_metadata(self):
         '''Return the memory plan plus the exact reciprocal reduction scope.'''
@@ -1131,6 +1716,31 @@ class _Reciprocal:
             'gamma_conjugate_symmetry': self.gamma_conjugate_symmetry,
         })
         return metadata
+
+    def selected_pair_block(self, p0, p1):
+        '''Return cached ``FT[ij,G]`` for one derivative transaction.'''
+        if self.pair_cache is None:
+            return None
+        start = time.perf_counter()
+        block = asarray(self.pair_cache[2*p0:2*p1])
+        if self.profile_detail:
+            cp.cuda.Stream.null.synchronize()
+            self.pair_cache_plan['host_read_seconds'] += (
+                time.perf_counter() - start)
+        self.pair_cache_plan['host_read_bytes'] += int(block.nbytes)
+        self.pair_cache_plan['hit_count'] += 1
+        return block.T
+
+    def release_pair_cache(self):
+        '''Release the zero-order Fourier cache after the LR derivative.'''
+        plan = self.pair_cache_plan
+        if plan is None:
+            return None
+        start = time.perf_counter()
+        self.pair_cache = None
+        plan['release_seconds'] = time.perf_counter() - start
+        plan['released'] = True
+        return plan
 
 
 def _add_zero_order_reciprocal(intopt, states, metric, i_addr, j_addr,
@@ -1162,10 +1772,9 @@ def _add_zero_order_reciprocal(intopt, states, metric, i_addr, j_addr,
     memory_plan = plan_gamma_reciprocal_blocks(
         len(vectors), nao, naux, nocc,
         free_device_bytes=int(get_avail_mem(exclude_memory_pool=True)),
-        **{
-            name: value for name, value in reciprocal_options.items()
-            if name != 'gamma_conjugate_symmetry'
-        })
+        **{name: reciprocal_options[name] for name in (
+            'memory_fraction', 'minimum_reserve_bytes', 'block_alignment',
+            'maximum_block_size')})
 
     def worker(p0, p1):
         ngrid = p1 - p0
@@ -1204,7 +1813,7 @@ def _add_zero_order_reciprocal(intopt, states, metric, i_addr, j_addr,
 
 def _add_zero_order_reciprocal_packed(
         intopt, three_center, layout, metric, i_addr, j_addr,
-        reciprocal_options):
+        reciprocal_options, profile_detail=False):
     '''Add LR values to packed primitive B and retain derivative evaluators.'''
     cell = intopt.cell
     auxcell = intopt.auxcell
@@ -1232,10 +1841,13 @@ def _add_zero_order_reciprocal_packed(
     memory_plan = plan_gamma_reciprocal_blocks(
         len(vectors), nao, naux, nao,
         free_device_bytes=int(get_avail_mem(exclude_memory_pool=True)),
-        **{
-            name: value for name, value in reciprocal_options.items()
-            if name != 'gamma_conjugate_symmetry'
-        })
+        **{name: reciprocal_options[name] for name in (
+            'memory_fraction', 'minimum_reserve_bytes', 'block_alignment',
+            'maximum_block_size')})
+
+    pair_cache, pair_cache_plan = _make_reciprocal_pair_cache(
+        len(vectors), int(layout['unique_pair_count']),
+        reciprocal_options, profile_detail)
 
     def worker(p0, p1):
         ngrid = p1 - p0
@@ -1253,6 +1865,15 @@ def _add_zero_order_reciprocal_packed(
                  weighted.view(np.float64), beta=1., out=metric)
         contract('rG,kG->rk', weighted.view(np.float64), selected,
                  beta=1., out=three_center)
+        if pair_cache is not None:
+            start = time.perf_counter()
+            contiguous = cp.ascontiguousarray(selected.T)
+            contiguous.get(
+                out=pair_cache[2*_p0:2*_p1], blocking=True)
+            if profile_detail:
+                pair_cache_plan['host_write_seconds'] += (
+                    time.perf_counter() - start)
+            pair_cache_plan['host_write_bytes'] += int(contiguous.nbytes)
 
     execution = execute_gamma_reciprocal_blocks(
         len(vectors), memory_plan.initial_block_size, worker, accept_result,
@@ -1261,7 +1882,65 @@ def _add_zero_order_reciprocal_packed(
         on_oom=_release_cached_gpu_blocks)
     return _Reciprocal(
         ft_opt, evaluator, vectors, coulomb, execution.final_block_size,
-        memory_plan, execution, full_grid_count, gamma_symmetry)
+        memory_plan, execution, full_grid_count, gamma_symmetry,
+        pair_cache=pair_cache, pair_cache_plan=pair_cache_plan,
+        profile_detail=profile_detail)
+
+
+def _make_reciprocal_pair_cache(ngrid, npair, options, profile_detail):
+    '''Allocate one bounded host cache for selected real-Gamma pair Fourier data.'''
+    requested = options['pair_cache']
+    cache_bytes = int(ngrid) * 2 * int(npair) * np.dtype(np.float64).itemsize
+    requested_storage = (
+        'double_pass' if requested == 'recompute' else 'host_cache')
+    plan = plan_adjoint_host_cache(
+        cache_bytes,
+        memory_fraction=options['pair_cache_host_memory_fraction'],
+        minimum_reserve_bytes=(
+            options['pair_cache_host_minimum_reserve_bytes']),
+        maximum_bytes=options['pair_cache_host_max_bytes'],
+        requested_storage=requested_storage,
+        fallback=options['pair_cache_fallback'])
+    plan.update({
+        'requested_mode': requested,
+        'resolved_mode': (
+            'cache' if plan['resolved_storage'] == 'host_cache'
+            else 'recompute'),
+        'host_storage': options['pair_cache_host'],
+        'grid_count': int(ngrid),
+        'unique_pair_count': int(npair),
+        'predicted_cache_bytes': cache_bytes,
+        'actual_cache_bytes': 0,
+        'host_write_bytes': 0,
+        'host_read_bytes': 0,
+        'host_write_seconds': 0.0,
+        'host_read_seconds': 0.0,
+        'hit_count': 0,
+        'profile_detail': bool(profile_detail),
+        'release_seconds': 0.0,
+        'released': False,
+    })
+    if plan['resolved_storage'] != 'host_cache':
+        return None, plan
+    start = time.perf_counter()
+    try:
+        shape = (2 * int(ngrid), int(npair))
+        if options['pair_cache_host'] == 'mapped':
+            cache = empty_mapped(shape, dtype=np.float64)
+        else:
+            cache = np.empty(shape, dtype=np.float64)
+    except (MemoryError, OSError, cp.cuda.memory.OutOfMemoryError,
+            cp.cuda.runtime.CUDARuntimeError) as error:
+        if not options['pair_cache_fallback']:
+            raise
+        plan['resolved_storage'] = 'double_pass'
+        plan['resolved_mode'] = 'recompute'
+        plan['fallback_reason'] = f'{type(error).__name__}: {error}'
+        plan['allocation_seconds'] = time.perf_counter() - start
+        return None, plan
+    plan['allocation_seconds'] = time.perf_counter() - start
+    plan['actual_cache_bytes'] = int(cache.nbytes)
+    return cache, plan
 
 
 def _metric_inverse(auxcell, metric):
@@ -1287,18 +1966,27 @@ def _metric_source(states, naux):
 
 def _long_range_derivative(intopt, reciprocal, states, metric_source, nao,
                            naux, primitive_source=None,
-                           return_components=False):
+                           mo_response_factors=None,
+                           return_components=False, detail_profile=None):
     '''Contract signed or direct-adjoint LR sources in reciprocal blocks.
 
     ``primitive_source`` is the exact reverse source which contracts directly
-    with ``dB``.  When it is supplied, ``states`` is empty and no signed
-    occupied-factor workspace is allocated.  The signed-state branch remains
-    the quadratic reference implementation used by the public component
-    helpers.  With ``return_components=True`` the direct-adjoint route also
-    returns its separate ``dB`` and ``dM`` contractions.  The G-vector
+    with ``dB``.  ``mo_response_factors`` instead holds the exact
+    ``C,U,A,K,Gamma`` representation and materializes only a transaction-local
+    AO source.  These two inputs are mutually exclusive.  The signed-state
+    branch remains the quadratic reference implementation used by the public
+    component helpers.  With ``return_components=True`` the direct-adjoint
+    routes also return their separate ``dB`` and ``dM`` contractions.  The G-vector
     traversal remains single-pass; only its final per-atom reductions are
-    kept apart for the public fused-term ledger.
+    kept apart for the public fused-term ledger.  ``detail_profile`` is an
+    optional response-profile mapping used only by the validation path.  When
+    omitted, no CUDA events or additional synchronization are introduced.
     '''
+    if primitive_source is not None and mo_response_factors is not None:
+        raise ValueError(
+            'primitive_source and mo_response_factors are mutually exclusive')
+    profiler = (
+        _LongRangeDetailProfiler() if detail_profile is not None else None)
     cell = intopt.cell
     auxcell = intopt.auxcell
     ft_opt = reciprocal.ft_opt
@@ -1314,23 +2002,37 @@ def _long_range_derivative(intopt, reciprocal, states, metric_source, nao,
     aux_total = cp.zeros((3, naux))
 
     def worker(p0, p1):
+        if mo_response_factors is not None:
+            return _long_range_rhf_mo_block(
+                cell, auxcell, mo_response_factors, metric_source,
+                reciprocal.vectors[p0:p1], reciprocal.coulomb[p0:p1],
+                reciprocal.evaluator, nao, naux, i_addr, j_addr, kernel,
+                aft_envs, shell_offsets, shared_memory, bas_ij_idx,
+                bas_ij_img_idx, ft_opt.permutation_symmetry,
+                detail_profiler=profiler)
         if primitive_source is not None:
             return _long_range_adjoint_block(
                 cell, auxcell, primitive_source, metric_source,
                 reciprocal.vectors[p0:p1], reciprocal.coulomb[p0:p1],
                 reciprocal.evaluator, nao, naux, i_addr, j_addr, kernel,
                 aft_envs, shell_offsets, shared_memory, bas_ij_idx,
-                bas_ij_img_idx, ft_opt.permutation_symmetry)
+                bas_ij_img_idx, ft_opt.permutation_symmetry,
+                selected_pair_g=reciprocal.selected_pair_block(p0, p1),
+                detail_profiler=profiler)
         return _long_range_block(
             cell, auxcell, states, metric_source,
             reciprocal.vectors[p0:p1], reciprocal.coulomb[p0:p1],
             reciprocal.evaluator, nao, naux, i_addr, j_addr, kernel,
             aft_envs, shell_offsets, shared_memory, bas_ij_idx,
-            bas_ij_img_idx, ft_opt.permutation_symmetry)
+            bas_ij_img_idx, ft_opt.permutation_symmetry,
+            detail_profiler=profiler)
 
     def accept_result(_p0, _p1, value):
+        event = None if profiler is None else profiler.begin('atom_reduction')
         ao_total[...] += value[0]
         aux_total[...] += value[1]
+        if profiler is not None:
+            profiler.end('atom_reduction', event)
 
     execution = execute_gamma_reciprocal_blocks(
         len(reciprocal.vectors), reciprocal.block_size, worker, accept_result,
@@ -1338,6 +2040,12 @@ def _long_range_derivative(intopt, reciprocal, states, metric_source, nao,
         block_alignment=reciprocal.memory_plan.block_alignment,
         on_oom=_release_cached_gpu_blocks)
 
+    if profiler is not None:
+        # Resolve all queued Fourier/contraction events before timing the
+        # blocking D2H copies below; otherwise those copies would include and
+        # double count the complete transaction queue.
+        profiler.resolve_gpu()
+        reduction_start = time.perf_counter()
     dimensions = auxcell.ao_loc[1:] - auxcell.ao_loc[:-1]
     atom_for_aux = np.repeat(auxcell._bas[:, ATOM_OF], dimensions)
     grouped = groupby(atom_for_aux, aux_total.T.get(), op='sum')
@@ -1348,6 +2056,10 @@ def _long_range_derivative(intopt, reciprocal, states, metric_source, nao,
     else:
         metric_result += grouped
     result = source_result + metric_result
+    if profiler is not None:
+        profiler.add_atom_reduction_host_seconds(
+            time.perf_counter() - reduction_start)
+        detail_profile.update(profiler.finish(execution.block_count))
     if return_components:
         return result, execution, {
             'source': source_result,
@@ -1356,26 +2068,124 @@ def _long_range_derivative(intopt, reciprocal, states, metric_source, nao,
     return result, execution
 
 
+def _long_range_rhf_mo_block(
+        cell, auxcell, factors, metric_source, vectors, coulomb, evaluator,
+        nao, naux, i_addr, j_addr, kernel, aft_envs, shell_offsets,
+        shared_memory, bas_ij_idx, bas_ij_img_idx, permutation_symmetry,
+        detail_profiler=None):
+    r'''Consume one reciprocal block through exact RHF MO source factors.
+
+    ``F_G`` is generated by the same native AO-pair Fourier evaluator as the
+    packed oracle.  The helper contracts ``H_G=C.T F_G C`` and
+    ``X_G=C.T F_G U`` directly with ``A_P`` and ``K_P``; it also constructs
+    the transaction-local AO source required by
+    ``PBC_ft_aopair_ek_ip1``.  No persistent ``(naux,npair)`` source exists.
+    '''
+    ngrid = len(vectors)
+    auxiliary_event = (
+        None if detail_profiler is None
+        else detail_profiler.begin('auxiliary_ft'))
+    aux_g = ft_ao.ft_ao(auxcell, vectors).T
+    aux_weighted = aux_g.conj() * coulomb
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', auxiliary_event)
+
+    pair_event = (
+        None if detail_profiler is None
+        else detail_profiler.begin('ao_pair_ft'))
+    pair_g = evaluator(vectors).view(np.float64).reshape(
+        nao, nao, ngrid * 2)
+    pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+    if detail_profiler is not None:
+        detail_profiler.end('ao_pair_ft', pair_event)
+
+    source_event = (
+        None if detail_profiler is None
+        else detail_profiler.begin('source_contraction'))
+    aux_source, ao_source = contract_rhf_mo_response_long_range_block(
+        factors, pair_g, aux_g, aux_weighted,
+        include_metric_source=False)
+    if detail_profiler is not None:
+        detail_profiler.end('source_contraction', source_event)
+        metric_event = detail_profiler.begin('metric_contraction')
+    contract('sr,sG->rG', metric_source, aux_g.view(np.float64),
+             alpha=-1., beta=1., out=aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('metric_contraction', metric_event)
+        auxiliary_event = detail_profiler.begin('auxiliary_ft')
+
+    aux_source.view(np.complex128)[:] *= coulomb
+    derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
+    auxiliary = cp.empty((3, naux))
+    for axis in range(3):
+        cp.multiply(aux_g, -1j * vectors[:, axis], out=derivative_aux_g)
+        auxiliary[axis] = cp.einsum(
+            'ag,ag->a', derivative_aux_g.view(np.float64), aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', auxiliary_event)
+
+    derivative = cp.zeros((cell.natm, 3))
+    vector_transpose = cp.asarray(vectors.T.ravel())
+    pair_event = (
+        None if detail_profiler is None
+        else detail_profiler.begin('ao_pair_ft'))
+    error = kernel(
+        ctypes.cast(derivative.data.ptr, ctypes.c_void_p),
+        ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
+        ctypes.cast(vector_transpose.data.ptr, ctypes.c_void_p),
+        ctypes.byref(aft_envs), ctypes.c_int(len(shell_offsets) - 1),
+        ctypes.c_int(ngrid), ctypes.c_int(shared_memory),
+        ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
+        ctypes.c_int(permutation_symmetry))
+    if detail_profiler is not None:
+        detail_profiler.end('ao_pair_ft', pair_event)
+    if error != 0:
+        raise RuntimeError('PBC_ft_aopair_ek_ip1 failed')
+    return derivative, auxiliary
+
+
 def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
                               vectors, coulomb, evaluator, nao, naux,
                               i_addr, j_addr, kernel, aft_envs,
                               shell_offsets, shared_memory, bas_ij_idx,
-                              bas_ij_img_idx, permutation_symmetry):
+                              bas_ij_img_idx, permutation_symmetry,
+                              selected_pair_g=None, detail_profiler=None):
     '''Contract one LR transaction with direct primitive ``dB``/``dM`` sources.'''
     ngrid = len(vectors)
-    pair_g = evaluator(vectors).view(np.float64).reshape(
-        nao, nao, ngrid * 2)
-    pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+    event = (None if detail_profiler is None
+             else detail_profiler.begin('auxiliary_ft'))
     aux_g = ft_ao.ft_ao(auxcell, vectors).T
     aux_weighted = aux_g.conj() * coulomb
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', event)
     aux_source = cp.empty((naux, ngrid * 2))
     ao_source = cp.empty((nao, nao, ngrid * 2))
+    source_event = (None if detail_profiler is None
+                    else detail_profiler.begin('source_contraction'))
     if isinstance(primitive_source, _PackedPrimitiveSource):
         layout = primitive_source.layout
         values = primitive_source.values
         address = cp.asarray(layout['address'], dtype=cp.int64)
         weights = cp.asarray(layout['weights'], dtype=values.dtype)
-        selected = pair_g.reshape(nao * nao, ngrid * 2)[address]
+        if selected_pair_g is None:
+            if detail_profiler is not None:
+                # Pair generation is a Fourier operation, not source algebra.
+                detail_profiler.end('source_contraction', source_event)
+                pair_event = detail_profiler.begin('ao_pair_ft')
+            pair_g = evaluator(vectors).view(np.float64).reshape(
+                nao, nao, ngrid * 2)
+            pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+            selected = pair_g.reshape(nao * nao, ngrid * 2)[address]
+            if detail_profiler is not None:
+                detail_profiler.end('ao_pair_ft', pair_event)
+                source_event = detail_profiler.begin('source_contraction')
+        else:
+            selected = cp.asarray(selected_pair_g)
+            if selected.shape != (len(address), ngrid * 2):
+                raise ValueError(
+                    'cached reciprocal AO-pair block has wrong shape')
         contract('rk,kG->rG', values, selected, out=aux_source)
         packed_ao_source = cp.empty((len(address), ngrid * 2))
         contract('rk,rG->kG', values, aux_weighted.view(np.float64),
@@ -1387,12 +2197,27 @@ def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
         ao_source[row, column] = packed_ao_source
         ao_source[column, row] = packed_ao_source
     else:
+        if detail_profiler is not None:
+            detail_profiler.end('source_contraction', source_event)
+            pair_event = detail_profiler.begin('ao_pair_ft')
+        pair_g = evaluator(vectors).view(np.float64).reshape(
+            nao, nao, ngrid * 2)
+        pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+        if detail_profiler is not None:
+            detail_profiler.end('ao_pair_ft', pair_event)
+            source_event = detail_profiler.begin('source_contraction')
         contract('rpq,pqG->rG', primitive_source, pair_g, out=aux_source)
         contract(
             'rpq,rG->pqG', primitive_source, aux_weighted.view(np.float64),
             out=ao_source)
+    if detail_profiler is not None:
+        detail_profiler.end('source_contraction', source_event)
+        metric_event = detail_profiler.begin('metric_contraction')
     contract('sr,sG->rG', metric_source, aux_g.view(np.float64),
              alpha=-1., beta=1., out=aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('metric_contraction', metric_event)
+        auxiliary_event = detail_profiler.begin('auxiliary_ft')
     aux_source_complex = aux_source.view(np.complex128)
     aux_source_complex *= coulomb
     derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
@@ -1401,9 +2226,13 @@ def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
         cp.multiply(aux_g, -1j * vectors[:, axis], out=derivative_aux_g)
         auxiliary[axis] = cp.einsum(
             'ag,ag->a', derivative_aux_g.view(np.float64), aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', auxiliary_event)
 
     derivative = cp.zeros((cell.natm, 3))
     vector_transpose = cp.asarray(vectors.T.ravel())
+    pair_event = (None if detail_profiler is None
+                  else detail_profiler.begin('ao_pair_ft'))
     error = kernel(
         ctypes.cast(derivative.data.ptr, ctypes.c_void_p),
         ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
@@ -1414,6 +2243,8 @@ def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
         ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
         ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
         ctypes.c_int(permutation_symmetry))
+    if detail_profiler is not None:
+        detail_profiler.end('ao_pair_ft', pair_event)
     if error != 0:
         raise RuntimeError('PBC_ft_aopair_ek_ip1 failed')
     return derivative, auxiliary
@@ -1422,16 +2253,25 @@ def _long_range_adjoint_block(cell, auxcell, primitive_source, metric_source,
 def _long_range_block(cell, auxcell, states, metric_source, vectors,
                       coulomb, evaluator, nao, naux, i_addr, j_addr,
                       kernel, aft_envs, shell_offsets, shared_memory,
-                      bas_ij_idx, bas_ij_img_idx, permutation_symmetry):
+                      bas_ij_idx, bas_ij_img_idx, permutation_symmetry,
+                      detail_profiler=None):
     '''Build and consume one transaction-local reciprocal derivative block.'''
     ngrid = len(vectors)
+    pair_event = (None if detail_profiler is None
+                  else detail_profiler.begin('ao_pair_ft'))
     pair_g = evaluator(vectors).view(np.float64).reshape(
         nao, nao, ngrid * 2)
     pair_g[j_addr, i_addr] = pair_g[i_addr, j_addr]
+    if detail_profiler is not None:
+        detail_profiler.end('ao_pair_ft', pair_event)
 
+    auxiliary_event = (None if detail_profiler is None
+                       else detail_profiler.begin('auxiliary_ft'))
     aux_g = ft_ao.ft_ao(auxcell, vectors).T
     aux_weighted = aux_g.conj() * coulomb
     aux_weighted_real = aux_weighted.view(np.float64)
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', auxiliary_event)
     aux_source = cp.zeros((naux, ngrid * 2))
     ao_source = cp.zeros((nao, nao, ngrid * 2))
     rank = max(state.rank for state in states)
@@ -1440,6 +2280,8 @@ def _long_range_block(cell, auxcell, states, metric_source, vectors,
     rho = cp.empty(ngrid * 2)
     potential = cp.empty(ngrid * 2)
 
+    source_event = (None if detail_profiler is None
+                    else detail_profiler.begin('source_contraction'))
     for state in states:
         tmp = temp[:state.rank]
         occupied = occ[:state.rank, :state.rank]
@@ -1462,8 +2304,14 @@ def _long_range_block(cell, auxcell, states, metric_source, vectors,
         contract('pq,G->pqG', state.density_sorted, potential,
                  alpha=state.coulomb_weight, beta=1., out=ao_source)
 
+    if detail_profiler is not None:
+        detail_profiler.end('source_contraction', source_event)
+        metric_event = detail_profiler.begin('metric_contraction')
     contract('sr,sG->rG', metric_source, aux_g.view(np.float64),
              alpha=-1., beta=1., out=aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('metric_contraction', metric_event)
+        auxiliary_event = detail_profiler.begin('auxiliary_ft')
     aux_weighted_source = aux_source.view(np.complex128)
     aux_weighted_source *= coulomb
     derivative_aux_g = cp.empty((naux, ngrid), dtype=np.complex128)
@@ -1472,9 +2320,13 @@ def _long_range_block(cell, auxcell, states, metric_source, vectors,
         cp.multiply(aux_g, -1j * vectors[:, axis], out=derivative_aux_g)
         auxiliary[axis] = cp.einsum(
             'ag,ag->a', derivative_aux_g.view(np.float64), aux_source)
+    if detail_profiler is not None:
+        detail_profiler.end('auxiliary_ft', auxiliary_event)
 
     derivative = cp.zeros((cell.natm, 3))
     vector_transpose = cp.asarray(vectors.T.ravel())
+    pair_event = (None if detail_profiler is None
+                  else detail_profiler.begin('ao_pair_ft'))
     error = kernel(
         ctypes.cast(derivative.data.ptr, ctypes.c_void_p),
         ctypes.cast(ao_source.data.ptr, ctypes.c_void_p),
@@ -1485,6 +2337,8 @@ def _long_range_block(cell, auxcell, states, metric_source, vectors,
         ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
         ctypes.cast(shell_offsets.data.ptr, ctypes.c_void_p),
         ctypes.c_int(permutation_symmetry))
+    if detail_profiler is not None:
+        detail_profiler.end('ao_pair_ft', pair_event)
     if error != 0:
         raise RuntimeError('PBC_ft_aopair_ek_ip1 failed')
     return derivative, auxiliary
@@ -1553,18 +2407,24 @@ def _unpack_packed_primitive_source(
 
 def _short_range_derivative(intopt, states, pair_addresses, batch_size,
                             aux_block, nao, naux, primitive_source=None,
+                            mo_response_factors=None,
                             return_components=False):
     '''Contract signed or direct-adjoint SR derivative kernels without dCDERI.
 
-    The direct-adjoint branch receives a preassembled ``(naux, nao, nao)``
-    source and only reorders each bounded auxiliary slice for libpbc.  It
-    avoids re-forming the two full-rank ``P+DZ`` and ``P-DZ`` state sources.
+    The direct-adjoint branch receives a packed or dense AO source and only
+    reorders each bounded auxiliary slice for libpbc.  The MO-factorized
+    branch instead evaluates the requested raw AO pairs directly from
+    ``C,U,A,K`` into that same transaction buffer.  Both avoid re-forming the
+    two full-rank ``P+DZ`` and ``P-DZ`` state sources.
     '''
+    if primitive_source is not None and mo_response_factors is not None:
+        raise ValueError(
+            'primitive_source and mo_response_factors are mutually exclusive')
     cell = intopt.cell
     auxcell = intopt.auxcell
     auxiliary_shell_limit = max(1, min(int(auxcell.nbas), POOL_SIZE))
     shell_pair_limit = max(1, POOL_SIZE // auxiliary_shell_limit)
-    _, gout_stride, shared_sizes = int3c2e_scheme(-1, 54)
+    _, gout_stride, shared_sizes = derivative_int3c2e_scheme()
     lmax = cell.uniq_l_ctr[:, 0].max()
     laux = auxcell.uniq_l_ctr[:, 0].max()
     shared_memory = shared_sizes[:laux + 1, :lmax + 1, :lmax + 1].max()
@@ -1595,6 +2455,9 @@ def _short_range_derivative(intopt, states, pair_addresses, batch_size,
     diffuse_coefficients = cp.asarray(intopt.diffuse_coefs)
     log_cutoff = math.log(intopt.cutoff)
     aux0 = 0
+    mo_pair_indices = (
+        prepare_rhf_mo_short_range_pair_indices(pair_addresses, nao)
+        if mo_response_factors is not None else None)
 
     for batch_id, _ in enumerate(aux_patterns[:, 0]):
         aux_ao_offset = auxcell.ao_loc[aux_offsets[batch_id]]
@@ -1604,6 +2467,13 @@ def _short_range_derivative(intopt, states, pair_addresses, batch_size,
         for p0, p1 in lib.prange(0, naux_batch, aux_block):
             width = p1 - p0
             aux1 = aux0 + width
+            if mo_response_factors is not None:
+                build_rhf_mo_response_short_range_source_block(
+                    mo_response_factors, pair_addresses,
+                    auxiliary_start=aux0, auxiliary_stop=aux1,
+                    out=packed[:, p0:p1], pair_indices=mo_pair_indices)
+                aux0 = aux1
+                continue
             if primitive_source is None:
                 source = cp.zeros((nao, nao, width))
                 for state in states:
@@ -1706,7 +2576,7 @@ def _short_range_derivative_channels(intopt, pair_addresses, batch_size,
     auxcell = intopt.auxcell
     auxiliary_shell_limit = max(1, min(int(auxcell.nbas), POOL_SIZE))
     shell_pair_limit = max(1, POOL_SIZE // auxiliary_shell_limit)
-    _, gout_stride, shared_sizes = int3c2e_scheme(-1, 54)
+    _, gout_stride, shared_sizes = derivative_int3c2e_scheme()
     lmax = cell.uniq_l_ctr[:, 0].max()
     laux = auxcell.uniq_l_ctr[:, 0].max()
     shared_memory = shared_sizes[:laux + 1, :lmax + 1, :lmax + 1].max()
