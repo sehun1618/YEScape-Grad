@@ -216,16 +216,30 @@ def response_settings(with_df):
     _check_provider(with_df)
     if with_df.auxcell is None:
         with_df.build(j_only=False)
+    resolved_omega = getattr(with_df, 'resolved_omega', None)
+    resolved_source_mesh = getattr(with_df, 'resolved_source_mesh', None)
+    resolved_metric_mesh = getattr(with_df, 'resolved_metric_mesh', None)
+    if (resolved_omega is not None and resolved_source_mesh is not None
+            and resolved_metric_mesh is not None):
+        return (
+            float(resolved_omega),
+            np.asarray(resolved_source_mesh, dtype=int).copy(),
+            np.asarray(resolved_metric_mesh, dtype=int).copy(),
+        )
     builder = _RSGDFBuilder(
         with_df.cell, with_df.auxcell, np.zeros((1, 3)))
     if with_df.mesh is not None:
         builder.mesh = np.asarray(with_df.mesh, dtype=int)
     builder.linear_dep_threshold = float(with_df.linear_dep_threshold)
-    builder.build()
+    builder.build(omega=getattr(with_df, 'omega', None))
+    metric_mesh1 = getattr(with_df, 'metric_mesh', None)
+    if metric_mesh1 is None:
+        metric_mesh1 = metric_mesh(
+            with_df.cell, with_df.auxcell, builder.omega)
     return (
         float(builder.omega),
         np.asarray(builder.mesh, dtype=int),
-        metric_mesh(with_df.cell, with_df.auxcell, builder.omega),
+        np.asarray(metric_mesh1, dtype=int),
     )
 
 

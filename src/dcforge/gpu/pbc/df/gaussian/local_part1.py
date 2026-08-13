@@ -16,9 +16,11 @@ from gpu4pyscf.pbc.df.int3c2e import (
     fill_triu_bvk,
 )
 from pyscf import lib
-from pyscf.pbc.df import aft as cpu_aft
 from pyscf.pbc.lib.kpts_helper import is_zero
 
+from dcforge.cpu.pbc.df.gaussian.fake_nuclear import (
+    make_fake_nuclear_cell,
+)
 from dcforge.gpu.pbc.df.compatibility import derivative_int3c2e_scheme
 
 _AUTO_OMEGA_INITIAL = .4
@@ -43,7 +45,7 @@ def resolve_pp_loc_part1(cell, omega=None):
     Kwargs:
         omega : float or None
             Explicit diagnostic/legacy split.  ``None`` applies the installed
-            GPU4PySCF 1.8.0 local-part-1 policy: start from ``0.4``, rescale
+            GPU4PySCF 1.8.1 local-part-1 policy: start from ``0.4``, rescale
             the cutoff towards 3000 reciprocal vectors, and invert the error
             estimate for the final omega.
 
@@ -140,7 +142,7 @@ def get_pp_loc_part1(cell, kpts=None, omega=None, mesh=None):
         kpts = np.asarray(kpts).reshape(1, 3)
     bvk_kmesh = np.ones(3, dtype=int)
 
-    fakenuc = cpu_aft._fake_nuc(cell, with_pseudo=True)
+    fakenuc = make_fake_nuclear_cell(cell, with_pseudo=True)
     intopt = SRInt3c2eOpt(
         cell, fakenuc, omega=-omega, bvk_kmesh=bvk_kmesh).build()
     charges = -cp.asarray(cell.atom_charges(), dtype=cp.float64)
@@ -262,7 +264,7 @@ class LocalPart1Derivative:
         if self.reciprocal_max_block_size < 1:
             raise ValueError('reciprocal_max_block_size must be positive')
 
-        self.fakenuc = cpu_aft._fake_nuc(cell, with_pseudo=True)
+        self.fakenuc = make_fake_nuclear_cell(cell, with_pseudo=True)
         self.charges = -cp.asarray(cell.atom_charges(), dtype=cp.float64)
         self.short_range = SRInt3c2eOpt(
             cell, self.fakenuc, omega=-self.omega,

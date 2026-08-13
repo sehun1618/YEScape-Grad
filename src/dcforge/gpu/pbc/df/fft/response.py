@@ -1,6 +1,6 @@
 '''Full fixed-density FFTDF J/K nuclear derivatives on the GPU.
 
-GPU4PySCF 1.8.0 provides a contracted FFT Coulomb derivative but does not
+GPU4PySCF 1.8.1 provides a contracted FFT Coulomb derivative but does not
 provide the complete exchange derivative matrix required by the DC-DFT
 Z-vector term.  This module evaluates the finite-grid product rule directly
 with GPU AO collocation and FFTs.  It is the Stage-2 correctness route; later

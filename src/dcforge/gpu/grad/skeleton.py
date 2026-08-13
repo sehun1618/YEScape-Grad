@@ -36,7 +36,7 @@ def skeleton_gradient(mf_grad, foo, e_occ, s1oo, mo_energy, mo_coeff,
                       mo_occ, atmlst):
     '''Return the electronic GPU skeleton before the Z-vector correction.
 
-    GPU4PySCF 1.8.0 owns the current one-electron, XC/grid and provider J/K
+    GPU4PySCF 1.8.1 owns the current one-electron, XC/grid and provider J/K
     contractions through ``rhf_grad.grad_elec`` and the active gradient
     object's ``energy_ee`` method.  A DF subclass therefore selects DF J/K
     and auxiliary response through normal method resolution; this common

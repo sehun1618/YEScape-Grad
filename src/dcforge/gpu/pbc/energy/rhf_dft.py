@@ -354,7 +354,7 @@ class RHFDFT(rks.RKS):
                 and target-XC mesh ownership remain explicit.
             ntasks, ke_ratio, rel_cutoff : None
                 Retained for the CPU-compatible public signature.  GPU4PySCF
-                1.8.0 multigrid-v2 does not expose these hierarchy controls;
+                1.8.1 multigrid-v2 does not expose these hierarchy controls;
                 passing them is rejected instead of silently ignoring a
                 requested numerical representation.
             with_j : bool
@@ -417,10 +417,13 @@ class RHFDFT(rks.RKS):
         '''
         rks.RKS.reset(self, cell)
         self.mf_hf.reset(cell)
+        self.with_df = self.mf_hf.with_df
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None
         self._source_converged = False
-        self.source_jk_backend = self.with_df.backend_name
+        self.source_jk_backend = getattr(
+            self.mf_hf, 'dcforge_source_jk_backend',
+            self.with_df.backend_name)
         self.multigrid_backend = (
             ('gpu4pyscf_multigrid_v2_j_xc' if self.multigrid_with_j
              else 'gpu4pyscf_multigrid_v2_xc_only')
@@ -430,6 +433,9 @@ class RHFDFT(rks.RKS):
 
     def nuc_grad_method(self):
         '''Return the Gamma FFTDF/GDF/RSDF gradient driver.'''
+        if getattr(self.mf_hf, 'dcforge_experimental_source', None):
+            raise NotImplementedError(
+                'the active experimental source RHF has no analytic gradient')
         if not isinstance(self.with_df, (FFTDF, GDF, RSDF)):
             raise NotImplementedError('unsupported GPU PBC analytic-gradient provider')
         from dcforge.gpu.pbc.grad.rhf_dft import Gradients
@@ -475,6 +481,10 @@ class RHFDFT(rks.RKS):
     def _set_provider(self, provider):
         if provider.cell is not self.cell:
             raise ValueError('density-fitting provider must own the active Cell')
+        if getattr(self.mf_hf, 'dcforge_experimental_source', None):
+            mf_hf = DFRHF(self.cell, exxdiv=self.exxdiv)
+            self._copy_hf_options(self, mf_hf)
+            self.mf_hf = mf_hf
         self.with_df = self.mf_hf.with_df = provider
         # A source object formerly run with FFTDF can retain GPU4PySCF's
         # auxiliary numerical-integrator helper.  It belongs to the previous

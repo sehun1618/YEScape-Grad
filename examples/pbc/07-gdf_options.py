@@ -220,3 +220,24 @@ print('  term recomposition max abs = '
 # mf.run()
 # mf_grad = mf.nuc_grad_method().run()
 # print(mf_grad.cderi_release_metadata)
+
+
+#
+# Case 6: calculation-wide policy instead of individual storage controls
+#
+# ``custom`` is the compatibility default and preserves every fine-grained
+# assignment above.  The named policies all retain the same equations:
+#
+#   fast       : all Z cache + mapped-host packed-adjoint cache
+#   balanced   : bounded auto Z cache + mapped-host adjoint cache
+#   low_memory : recomputed Z action + exact double-pass adjoint
+#
+# Declare the complete property sequence before starting.  A low-memory
+# gradient-only plan may release CDERI after response; a declared following
+# stress keeps it alive and reuses the compatible target/Z state.
+# mf_grad = mf.nuc_grad_method()
+# mf_grad.memory_policy = 'balanced'
+# mf_grad.set_property_sequence('gradient', 'stress')
+# mf_grad.run()
+# stress = mf_grad.get_stress()  # requires an XC-only-MG stress workflow
+# print(mf_grad.resolved_memory_policy)

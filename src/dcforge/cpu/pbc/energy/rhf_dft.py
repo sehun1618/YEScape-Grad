@@ -338,11 +338,15 @@ class RHFDFT(_DFJK, rks.RKS):
     def reset(self, cell=None):
         rks.RKS.reset(self, cell)
         self.mf_hf.reset(cell)
+        self.with_df = self.mf_hf.with_df
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None
         return self
 
     def nuc_grad_method(self):
+        if getattr(self.mf_hf, 'dcforge_experimental_source', None):
+            raise NotImplementedError(
+                'the active experimental source RHF has no analytic gradient')
         from dcforge.cpu.pbc.grad.rhf_dft import Gradients
         return Gradients(self)
 
@@ -371,6 +375,10 @@ class RHFDFT(_DFJK, rks.RKS):
     def _set_provider(self, provider):
         if provider.cell is not self.cell:
             raise ValueError('density-fitting provider must own the active Cell')
+        if getattr(self.mf_hf, 'dcforge_experimental_source', None):
+            mf_hf = DFRHF(self.cell, exxdiv=self.exxdiv)
+            self._copy_hf_options(self, mf_hf)
+            self.mf_hf = mf_hf
         self.with_df = self.mf_hf.with_df = provider
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None

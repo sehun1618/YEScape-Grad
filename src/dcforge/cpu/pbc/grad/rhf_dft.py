@@ -373,6 +373,18 @@ class Gradients(rks.Gradients):
 
     grad_elec = grad_elec
 
+    def get_stress(self):
+        '''Return the homogeneous-strain derivative of ``E_DFA[P_RHF]``.
+
+        This explicit override prevents the inherited PySCF self-consistent
+        FFTDF-RKS stress kernel from being mistaken for DC-DFT GDF stress.
+        The DC-Forge stress namespace owns support validation and fails closed
+        until its complete analytic term ledger is available.
+        '''
+        from dcforge.cpu.pbc.stress.rhf_dft import kernel
+
+        return kernel(self)
+
     def as_scanner(self):
         raise NotImplementedError('periodic HF-DFT scanner is not implemented')
 

@@ -1,5 +1,5 @@
 '''CPU periodic-boundary DC-DFT operations.'''
 
-from dcforge.cpu.pbc import df, energy, grad, kpts
+from dcforge.cpu.pbc import df, energy, grad, kpts, stress
 
-__all__ = ['df', 'energy', 'grad', 'kpts']
+__all__ = ['df', 'energy', 'grad', 'kpts', 'stress']

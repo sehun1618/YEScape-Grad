@@ -89,7 +89,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     s1 = cp.asarray(mf_grad.get_ovlp(mol))
     s1oo, de_ovlp_energy = make_s1_oo_and_grad_ovlp_energy(
         mol, Co, Cv, mo_energy[so], zvec, s1, atmlst)
-    # GPU4PySCF 1.8.0 routes ``grid_response=True`` through
+    # GPU4PySCF 1.8.1 routes ``grid_response=True`` through
     # ``get_exc_full_response`` even for ``xc='HF'``.  There is no XC grid
     # contribution in that case and the upstream helper rejects the ``HF``
     # xctype.  Disable only the nonexistent grid derivative while retaining

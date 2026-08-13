@@ -194,7 +194,104 @@ def make_packed_cderi_observable_adjoint(
     naux = int(cderi.shape[0])
     maximum = max(1, min(naux, int(auxiliary_block_size)))
     output = cp.empty_like(cderi)
+    # Target J has a direct unique-pair expression.  This is important for
+    # the sequential low-memory fallback: requesting only target J must not
+    # build the unselected source-Fock observable as the former shared helper
+    # did.  The source-Fock exchange terms still require one bounded dense
+    # auxiliary block, never a persistent dense CDERI or adjoint.
+    if observable == 'target_j':
+        pair_density = dm0[row, column] * weights
+        rho0 = cp.einsum(
+            'Pp,p->P', cderi, pair_density, optimize=True)
+        # Write the outer product directly into the persistent packed
+        # adjoint.  A chained broadcast expression creates two additional
+        # ``(naux,npair)`` temporaries before assigning to ``output``.  For
+        # Water64/DZVP/Weigend each such temporary is 36.70 GiB, even though
+        # the mathematical result needs only the already allocated output.
+        cp.multiply(rho0[:, None], pair_density[None], out=output)
+        return output
+
     expanded = cp.zeros((maximum, nao, nao), dtype=cderi.dtype)
+    for p0 in range(0, naux, maximum):
+        p1 = min(naux, p0 + maximum)
+        width = p1 - p0
+        dense = expanded[:width]
+        dense[...] = 0.
+        dense[:, row, column] = cderi[p0:p1]
+        dense[:, column, row] = cderi[p0:p1]
+        rho0 = cp.einsum('Pij,ji->P', dense, dm0, optimize=True)
+        rhoz = cp.einsum('Pij,ji->P', dense, dz, optimize=True)
+        selected = cp.empty_like(dense)
+        work = cp.empty_like(dense)
+        cp.multiply(rhoz[:, None, None], dm0[None], out=selected)
+        cp.multiply(rho0[:, None, None], dz[None], out=work)
+        selected += work
+        selected *= -2.0
+        contract('Pkl,lj->Pkj', dense, dz, out=work)
+        contract('ik,Pkj->Pji', dm0, work, beta=1.0, out=selected)
+        contract('Pkl,lj->Pkj', dense, dm0, out=work)
+        contract('ik,Pkj->Pji', dz, work, beta=1.0, out=selected)
+        output[p0:p1] = selected[:, row, column] * weights[None]
+    return output
+
+
+def make_packed_cderi_observable_adjoints(
+        cderi, layout, dm0, dz,
+        observables=('target_j', 'source_fock'), auxiliary_block_size=32):
+    r'''Return selected real-Gamma observables in stacked unique-pair form.
+
+    One bounded dense auxiliary block is expanded and both selected adjoints
+    are accumulated before the next block.  With two observables this avoids
+    two independent central-CDERI traversals.  With one observable the
+    single-observable routine is used so an unselected channel is never
+    evaluated.
+
+    Args:
+        cderi, layout, dm0, dz
+            Same objects accepted by
+            :func:`make_packed_cderi_observable_adjoint`.
+
+    Kwargs:
+        observables : sequence of {'target_j', 'source_fock'}
+            Requested physical channels in output order.
+        auxiliary_block_size : int
+            Maximum temporary dense auxiliary slice.
+
+    Returns:
+        cupy.ndarray
+            Stacked packed adjoints with shape
+            ``(nobservable,naux,npair)``.
+    '''
+    observables = tuple(observables)
+    if not observables:
+        raise ValueError('at least one RSDF observable is required')
+    if len(set(observables)) != len(observables):
+        raise ValueError('RSDF observable names must be unique')
+    invalid = set(observables) - {'target_j', 'source_fock'}
+    if invalid:
+        raise ValueError(f'unsupported RSDF observables: {sorted(invalid)}')
+    if len(observables) == 1:
+        return make_packed_cderi_observable_adjoint(
+            cderi, layout, dm0, dz, observables[0],
+            auxiliary_block_size=auxiliary_block_size)[None]
+
+    cderi = _real_gamma(cderi, 'cderi')
+    dm0 = _real_gamma(dm0, 'dm0')
+    dz = _real_gamma(dz, 'dz')
+    nao = int(dm0.shape[0])
+    if dm0.shape != (nao, nao) or dz.shape != dm0.shape:
+        raise ValueError('packed CDERI densities must be square and conformable')
+    row = cp.asarray(layout['row'], dtype=cp.int32)
+    column = cp.asarray(layout['column'], dtype=cp.int32)
+    weights = cp.asarray(layout['weights'], dtype=cderi.dtype)
+    if cderi.ndim != 2 or cderi.shape[1] != len(row):
+        raise ValueError('packed CDERI and canonical pair layout differ')
+    naux = int(cderi.shape[0])
+    maximum = max(1, min(naux, int(auxiliary_block_size)))
+    output = cp.empty(
+        (len(observables),) + cderi.shape, dtype=cderi.dtype)
+    expanded = cp.zeros((maximum, nao, nao), dtype=cderi.dtype)
+    index = {name: observables.index(name) for name in observables}
     for p0 in range(0, naux, maximum):
         p1 = min(naux, p0 + maximum)
         width = p1 - p0
@@ -204,8 +301,10 @@ def make_packed_cderi_observable_adjoint(
         dense[:, column, row] = cderi[p0:p1]
         both = make_cderi_observable_adjoints(
             dense, dm0, dz, auxiliary_block_size=width)
-        selected = both[0 if observable == 'target_j' else 1]
-        output[p0:p1] = selected[:, row, column] * weights[None]
+        output[index['target_j'], p0:p1] = (
+            both[0][:, row, column] * weights[None])
+        output[index['source_fock'], p0:p1] = (
+            both[1][:, row, column] * weights[None])
     return output
 
 
@@ -220,41 +319,75 @@ def push_packed_cderi_adjoint(
     The metric adjoint is accumulated from the same blocks before the central
     factor can be released.
     '''
+    source, metric, metadata = push_packed_cderi_adjoints(
+        factor, cderi, cp.asarray(adjoint)[None], layout,
+        pair_block_size=pair_block_size,
+        overwrite_adjoint=overwrite_adjoint)
+    metadata = dict(metadata)
+    metadata['packed_source_bytes'] = int(source[0].nbytes)
+    metadata['dense_source_bytes'] = int(
+        source.shape[1] * _layout_nao(layout) ** 2
+        * source.dtype.itemsize)
+    return source[0], metric[0], metadata
+
+
+def push_packed_cderi_adjoints(
+        factor, cderi, adjoints, layout, pair_block_size=8192,
+        overwrite_adjoint=True):
+    r'''Push stacked packed adjoints through ``C=L^{-1}B`` in one solve.
+
+    The observable axis is folded into each AO-pair RHS block.  Thus one
+    triangular solve handles all selected channels while each metric
+    adjoint retains its separate physical ledger entry.
+    '''
     factor = _real_gamma(factor, 'factor')
     cderi = _real_gamma(cderi, 'cderi')
-    adjoint = _real_gamma(adjoint, 'adjoint')
-    if cderi.ndim != 2 or adjoint.shape != cderi.shape:
-        raise ValueError('packed central factor and adjoint must have one shape')
-    naux, npair = map(int, cderi.shape)
+    adjoints = _real_gamma(adjoints, 'adjoints')
+    if adjoints.ndim == 2:
+        adjoints = adjoints[None]
+    if (cderi.ndim != 2 or adjoints.ndim != 3
+            or adjoints.shape[1:] != cderi.shape):
+        raise ValueError(
+            'packed central factor and stacked adjoints are inconsistent')
+    nobs, naux, npair = map(int, adjoints.shape)
     if factor.shape != (naux, naux):
         raise ValueError('Cholesky factor and packed CDERI dimensions differ')
     block_size = max(1, min(npair, int(pair_block_size)))
-    source = adjoint if overwrite_adjoint else cp.empty_like(adjoint)
-    factor_adjoint = cp.zeros((naux, naux), dtype=cderi.dtype)
+    source = adjoints if overwrite_adjoint else cp.empty_like(adjoints)
+    factor_adjoint = cp.zeros((nobs, naux, naux), dtype=cderi.dtype)
     for p0 in range(0, npair, block_size):
         p1 = min(npair, p0 + block_size)
+        width = p1 - p0
+        rhs = adjoints[:, :, p0:p1].transpose(1, 0, 2).reshape(
+            naux, nobs * width)
         solved = solve_triangular(
-            factor.T, adjoint[:, p0:p1], lower=False,
-            check_finite=False)
-        source[:, p0:p1] = solved
-        factor_adjoint -= solved @ cderi[:, p0:p1].T
+            factor.T, rhs, lower=False, check_finite=False)
+        solved = solved.reshape(naux, nobs, width).transpose(1, 0, 2)
+        source[:, :, p0:p1] = solved
+        factor_adjoint -= cp.matmul(
+            solved, cderi[:, p0:p1].T[None])
 
-    reduced_adjoint = factor.T @ factor_adjoint
+    metric = cp.empty((nobs, naux, naux), dtype=cderi.dtype)
     indices = cp.arange(naux)
-    lower = cp.tril(reduced_adjoint, k=-1)
-    lower[indices, indices] = .5 * cp.diag(reduced_adjoint)
-    symmetric = .5 * (lower + lower.T)
-    left = solve_triangular(
-        factor.T, symmetric, lower=False, check_finite=False)
-    metric = solve_triangular(
-        factor.T, left.T, lower=False, check_finite=False).T
+    for observable in range(nobs):
+        reduced = factor.T @ factor_adjoint[observable]
+        lower = cp.tril(reduced, k=-1)
+        lower[indices, indices] = .5 * cp.diag(reduced)
+        symmetric = .5 * (lower + lower.T)
+        left = solve_triangular(
+            factor.T, symmetric, lower=False, check_finite=False)
+        metric[observable] = solve_triangular(
+            factor.T, left.T, lower=False, check_finite=False).T
     return source, metric, {
+        'observable_count': nobs,
+        'stacked_rhs': True,
         'pair_block_size': block_size,
         'pair_block_count': int((npair + block_size - 1) // block_size),
         'packed_source_bytes': int(source.nbytes),
         'source_reuses_adjoint_storage': bool(overwrite_adjoint),
         'dense_source_bytes': int(
-            naux * _layout_nao(layout) ** 2 * source.dtype.itemsize),
+            nobs * naux * _layout_nao(layout) ** 2
+            * source.dtype.itemsize),
     }
 
 
@@ -279,6 +412,19 @@ def expand_packed_source_adjoint(source, layout):
     expanded[:, row, column] = values
     expanded[:, column, row] = values
     return expanded.reshape(source.shape[0], nao * nao).T
+
+
+def expand_packed_source_adjoints(sources, layout):
+    '''Expand stacked packed sources for the dense numerical oracle route.'''
+    sources = _real_gamma(sources, 'sources')
+    if sources.ndim == 2:
+        sources = sources[None]
+    if sources.ndim != 3:
+        raise ValueError(
+            'packed sources must have shape (nobservable,naux,npair)')
+    return cp.stack([
+        expand_packed_source_adjoint(source, layout)
+        for source in sources])
 
 
 def _layout_nao(layout):

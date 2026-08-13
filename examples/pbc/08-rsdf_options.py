@@ -37,12 +37,18 @@ mf.with_df.source_reciprocal_gamma_conjugate_symmetry = True
 # Live arrays and the mathematical order of terms are unchanged.
 mf.with_df.response_release_cached_blocks = True
 
-# Production keeps central CDERI and reverse adjoints in unique Gamma AO-pair
-# storage, then evaluates target-J and source-Fock observables sequentially.
-# dense is an intentionally higher-memory numerical oracle.
-mf.with_df.response_mode = 'sequential_packed'  # or 'dense'
+# Production ``auto`` keeps central CDERI and reverse adjoints in unique Gamma
+# AO-pair storage.  It fuses target-J/source-Fock only when both the live-VRAM
+# preflight and the benchmark-calibrated persistent-work ceiling permit it;
+# otherwise it evaluates the two observables sequentially.  This changes only
+# storage/traversal, not the RSDF source, metric, or resulting gradient.
+mf.with_df.response_mode = 'auto'
+mf.with_df.response_fused_max_bytes = 4 * 1024**3
 mf.with_df.response_pair_block_size = 8192
 mf.with_df.response_auxiliary_block_size = 32
+# Explicit ``'fused_packed'`` overrides the promotion ceiling for experiments;
+# ``'sequential_packed'`` is the low-memory oracle and ``'dense'`` is the
+# intentionally high-memory small-system algebra oracle.
 
 # mapped_host is the fast GPU4PySCF central storage.  hdf5 preserves the same
 # factors and streams auxiliary blocks when pinned host RAM is the limiting
@@ -63,8 +69,16 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
     df_cphf_response_mode='direct_vo',
+    # ``auto`` chooses recompute/occupied/CDERI/all from the live budget.
+    # An allocation failure falls back to exact recompute, without changing
+    # the response equation.  Explicit modes remain algebra or memory oracles.
+    df_cphf_response_cache='auto',
     hcore_method='auto',
 ).run()
+
+# Diagnostics-only synchronized component timings are opt-in because their
+# CUDA synchronization must not be mixed with production timing.
+# mf.with_df.response_profile_components = True
 
 print('Accuracy-defining inputs')
 print(f'  cell.ke_cutoff = {cell.ke_cutoff:g} Ha')
@@ -79,6 +93,12 @@ print(f'  source reciprocal = {mf_grad.rsdf_source_reciprocal}')
 print(f'  central CDERI = {mf.with_df.cderi_memory_report()}')
 print('  response cache releases = '
       f'{mf_grad.rsdf_response_metadata["memory_releases"]}')
+print('  response mode = '
+      f'{mf_grad.rsdf_response_metadata["response_mode"]}')
+print('  auto memory plan = '
+      f'{mf_grad.rsdf_response_metadata.get("auto_memory_plan")}')
+print('  CPHF cache = '
+      f'{mf_grad.z_response_profile["resolved_cache_mode"]}')
 print('Result invariants')
 print(f'  E_PBE@HF = {mf.e_dft:.15f} Ha')
 print(f'  Z residual max abs = {mf_grad.z_residual_max_abs:.6e}')

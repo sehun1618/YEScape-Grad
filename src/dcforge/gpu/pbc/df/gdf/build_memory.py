@@ -90,7 +90,7 @@ def plan_native_build_memory(available_bytes, memory_fraction,
 def bounded_native_build_memory(provider):
     r'''Apply one provider's adaptive budget to a synchronous native build.
 
-    GPU4PySCF 1.8.0 obtains its central GDF batch size through the module-level
+    GPU4PySCF 1.8.1 obtains its central GDF batch size through the module-level
     :func:`rsdf_builder.get_avail_mem` function and exposes no per-provider
     memory option.  This narrow adapter replaces that query only while the
     inherited synchronous ``GDF.build`` call is active.  A process-wide lock

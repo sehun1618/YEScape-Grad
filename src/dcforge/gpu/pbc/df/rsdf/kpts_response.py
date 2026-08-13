@@ -200,7 +200,7 @@ def make_kpts_contracted_gradient_response(
 def make_kpts_gradient_response(with_df, dm0, dz, s1, exxdiv='ewald'):
     r'''Return source/metric-resolved sampled-k RSDF matrix derivatives.
 
-    GPU4PySCF 1.8.0 has no sampled-k RSDF nuclear-response endpoint that
+    GPU4PySCF 1.8.1 has no sampled-k RSDF nuclear-response endpoint that
     preserves independent source ``(omega,mesh_compact)`` and metric
     ``(omega_j2c,mesh_j2c)`` settings.  K8.5 therefore uses the validated
     DC-Forge CPU sampled-k RSDF response as an explicit correctness oracle.

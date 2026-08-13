@@ -219,37 +219,136 @@ def build_rhf_primitive_adjoint_channels(
             ``(target, fock, metadata)``.  ``target`` and ``fock`` are
             dictionaries with ``source`` and ``metric`` device arrays.
     '''
-    fock_source, fock_metric, fock_metadata = (
-        build_rhf_primitive_adjoint(
+    source, metric, channel_metadata = (
+        build_rhf_primitive_adjoint_channel_stack(
             solved_three_center, reference_density, response_density,
-            include_target_j=False, response_sign=response_sign,
+            response_sign=response_sign,
             auxiliary_block_size=auxiliary_block_size))
-    combined_source, combined_metric, combined_metadata = (
-        build_rhf_primitive_adjoint(
-            solved_three_center, reference_density, response_density,
-            include_target_j=True, response_sign=response_sign,
-            auxiliary_block_size=auxiliary_block_size))
-
-    # The J source is recovered from the exact linear identity
-    # ``combined = target + fock``.  This keeps `_build_source_block` as the
-    # one authoritative definition of the RHF direct-adjoint coefficients.
-    target_source = combined_source
-    target_source -= fock_source
-    target_metric = combined_metric
-    target_metric -= fock_metric
     metadata = {
-        'route': 'direct_real_gamma_primitive_adjoint_channels',
+        'route': 'direct_real_gamma_primitive_adjoint_channels_view',
         'response_sign': float(response_sign),
-        'target': {
-            'persistent_source_bytes': int(target_source.nbytes),
-            'metric_bytes': int(target_metric.nbytes),
-            'construction': 'combined_minus_fock',
-        },
-        'fock': dict(fock_metadata),
-        'combined': dict(combined_metadata),
+        'target': dict(channel_metadata['target']),
+        'fock': dict(channel_metadata['fock']),
+        'stack': channel_metadata,
     }
-    return ({'source': target_source, 'metric': target_metric},
-            {'source': fock_source, 'metric': fock_metric}, metadata)
+    return ({'source': source[0], 'metric': metric[0]},
+            {'source': source[1], 'metric': metric[1]}, metadata)
+
+
+def build_rhf_primitive_adjoint_channel_stack(
+        solved_three_center, reference_density, response_density,
+        response_sign=-1., auxiliary_block_size=32):
+    r'''Build target-J and Z-Fock adjoints directly in stacked storage.
+
+    The earlier two-channel implementation constructed the source-Fock
+    observable and the combined ``target-J + source-Fock`` observable in two
+    complete passes, then subtracted them to recover target J.  That identity
+    is exact, but at Water64 it temporarily retained four dense
+    ``(naux,nao,nao)`` arrays once the caller stacked both results.
+
+    Target Hartree has the closed form
+
+    .. math::
+
+        A^B_{J,P}=a_P P,
+        \qquad A^M_{J,PQ}=a_Pa_Q,
+        \qquad a_P=\operatorname{Tr}(W_PP).
+
+    This routine therefore writes target J directly into channel zero and
+    evaluates the source-Fock algebra once into channel one.  The returned
+    arrays already have their final two-observable layout; no combined
+    observable or later :func:`cupy.stack` copy exists.  This is only an
+    allocation/contraction-order change and is algebraically identical to
+    ``combined - fock``.
+
+    Args:
+        solved_three_center : cupy.ndarray of shape (naux,nao,nao)
+            Real Gamma ``W=M^{-1}B``.
+        reference_density, response_density : cupy.ndarray
+            Symmetric source-RHF and Z-transition AO densities.
+
+    Kwargs:
+        response_sign : float
+            Sign of the Z-Fock polarization term.  DC-Forge uses ``-1``.
+        auxiliary_block_size : int
+            Maximum auxiliary slice used by the source-Fock algebra.
+
+    Returns:
+        tuple
+            ``(source, metric, metadata)`` with final channel order
+            ``('target_j', 'source_fock')``.  Source has shape
+            ``(2,naux,nao,nao)`` and metric has shape
+            ``(2,naux,naux)``.
+    '''
+    solved = _as_real_matrix_stack(
+        solved_three_center, 'solved_three_center')
+    reference = _as_real_square(reference_density, 'reference_density')
+    response = _as_real_square(response_density, 'response_density')
+    if reference.shape != response.shape:
+        raise ValueError(
+            'reference_density and response_density must have one shape, '
+            f'got {reference.shape} and {response.shape}')
+    if tuple(solved.shape[1:]) != tuple(reference.shape):
+        raise ValueError(
+            'solved_three_center AO shape does not match density shape: '
+            f'{solved.shape[1:]} != {reference.shape}')
+    response_sign = float(response_sign)
+    if response_sign not in (-1., 1.):
+        raise ValueError('response_sign must be +1 or -1')
+    if auxiliary_block_size < 1:
+        raise ValueError('auxiliary_block_size must be positive')
+
+    naux = int(solved.shape[0])
+    maximum = min(naux, int(auxiliary_block_size))
+    auxiliary_reference = contract('pij,ji->p', solved, reference)
+    auxiliary_response = contract('pij,ji->p', solved, response)
+    source = cp.empty((2, *solved.shape), dtype=solved.dtype)
+    metric = cp.empty((2, naux, naux), dtype=solved.dtype)
+
+    # Channel zero is the target Hartree derivative.  Fill it blockwise so
+    # the only temporary has the same bounded shape as the Fock workspace.
+    temporary = cp.empty((maximum, *reference.shape), dtype=solved.dtype)
+    exchange = cp.empty_like(temporary)
+    block_count = 0
+    for p0 in range(0, naux, maximum):
+        p1 = min(naux, p0 + maximum)
+        width = p1 - p0
+        cp.multiply(
+            auxiliary_reference[p0:p1, None, None], reference[None],
+            out=source[0, p0:p1])
+        _build_source_block(
+            source[1, p0:p1], solved[p0:p1], reference, response,
+            auxiliary_reference[p0:p1], auxiliary_response[p0:p1],
+            include_target_j=False, response_sign=response_sign,
+            temporary=temporary[:width], exchange=exchange[:width])
+        block_count += 1
+
+    metric[0] = contract(
+        'p,q->pq', auxiliary_reference, auxiliary_reference)
+    contract('pij,qij->pq', source[1], solved, out=metric[1])
+    metadata = {
+        'route': 'direct_real_gamma_primitive_adjoint_channel_stack',
+        'channel_order': ('target_j', 'source_fock'),
+        'response_sign': response_sign,
+        'persistent_source_bytes': int(source.nbytes),
+        'metric_bytes': int(metric.nbytes),
+        'auxiliary_block_size': maximum,
+        'auxiliary_block_count': block_count,
+        'source_algebra_passes': 1,
+        'combined_source_allocated': False,
+        'caller_stack_copy_required': False,
+        'target': {
+            'persistent_source_bytes': int(source[0].nbytes),
+            'metric_bytes': int(metric[0].nbytes),
+            'construction': 'direct_aP_times_P_and_outer_a',
+        },
+        'fock': {
+            'persistent_source_bytes': int(source[1].nbytes),
+            'metric_bytes': int(metric[1].nbytes),
+            'construction': 'single_source_fock_algebra_pass',
+        },
+    }
+    return source, metric, metadata
 
 
 def build_rhf_packed_primitive_adjoint(

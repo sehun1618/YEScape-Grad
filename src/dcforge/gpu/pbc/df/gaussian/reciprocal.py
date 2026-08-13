@@ -18,6 +18,7 @@ DEFAULT_MEMORY_FRACTION = .10
 DEFAULT_MINIMUM_RESERVE_BYTES = 512 * 1024 ** 2
 DEFAULT_BLOCK_ALIGNMENT = 32
 DEFAULT_MAX_BLOCK_SIZE = 512
+DEFAULT_COMPLEX_RECONTRACTION_MAX_BYTES = 2 ** 31 - 1
 DEFAULT_WORKSPACE_MODEL = 'generic'
 RHF_MO_DIRECT_WORKSPACE_MODEL = 'rhf_mo_direct'
 
@@ -83,7 +84,12 @@ class ReciprocalBlockPlan:
                  initial_block_size, maximum_block_size,
                  workspace_model=DEFAULT_WORKSPACE_MODEL,
                  build_values_per_grid=None,
-                 derivative_values_per_grid=None):
+                 derivative_values_per_grid=None,
+                 complex_recontraction_nao=None,
+                 complex_recontraction_bytes_per_grid=None,
+                 complex_recontraction_max_bytes=None,
+                 complex_recontraction_block_limit=None,
+                 complex_recontraction_limited=False):
         self.ngrids = int(ngrids)
         self.nao = int(nao)
         self.naux = int(naux)
@@ -102,6 +108,20 @@ class ReciprocalBlockPlan:
         self.derivative_values_per_grid = (
             None if derivative_values_per_grid is None
             else dict(derivative_values_per_grid))
+        self.complex_recontraction_nao = (
+            None if complex_recontraction_nao is None
+            else int(complex_recontraction_nao))
+        self.complex_recontraction_bytes_per_grid = (
+            None if complex_recontraction_bytes_per_grid is None
+            else int(complex_recontraction_bytes_per_grid))
+        self.complex_recontraction_max_bytes = (
+            None if complex_recontraction_max_bytes is None
+            else int(complex_recontraction_max_bytes))
+        self.complex_recontraction_block_limit = (
+            None if complex_recontraction_block_limit is None
+            else int(complex_recontraction_block_limit))
+        self.complex_recontraction_limited = bool(
+            complex_recontraction_limited)
         self.bytes_per_grid = max(
             self.build_bytes_per_grid, self.derivative_bytes_per_grid)
         self.block_alignment = int(block_alignment)
@@ -128,6 +148,15 @@ class ReciprocalBlockPlan:
             'workspace_model': self.workspace_model,
             'build_values_per_grid': self.build_values_per_grid,
             'derivative_values_per_grid': self.derivative_values_per_grid,
+            'complex_recontraction_nao': self.complex_recontraction_nao,
+            'complex_recontraction_bytes_per_grid': (
+                self.complex_recontraction_bytes_per_grid),
+            'complex_recontraction_max_bytes': (
+                self.complex_recontraction_max_bytes),
+            'complex_recontraction_block_limit': (
+                self.complex_recontraction_block_limit),
+            'complex_recontraction_limited': (
+                self.complex_recontraction_limited),
             'block_alignment': self.block_alignment,
             'initial_block_size': self.initial_block_size,
             'maximum_block_size': self.maximum_block_size,
@@ -228,7 +257,10 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
                                  DEFAULT_MINIMUM_RESERVE_BYTES,
                                  block_alignment=DEFAULT_BLOCK_ALIGNMENT,
                                  maximum_block_size=DEFAULT_MAX_BLOCK_SIZE,
-                                 workspace_model=DEFAULT_WORKSPACE_MODEL):
+                                 workspace_model=DEFAULT_WORKSPACE_MODEL,
+                                 complex_recontraction_nao=None,
+                                 complex_recontraction_max_bytes=
+                                 DEFAULT_COMPLEX_RECONTRACTION_MAX_BYTES):
     r'''Plan a bounded Gamma reciprocal block from its largest live tensors.
 
     Args:
@@ -261,6 +293,16 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
             both occupied projections in zero order and the complete
             ``C/U/A/K`` contraction workspace of the exact MO-factorized
             long-range derivative.
+        complex_recontraction_nao : int or None
+            Original AO dimension for a subsequent complex
+            ``SortedGTO.apply_C_mat_CT`` transformation.  When present, one
+            block is also capped so that its ``(nG,nao,sorted_nao)`` complex
+            intermediate remains below ``complex_recontraction_max_bytes``.
+        complex_recontraction_max_bytes : int
+            Maximum address span of that complex AO recontraction.  The
+            default is the largest signed 32-bit byte offset.  This limit is
+            independent of free VRAM and prevents an unrecoverable CUDA
+            illegal-address failure in the current GPU4PySCF transformation.
 
     Returns:
         ReciprocalBlockPlan
@@ -285,6 +327,11 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
         raise ValueError('block_alignment must be positive')
     if maximum_block_size is not None and int(maximum_block_size) < 1:
         raise ValueError('maximum_block_size must be positive when set')
+    if (complex_recontraction_nao is not None
+            and int(complex_recontraction_nao) < 1):
+        raise ValueError('complex_recontraction_nao must be positive when set')
+    if int(complex_recontraction_max_bytes) < 1:
+        raise ValueError('complex_recontraction_max_bytes must be positive')
 
     workspace_model = str(workspace_model).lower()
     if workspace_model == DEFAULT_WORKSPACE_MODEL:
@@ -334,6 +381,21 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
     block_size = min(int(ngrids), budget // bytes_per_grid)
     if maximum_block_size is not None:
         block_size = min(block_size, int(maximum_block_size))
+    complex_bytes_per_grid = None
+    complex_block_limit = None
+    complex_limited = False
+    if complex_recontraction_nao is not None:
+        complex_bytes_per_grid = (
+            int(complex_recontraction_nao) * int(nao) * COMPLEX128_BYTES)
+        complex_block_limit = (
+            int(complex_recontraction_max_bytes) // complex_bytes_per_grid)
+        if complex_block_limit < 1:
+            raise MemoryError(
+                'one complex Gamma AO recontraction exceeds its safe address '
+                f'range: required={complex_bytes_per_grid} bytes, '
+                f'limit={complex_recontraction_max_bytes} bytes')
+        complex_limited = block_size > complex_block_limit
+        block_size = min(block_size, complex_block_limit)
     if block_size < 1:
         raise MemoryError(
             'insufficient GPU memory for one native Gamma Gaussian-DF reciprocal '
@@ -350,7 +412,14 @@ def plan_gamma_reciprocal_blocks(ngrids, nao, naux, nocc_max,
         int(ngrids) if maximum_block_size is None else maximum_block_size,
         workspace_model=workspace_model,
         build_values_per_grid=build_components,
-        derivative_values_per_grid=derivative_components)
+        derivative_values_per_grid=derivative_components,
+        complex_recontraction_nao=complex_recontraction_nao,
+        complex_recontraction_bytes_per_grid=complex_bytes_per_grid,
+        complex_recontraction_max_bytes=(
+            None if complex_recontraction_nao is None
+            else complex_recontraction_max_bytes),
+        complex_recontraction_block_limit=complex_block_limit,
+        complex_recontraction_limited=complex_limited)
 
 
 def execute_gamma_reciprocal_blocks(total_count, initial_block_size, worker,

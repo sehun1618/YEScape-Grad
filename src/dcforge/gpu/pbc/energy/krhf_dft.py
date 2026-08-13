@@ -201,7 +201,7 @@ class KRHFDFT(krks.KRKS):
     Notes:
         Only source ``DFKRHF.kernel`` is run.  Target ``KRKS.kernel`` is never
         called.  Density, Hcore, target potential and target Fock remain CuPy
-        arrays.  GPU4PySCF 1.8.0 obtains non-Gamma GTH nonlocal-projector
+        arrays.  GPU4PySCF 1.8.1 obtains non-Gamma GTH nonlocal-projector
         half-integrals from PySCF before contracting them on the GPU; this
         explicit upstream host primitive and state-fingerprint transfers are
         recorded separately.
@@ -441,7 +441,7 @@ class KRHFDFT(krks.KRKS):
                 A separate XC mesh is unsupported.  Set ``cell.ke_cutoff``
                 before ``cell.build()``.
             ntasks, ke_ratio, rel_cutoff : None
-                CPU-compatible placeholders.  GPU4PySCF 1.8.0 exposes none
+                CPU-compatible placeholders.  GPU4PySCF 1.8.1 exposes none
                 of these controls, so non-None values are rejected.
             with_j : bool
                 Select fused target multigrid J+XC instead of XC only.

@@ -1,8 +1,12 @@
 '''GPU4PySCF GDF provider with the DC-Forge PBC contract.'''
 
+import threading
+from contextlib import contextmanager, nullcontext
+
 import cupy as cp
 import numpy as np
 from gpu4pyscf.pbc import df
+from gpu4pyscf.pbc.df import rsdf_builder
 from pyscf.pbc import df as cpu_df
 
 from dcforge.cpu.pbc.kpts import normalize_kpts
@@ -48,6 +52,9 @@ from dcforge.gpu.pbc.df.gdf.build_memory import (
     DEFAULT_NATIVE_BUILD_MINIMUM_RESERVE_BYTES,
     bounded_native_build_memory,
 )
+from dcforge.gpu.pbc.df.gdf.build_profile import profile_native_gamma_build
+
+_FIXED_OMEGA_LOCK = threading.RLock()
 
 
 class GDF(df.GDF):
@@ -78,6 +85,8 @@ class GDF(df.GDF):
         'native_build_memory_fraction',
         'native_build_minimum_reserve_bytes',
         'native_build_max_working_bytes', 'native_build_memory_plan',
+        'native_build_profile', 'native_build_profile_sample_interval',
+        'native_build_substage_profile',
         'reciprocal_memory_fraction', 'reciprocal_minimum_reserve_bytes',
         'reciprocal_max_block_size', 'reciprocal_block_alignment',
         'reciprocal_gamma_conjugate_symmetry',
@@ -91,11 +100,21 @@ class GDF(df.GDF):
         'sampled_k_response_layout_copy_count',
         'sampled_k_response_layout_copy_bytes',
         'kpts_reference', 'kpts_roundtrip_max_abs',
+        'omega',
+        'resolved_omega', 'resolved_source_mesh', 'resolved_metric_mesh',
     } | PP_LOC_PART1_KEYS | CDERI_KEYS
 
     def __init__(self, cell, kpts=None, auxbasis=None):
         kpts = normalize_kpts(kpts, required=False)
         df.GDF.__init__(self, cell, kpts=kpts)
+        # GPU4PySCF normally sets this instance flag in
+        # ``RHF.density_fit``.  DC-Forge installs a shared provider directly
+        # on the source and target objects, so the upstream decorator is not
+        # called.  Resolve the same flag here; otherwise one zero k-point is
+        # built correctly but every source J/K contraction is dispatched to
+        # the slower sampled-k complex path.
+        self.is_gamma_point = bool(
+            len(kpts) == 1 and np.max(np.abs(kpts)) < 1.e-12)
         self.kpts_reference = kpts.copy()
         self.kpts_roundtrip_max_abs = float(np.max(np.abs(
             np.asarray(self.kpts) - self.kpts_reference)))
@@ -113,6 +132,12 @@ class GDF(df.GDF):
         self.native_build_max_working_bytes = (
             DEFAULT_NATIVE_BUILD_MAX_WORKING_BYTES)
         self.native_build_memory_plan = None
+        # Diagnostics-only exclusive substage profile.  The enabled path
+        # synchronizes CUDA at nested builder boundaries and therefore is not
+        # a performance default.
+        self.native_build_profile = False
+        self.native_build_profile_sample_interval = .02
+        self.native_build_substage_profile = None
         # These controls affect only the native analytic-response reciprocal
         # workspaces.  They never alter the GDF integrals, source RHF, or
         # fixed-density target energy.  Retain the resolved plan on the
@@ -176,6 +201,15 @@ class GDF(df.GDF):
         self.sampled_k_hcore_owner = None
         self.sampled_k_response_layout_copy_count = 0
         self.sampled_k_response_layout_copy_bytes = 0
+        # These values describe the numerical SR/LR partition actually used
+        # by GPU4PySCF's native central-factor builder.  They are not user
+        # accuracy parameters and do not change the full Coulomb operator.
+        # Stress finite differences nevertheless require the resolved split
+        # and both integer meshes to remain identical at +strain and -strain.
+        self.omega = None
+        self.resolved_omega = None
+        self.resolved_source_mesh = None
+        self.resolved_metric_mesh = None
         init_cderi_options(self)
         init_pp_loc_part1(self)
         if auxbasis is not None:
@@ -206,10 +240,55 @@ class GDF(df.GDF):
             is available in ``native_build_memory_plan``.
         '''
         preflight_cderi_memory(self)
-        with bounded_native_build_memory(self):
+        profile_context = (
+            profile_native_gamma_build(self)
+            if self.native_build_profile else nullcontext())
+        with (bounded_native_build_memory(self),
+              _fixed_partition_omega(self.omega), profile_context):
             df.GDF.build(self, j_only=j_only, kpts_band=kpts_band)
+        self._record_resolved_response_settings()
         finalize_cderi_storage(self)
         return self
+
+    def _record_resolved_response_settings(self):
+        r'''Record the native GDF split and integer reciprocal meshes.
+
+        GPU4PySCF 1.8.1 resolves an internal range-separation parameter for
+        its short-range three-center integrals.  The source mesh follows the
+        primary Cell cutoff for that parameter, while the metric mesh uses
+        the auxiliary Cell and its stricter ``precision*1e-6`` threshold.
+        Re-evaluating these public builder formulae after ``build`` records
+        the representation which produced the active CDERI; it does not
+        rebuild or replace that CDERI.
+
+        The attributes are consumed by the common GDF response code and by
+        strain-state fingerprints.  A relaxed-energy finite-difference run
+        therefore fails closed if a strained Cell crosses an automatic mesh
+        or omega boundary.
+        '''
+        cell = self.cell
+        auxcell = self.auxcell
+        if auxcell is None:
+            raise RuntimeError(
+                'native GDF build did not create an auxiliary Cell')
+        physical_omega = abs(float(getattr(self, '_omega', 0.)))
+        partition_omega = resolve_partition_omega(cell, self.omega)
+        with_long_range = physical_omega < partition_omega
+        if with_long_range:
+            source_cutoff = rsdf_builder.estimate_ke_cutoff_for_omega(
+                cell, partition_omega)
+            source_mesh = cell.symmetrize_mesh(
+                cell.cutoff_to_mesh(source_cutoff))
+            metric_cutoff = rsdf_builder.estimate_ke_cutoff_for_omega(
+                auxcell, partition_omega, auxcell.precision * 1.e-6)
+            metric_mesh = auxcell.cutoff_to_mesh(metric_cutoff)
+        else:
+            source_mesh = metric_mesh = np.ones(3, dtype=int)
+        self.resolved_omega = float(partition_omega)
+        self.resolved_source_mesh = np.asarray(
+            source_mesh, dtype=int).copy()
+        self.resolved_metric_mesh = np.asarray(
+            metric_mesh, dtype=int).copy()
 
     def get_pp(self, kpts=None):
         '''Return provider-consistent GTH matrices for Gamma or sampled k.
@@ -250,7 +329,11 @@ class GDF(df.GDF):
         self.sampled_k_hcore_owner = None
         self.sampled_k_response_layout_copy_count = 0
         self.sampled_k_response_layout_copy_bytes = 0
+        self.resolved_omega = None
+        self.resolved_source_mesh = None
+        self.resolved_metric_mesh = None
         self.native_build_memory_plan = None
+        self.native_build_substage_profile = None
         self.adjoint_host_cache_plan = None
         reset_pp_loc_part1(self)
         return self
@@ -290,6 +373,11 @@ class GDF(df.GDF):
             'native_build_max_working_bytes': (
                 self.native_build_max_working_bytes),
             'native_build_memory_plan': self.native_build_memory_plan,
+            'native_build_profile': self.native_build_profile,
+            'native_build_profile_sample_interval': (
+                self.native_build_profile_sample_interval),
+            'native_build_substage_profile': (
+                self.native_build_substage_profile),
             'cderi_storage': self.cderi_storage,
             'cderi_memory_metadata': self.cderi_memory_metadata,
             'release_cderi_after_response': self.release_cderi_after_response,
@@ -317,4 +405,61 @@ class GDF(df.GDF):
                 None if self.pp_loc_part1_mesh is None
                 else np.asarray(self.pp_loc_part1_mesh, dtype=int).tolist()),
             'pp_loc_part1_plan_mode': self.pp_loc_part1_plan_mode,
+            'omega': self.omega,
+            'resolved_omega': self.resolved_omega,
+            'resolved_source_mesh': (
+                None if self.resolved_source_mesh is None
+                else self.resolved_source_mesh.tolist()),
+            'resolved_metric_mesh': (
+                None if self.resolved_metric_mesh is None
+                else self.resolved_metric_mesh.tolist()),
         }
+
+
+def resolve_partition_omega(cell, omega=None):
+    r'''Return the GPU4PySCF GDF algorithmic SR/LR partition.
+
+    ``omega=None`` delegates to GPU4PySCF's native system-dependent choice.
+    A positive explicit value freezes only the auxiliary real/reciprocal
+    decomposition used to build CDERI.  It does not set ``cell.omega`` and
+    therefore does not turn the physical Coulomb operator into a
+    range-separated Hamiltonian.
+    '''
+    physical_omega = abs(float(getattr(cell, 'omega', 0.)))
+    if omega is None:
+        partition = float(rsdf_builder._guess_omega(cell))
+    else:
+        partition = float(omega)
+        if not np.isfinite(partition) or partition <= 0:
+            raise ValueError('GDF partition omega must be positive and finite')
+    return max(physical_omega, partition)
+
+
+@contextmanager
+def _fixed_partition_omega(omega):
+    r'''Temporarily freeze GPU4PySCF's internal GDF partition resolver.
+
+    GPU4PySCF 1.8.1 exposes no argument for its nonphysical ``rsdf_omega``;
+    its builder calls the module-level ``_guess_omega`` internally.  The
+    process lock makes this opt-in adapter transactional and restores the
+    original resolver even if CDERI construction fails.  Normal providers
+    with ``omega=None`` do not touch module state.
+    '''
+    if omega is None:
+        yield
+        return
+    omega = float(omega)
+    if not np.isfinite(omega) or omega <= 0:
+        raise ValueError('GDF partition omega must be positive and finite')
+    with _FIXED_OMEGA_LOCK:
+        original = rsdf_builder._guess_omega
+
+        def fixed(_cell, kmesh=None):
+            del kmesh
+            return omega
+
+        rsdf_builder._guess_omega = fixed
+        try:
+            yield
+        finally:
+            rsdf_builder._guess_omega = original

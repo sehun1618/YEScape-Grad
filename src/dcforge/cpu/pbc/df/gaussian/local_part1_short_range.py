@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 from pyscf import lib
-from pyscf.pbc.df import aft, ft_ao
+from pyscf.pbc.df import ft_ao
 from pyscf.pbc.grad import krhf as pyscf_krhf_grad
 from pyscf.pbc.tools import pbc as pbc_tools
+
+from dcforge.cpu.pbc.df.gaussian.fake_nuclear import (
+    make_fake_nuclear_cell,
+)
 
 
 class ShortRangeLocalPart1:
@@ -25,7 +29,8 @@ class ShortRangeLocalPart1:
         self.kpts = np.asarray(builder.kpts, dtype=float).reshape(-1, 3)
         self.nkpts = len(self.kpts)
         self.nao = int(self.cell.nao_nr())
-        self.fakenuc = aft._fake_nuc(self.cell, with_pseudo=True)
+        self.fakenuc = make_fake_nuclear_cell(
+            self.cell, with_pseudo=True)
         self.charges = -np.asarray(self.cell.atom_charges(), dtype=float)
         self._ao_slices = np.asarray(self.cell.aoslice_by_atom(), dtype=int)
 

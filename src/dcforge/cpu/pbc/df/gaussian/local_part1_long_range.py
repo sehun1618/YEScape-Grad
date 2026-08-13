@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 from pyscf import lib
-from pyscf.pbc.df import aft, ft_ao
+from pyscf.pbc.df import ft_ao
 from pyscf.pbc.lib.kpts_helper import is_zero
 from pyscf.pbc.tools import pbc as pbc_tools
+
+from dcforge.cpu.pbc.df.gaussian.fake_nuclear import (
+    make_fake_nuclear_cell,
+)
 
 from .ft import gen_ft_center_derivative_kernel
 
@@ -30,7 +34,8 @@ class LongRangeLocalPart1:
         self.nkpts = len(self.kpts)
         self.nao = int(self.cell.nao_nr())
         self.nao_pair = self.nao * (self.nao + 1) // 2
-        self.fakenuc = aft._fake_nuc(self.cell, with_pseudo=True)
+        self.fakenuc = make_fake_nuclear_cell(
+            self.cell, with_pseudo=True)
         self.charges = -np.asarray(self.cell.atom_charges(), dtype=float)
         self._ao_slices = np.asarray(self.cell.aoslice_by_atom(), dtype=int)
 

@@ -8,7 +8,7 @@ GPU4PySCF builds the large three-center source and factorizes the metric,
 while PySCF supplies only the small screened two-center metric primitive.
 '''
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from threading import RLock
 from time import perf_counter
 
@@ -45,6 +45,7 @@ from dcforge.gpu.pbc.df.gaussian.pseudo import (
 from dcforge.gpu.pbc.df.gaussian.pseudo import (
     get_pp as get_pp_gamma,
 )
+from dcforge.gpu.pbc.df.rsdf.build_profile import profile_native_gamma_build
 
 _BUILDER_ADAPTER_LOCK = RLock()
 _METRIC_MEMORY_FRACTION = .25
@@ -89,14 +90,19 @@ class RSDF(gpu_df.GDF):
         'precision_R', 'precision_G', 'precision_j2c', 'npw_max',
         '_omega_min', 'use_bvk', 'j2c_eig_always',
         'central_build_metadata', '_central_metric',
+        '_central_metric_factor', '_parameter_witness_cache',
+        '_parameter_witness_signature',
+        'native_build_profile', 'native_build_profile_sample_interval',
+        'native_build_substage_profile',
         'source_reciprocal_memory_fraction',
         'source_reciprocal_minimum_reserve_bytes',
         'source_reciprocal_max_block_size',
         'source_reciprocal_block_alignment',
         'source_reciprocal_gamma_conjugate_symmetry',
-        'response_release_cached_blocks',
+        'response_release_cached_blocks', 'response_profile_components',
         'response_mode', 'response_pair_block_size',
-        'response_auxiliary_block_size',
+        'response_auxiliary_block_size', 'response_memory_fraction',
+        'response_minimum_reserve_bytes', 'response_fused_max_bytes',
         'sampled_k_hcore_host_calls', 'sampled_k_hcore_host_bytes',
         'sampled_k_hcore_owner',
         'sampled_k_response_layout_copy_count',
@@ -107,6 +113,10 @@ class RSDF(gpu_df.GDF):
     def __init__(self, cell, kpts=None, auxbasis=None):
         kpts = normalize_kpts(kpts, required=False)
         gpu_df.GDF.__init__(self, cell, kpts=kpts)
+        # Match GPU4PySCF ``RHF.density_fit`` dispatch even though DC-Forge
+        # installs this shared provider without invoking that decorator.
+        self.is_gamma_point = bool(
+            len(kpts) == 1 and np.max(np.abs(kpts)) < 1.e-12)
         self.kpts_reference = kpts.copy()
         self.kpts_roundtrip_max_abs = float(np.max(np.abs(
             np.asarray(self.kpts) - self.kpts_reference)))
@@ -121,6 +131,12 @@ class RSDF(gpu_df.GDF):
                 'j2c_eig_always'):
             setattr(self, name, getattr(witness, name))
         self.central_build_metadata = None
+        # Diagnostics-only build profiler.  The enabled route introduces
+        # synchronized CUDA boundaries and must therefore never be folded
+        # into production timing.
+        self.native_build_profile = False
+        self.native_build_profile_sample_interval = .02
+        self.native_build_substage_profile = None
         # ``_central_metric`` is the exact Gamma metric in the same AO
         # auxiliary basis as the compressed device CDERI.  The RSDF builder
         # already needs this small O(naux**2) object to construct ``C``;
@@ -128,6 +144,13 @@ class RSDF(gpu_df.GDF):
         # the response code pushes an observable through the Cholesky gauge.
         # It is deliberately not a dense three-center or derivative cache.
         self._central_metric = None
+        self._central_metric_factor = None
+        # The PySCF RSGDF witness owns resolved source/metric settings and the
+        # authoritative auxiliary Cell.  It is immutable for one provider
+        # representation and can therefore be reused until ``reset`` or an
+        # explicit parameter change alters its signature.
+        self._parameter_witness_cache = None
+        self._parameter_witness_signature = None
         # Controls affect only the native source-response workspace.  They
         # neither change the RSDF source/metric integrals nor the central
         # energy factorization.  The final plan is attached to response
@@ -150,13 +173,28 @@ class RSDF(gpu_df.GDF):
         # resident high-water mark of the next one.  Live arrays are retained
         # by CuPy and are therefore unaffected mathematically.
         self.response_release_cached_blocks = True
-        # The production response keeps the central factor and reverse
-        # adjoints in unique real-Gamma AO-pair storage and consumes target-J
-        # and source-Fock observables sequentially.  ``dense`` remains the
-        # algebraically independent validation oracle.
-        self.response_mode = 'sequential_packed'
+        # Diagnostics-only component timing adds CUDA synchronizations around
+        # adjoint/reverse/source/metric boundaries.  It is disabled in the
+        # production route so profiler overhead cannot contaminate benchmark
+        # wall times.
+        self.response_profile_components = False
+        # Production ``auto`` uses one direct-packed dual-observable route
+        # when its bounded preflight fits and otherwise retains the
+        # one-observable-at-a-time sequential fallback.  ``dense`` remains
+        # the algebraically independent validation oracle.
+        self.response_mode = 'auto'
         self.response_pair_block_size = 8192
         self.response_auxiliary_block_size = 32
+        self.response_memory_fraction = .5
+        self.response_minimum_reserve_bytes = 4 * 1024**3
+        # R6 Water20/DZVP and Water64/SZV benchmarks show that stacked
+        # observables are worthwhile while their predicted persistent work
+        # is a few GiB (6.17% gradient speedup at 3.12 GB), but not when the
+        # same choice consumes 10.28 GB (1.53% speedup and 46.1% more peak
+        # VRAM).  This storage-only ceiling keeps ``auto`` size-aware without
+        # changing source/metric parameters or numerical accuracy.  Explicit
+        # ``response_mode='fused_packed'`` remains an opt-in override.
+        self.response_fused_max_bytes = 4 * 1024**3
         self.sampled_k_hcore_host_calls = 0
         self.sampled_k_hcore_host_bytes = 0
         self.sampled_k_hcore_owner = None
@@ -209,51 +247,59 @@ class RSDF(gpu_df.GDF):
             raise NotImplementedError(
                 'GPU RSDF currently builds exchange-capable Gamma factors only')
         _check_cell(self)
-        preflight_cderi_memory(self)
-        witness = self._build_parameter_witness()
-        if witness.j2c_eig_always:
-            raise NotImplementedError(
-                'GPU RSDF requires Cholesky metric factorization; '
-                'j2c_eig_always=True is unsupported')
-        self._adopt_witness_settings(witness)
-        state = _BuildState()
-        start = perf_counter()
-        kmesh = np.asarray(kpts_to_kmesh(
-            self.cell, self.kpts, precision=self.cell.precision), dtype=int)
-        with _cpu_equivalent_builder(
-                self, witness.auxcell, state):
-            cderi, cderip, cderi_idx = rsdf_builder.build_cderi(
-                self.cell, witness.auxcell, kpts=self.kpts,
-                kmesh=kmesh, j_only=False, omega=None,
-                linear_dep_threshold=float(self.linear_dep_threshold),
-                compress=True)
-        cp.cuda.Stream.null.synchronize()
-        self.auxcell = witness.auxcell
-        self.nao = int(self.cell.nao_nr())
-        self.kmesh = kmesh
-        self._omega = None
-        self._cderi = cderi
-        self._cderip = cderip
-        self._cderi_idx = tuple(
-            cp.asarray(value, dtype=cp.int32) for value in cderi_idx)
-        self._j_only = False
-        self._central_metric = state.central_metric
-        self.central_build_metadata = {
-            'builder': 'dcforge sampled-k RSDF exact central adapter',
-            'source_owner': 'GPU4PySCF CUDA three-center builder',
-            'short_range_metric_owner': 'PySCF rsdf_helper.intor_j2c',
-            'long_range_metric_owner': 'GPU4PySCF reciprocal kernels',
-            'factorization_owner': 'GPU4PySCF CuPy Cholesky',
-            'source_omega': float(self.omega),
-            'source_mesh': [int(value) for value in self.mesh_compact],
-            'metric_omega': float(self.omega_j2c),
-            'metric_mesh': [int(value) for value in self.mesh_j2c],
-            'host_short_range_metric_seconds': state.host_metric_seconds,
-            'device_long_range_metric_seconds': state.device_metric_seconds,
-            'metric_block_plans': state.metric_block_plans,
-            'total_build_seconds': perf_counter() - start,
-        }
-        finalize_cderi_storage(self)
+        profile_context = (
+            profile_native_gamma_build(self)
+            if self.native_build_profile else nullcontext(None))
+        with profile_context as profiler:
+            with _profile_stage(profiler, 'cderi_preflight'):
+                preflight_cderi_memory(self)
+            with _profile_stage(profiler, 'parameter_witness'):
+                witness = self._build_parameter_witness()
+            if witness.j2c_eig_always:
+                raise NotImplementedError(
+                    'GPU RSDF requires Cholesky metric factorization; '
+                    'j2c_eig_always=True is unsupported')
+            self._adopt_witness_settings(witness)
+            state = _BuildState(profiler=profiler)
+            start = perf_counter()
+            kmesh = np.asarray(kpts_to_kmesh(
+                self.cell, self.kpts, precision=self.cell.precision), dtype=int)
+            with (_cpu_equivalent_builder(self, witness.auxcell, state),
+                  _profile_stage(profiler, 'central_builder_unclassified')):
+                cderi, cderip, cderi_idx = rsdf_builder.build_cderi(
+                    self.cell, witness.auxcell, kpts=self.kpts,
+                    kmesh=kmesh, j_only=False, omega=None,
+                    linear_dep_threshold=float(self.linear_dep_threshold),
+                    compress=True)
+            cp.cuda.Stream.null.synchronize()
+            self.auxcell = witness.auxcell
+            self.nao = int(self.cell.nao_nr())
+            self.kmesh = kmesh
+            self._omega = None
+            self._cderi = cderi
+            self._cderip = cderip
+            self._cderi_idx = tuple(
+                cp.asarray(value, dtype=cp.int32) for value in cderi_idx)
+            self._j_only = False
+            self._central_metric = state.central_metric
+            self._central_metric_factor = None
+            self.central_build_metadata = {
+                'builder': 'dcforge sampled-k RSDF exact central adapter',
+                'source_owner': 'GPU4PySCF CUDA three-center builder',
+                'short_range_metric_owner': 'PySCF rsdf_helper.intor_j2c',
+                'long_range_metric_owner': 'GPU4PySCF reciprocal kernels',
+                'factorization_owner': 'GPU4PySCF CuPy Cholesky',
+                'source_omega': float(self.omega),
+                'source_mesh': [int(value) for value in self.mesh_compact],
+                'metric_omega': float(self.omega_j2c),
+                'metric_mesh': [int(value) for value in self.mesh_j2c],
+                'host_short_range_metric_seconds': state.host_metric_seconds,
+                'device_long_range_metric_seconds': state.device_metric_seconds,
+                'metric_block_plans': state.metric_block_plans,
+                'total_build_seconds': perf_counter() - start,
+            }
+            with _profile_stage(profiler, 'storage_checkpoint'):
+                finalize_cderi_storage(self)
         return self
 
     def reset(self, cell=None):
@@ -266,6 +312,10 @@ class RSDF(gpu_df.GDF):
         self.auxcell = None
         self.central_build_metadata = None
         self._central_metric = None
+        self._central_metric_factor = None
+        self._parameter_witness_cache = None
+        self._parameter_witness_signature = None
+        self.native_build_substage_profile = None
         self.sampled_k_hcore_host_calls = 0
         self.sampled_k_hcore_host_bytes = 0
         self.sampled_k_hcore_owner = None
@@ -337,7 +387,10 @@ class RSDF(gpu_df.GDF):
         '''
         if self._central_metric is None:
             raise RuntimeError('build GPU RSDF before requesting its metric factor')
-        return cp.linalg.cholesky(self._central_metric)
+        if self._central_metric_factor is None:
+            self._central_metric_factor = cp.linalg.cholesky(
+                self._central_metric)
+        return self._central_metric_factor
 
     def capability(self):
         '''Return the resolved GPU RSDF capability boundary.
@@ -372,7 +425,7 @@ class RSDF(gpu_df.GDF):
                 'GPU4PySCF native combined; not production eligible'
                 if sampled_k else None),
             'source_mesh': source_mesh,
-            'stress': False,
+            'stress': not sampled_k,
             'sampled_k_hcore_host_boundary': sampled_k,
             'kpts_roundtrip_max_abs': self.kpts_roundtrip_max_abs,
             'auxbasis': self.auxbasis,
@@ -382,10 +435,18 @@ class RSDF(gpu_df.GDF):
                 self.source_reciprocal_gamma_conjugate_symmetry),
             'response_release_cached_blocks': (
                 self.response_release_cached_blocks),
+            'response_profile_components': self.response_profile_components,
+            'native_build_profile': self.native_build_profile,
+            'native_build_substage_profile': (
+                self.native_build_substage_profile),
             'response_mode': self.response_mode,
             'response_pair_block_size': self.response_pair_block_size,
             'response_auxiliary_block_size': (
                 self.response_auxiliary_block_size),
+            'response_memory_fraction': self.response_memory_fraction,
+            'response_minimum_reserve_bytes': (
+                self.response_minimum_reserve_bytes),
+            'response_fused_max_bytes': self.response_fused_max_bytes,
             'cderi_storage': self.cderi_storage,
             'cderi_memory_metadata': self.cderi_memory_metadata,
             'release_cderi_after_response': self.release_cderi_after_response,
@@ -414,6 +475,10 @@ class RSDF(gpu_df.GDF):
         }
 
     def _build_parameter_witness(self):
+        signature = self._make_parameter_witness_signature()
+        if (self._parameter_witness_cache is not None
+                and self._parameter_witness_signature == signature):
+            return self._parameter_witness_cache
         witness = cpu_rsdf.RSGDF(self.cell, kpts=self.kpts)
         witness.auxbasis = self.auxbasis
         for name in (
@@ -424,6 +489,8 @@ class RSDF(gpu_df.GDF):
             setattr(witness, name, getattr(self, name))
         witness.linear_dep_threshold = float(self.linear_dep_threshold)
         witness._rs_build()
+        self._parameter_witness_cache = witness
+        self._parameter_witness_signature = signature
         return witness
 
     def _adopt_witness_settings(self, witness):
@@ -434,23 +501,52 @@ class RSDF(gpu_df.GDF):
             if isinstance(value, np.ndarray):
                 value = value.copy()
             setattr(self, name, value)
+        # Resolution changes ``None``/automatic inputs into their explicit
+        # values.  The cached witness now belongs to this resolved signature.
+        if self._parameter_witness_cache is not None:
+            self._parameter_witness_signature = (
+                self._make_parameter_witness_signature())
+
+    def _make_parameter_witness_signature(self):
+        '''Return the provider-lifetime identity of PySCF RSDF resolution.'''
+        values = []
+        for name in (
+                'use_bvk', 'precision_R', 'precision_G', 'npw_max',
+                '_omega_min', 'omega', 'ke_cutoff', 'mesh_compact',
+                'omega_j2c', 'mesh_j2c', 'precision_j2c',
+                'j2c_eig_always', 'linear_dep_threshold'):
+            value = getattr(self, name)
+            if isinstance(value, np.ndarray):
+                value = (str(value.dtype), tuple(value.shape), value.tobytes())
+            values.append(value)
+        return (
+            self.cell.dumps(), repr(self.auxbasis),
+            np.asarray(self.kpts, dtype=float).tobytes(), tuple(values))
 
 
 class _BuildState:
     '''Per-build metric timings and bounded reciprocal execution metadata.'''
 
-    def __init__(self):
+    def __init__(self, profiler=None):
         self.host_metric_seconds = 0.
         self.device_metric_seconds = 0.
         self.metric_block_plans = []
         self.central_metric = None
+        self.profiler = profiler
+
+
+def _profile_stage(profiler, name):
+    '''Return one diagnostics-only stage or a zero-cost null context.'''
+    if profiler is None:
+        return nullcontext()
+    return profiler.stage(name)
 
 
 @contextmanager
 def _cpu_equivalent_builder(provider, reference_auxcell, state):
     r'''Install a narrow, synchronous adapter for the GPU RSDF builder.
 
-    GPU4PySCF 1.8.0 does not expose independent source/metric settings in
+    GPU4PySCF 1.8.1 does not expose independent source/metric settings in
     ``build_cderi``.  The process-global functions are changed only while
     that synchronous call is active and are restored in ``finally``.  The
     lock prevents two RSDF builds from interleaving incompatible settings.
@@ -514,8 +610,9 @@ def _build_metric(auxcell, unique_kpts, physical_omega, metric_omega,
     host_auxcell = reference_auxcell.copy()
     host_auxcell.precision = float(provider.precision_j2c)
     start = perf_counter()
-    metric = cp.asarray(rsdf_helper.intor_j2c(
-        host_auxcell, float(metric_omega), kpts=kpts))
+    with _profile_stage(state.profiler, 'metric_short_range'):
+        metric = cp.asarray(rsdf_helper.intor_j2c(
+            host_auxcell, float(metric_omega), kpts=kpts))
     state.host_metric_seconds += perf_counter() - start
 
     work_auxcell = auxcell.copy()
@@ -531,16 +628,17 @@ def _build_metric(auxcell, unique_kpts, physical_omega, metric_omega,
     event_start = cp.cuda.Event()
     event_stop = cp.cuda.Event()
     event_start.record()
-    for ik, kpt in enumerate(kpts):
-        for p0 in range(0, len(gv), block_size):
-            p1 = min(len(gv), p0 + block_size)
-            aoaux = rsdf_builder.ft_ao.ft_ao(
-                work_auxcell, gv[p0:p1], kpt=kpt, sort_output=True)
-            weighted = aoaux.conj() * coulomb[ik, p0:p1, None]
-            correction = weighted.T.dot(aoaux)
-            if is_zero(kpt):
-                correction = correction.real
-            metric[ik] += correction
+    with _profile_stage(state.profiler, 'metric_long_range'):
+        for ik, kpt in enumerate(kpts):
+            for p0 in range(0, len(gv), block_size):
+                p1 = min(len(gv), p0 + block_size)
+                aoaux = rsdf_builder.ft_ao.ft_ao(
+                    work_auxcell, gv[p0:p1], kpt=kpt, sort_output=True)
+                weighted = aoaux.conj() * coulomb[ik, p0:p1, None]
+                correction = weighted.T.dot(aoaux)
+                if is_zero(kpt):
+                    correction = correction.real
+                metric[ik] += correction
     event_stop.record()
     event_stop.synchronize()
     state.device_metric_seconds += cp.cuda.get_elapsed_time(

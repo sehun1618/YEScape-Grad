@@ -64,7 +64,7 @@ def build_source_optimizer(with_df):
     return optimizer.build()
 
 
-def contract_source_derivative(with_df, source_adjoints):
+def contract_source_derivative(with_df, source_adjoints, optimizer=None):
     r'''Contract one or more Gamma ``dE/dB`` tensors on the GPU.
 
     Args:
@@ -87,7 +87,9 @@ def contract_source_derivative(with_df, source_adjoints):
         contracted directly into nuclear scalars.  No ``dB`` or ``dC``
         tensor survives the function.
     '''
-    optimizer = build_source_optimizer(with_df)
+    optimizer_reused = optimizer is not None
+    if optimizer is None:
+        optimizer = build_source_optimizer(with_df)
     start = perf_counter()
     sources = _sorted_sources(optimizer, source_adjoints)
     setup_seconds = perf_counter() - start
@@ -110,11 +112,167 @@ def contract_source_derivative(with_df, source_adjoints):
     reciprocal_seconds = cp.cuda.get_elapsed_time(start_event, stop_event) / 1000.
     return short_range + reciprocal, {
         'source_owner': 'GPU4PySCF native short-range and reciprocal kernels',
+        'optimizer_reused': optimizer_reused,
         'setup_seconds': setup_seconds,
         'short_range_seconds': short_range_seconds,
         'reciprocal_seconds': reciprocal_seconds,
         'reciprocal_memory': reciprocal_metadata,
     }
+
+
+def contract_packed_source_derivative(
+        with_df, source_adjoints, layout, optimizer=None):
+    r'''Contract unique-pair ``dE/dB`` without a dense source expansion.
+
+    Args:
+        with_df : dcforge.gpu.pbc.df.rsdf.RSDF
+            Built real-Gamma RSDF provider.
+        source_adjoints : cupy.ndarray
+            Packed physical-AO sources with shape
+            ``(nobservable,naux,npair)``.
+        layout : dict
+            Canonical physical unique-pair layout owned by the CDERI.
+
+    Kwargs:
+        optimizer : SRInt3c2eOpt or None
+            Optional caller-owned source optimizer.
+
+    Returns:
+        tuple
+            Nuclear source derivatives and a timing/memory ledger.
+
+    Notes:
+        The physical packed-variable derivative is divided by its Gamma pair
+        multiplicity before the AO and auxiliary recontractions.  Only the
+        shell pairs requested by each CUDA consumer are then materialized.
+        No persistent ``(naux,nao,nao)`` source tensor exists.
+    '''
+    optimizer_reused = optimizer is not None
+    if optimizer is None:
+        optimizer = build_source_optimizer(with_df)
+    start = perf_counter()
+    transform = _PackedSourceTransform.build(
+        optimizer, source_adjoints, layout)
+    setup_seconds = perf_counter() - start
+
+    start_event = cp.cuda.Event()
+    stop_event = cp.cuda.Event()
+    start_event.record()
+    short_range, short_metadata = _contract_short_range_packed(
+        optimizer, transform)
+    stop_event.record()
+    stop_event.synchronize()
+    short_range_seconds = cp.cuda.get_elapsed_time(
+        start_event, stop_event) / 1000.
+
+    start_event = cp.cuda.Event()
+    stop_event = cp.cuda.Event()
+    start_event.record()
+    reciprocal, reciprocal_metadata = _contract_reciprocal_packed(
+        optimizer, transform, with_df)
+    stop_event.record()
+    stop_event.synchronize()
+    reciprocal_seconds = cp.cuda.get_elapsed_time(
+        start_event, stop_event) / 1000.
+    return short_range + reciprocal, {
+        'source_owner': (
+            'GPU4PySCF native short-range and reciprocal kernels with '
+            'direct packed shell-pair sources'),
+        'source_representation': 'direct_sorted_shell_pair',
+        'optimizer_reused': optimizer_reused,
+        'setup_seconds': setup_seconds,
+        'short_range_seconds': short_range_seconds,
+        'reciprocal_seconds': reciprocal_seconds,
+        'packed_transform': transform.metadata,
+        'short_range': short_metadata,
+        'reciprocal_memory': reciprocal_metadata,
+    }
+
+
+class _PackedSourceTransform:
+    '''Map physical unique pairs to consumer-specific sorted shell pairs.'''
+
+    def __init__(self, optimizer, auxiliary_sources, ao_coefficients,
+                 physical_row, physical_column, metadata):
+        self.optimizer = optimizer
+        self.auxiliary_sources = auxiliary_sources
+        self.ao_coefficients = ao_coefficients
+        self.physical_row = physical_row
+        self.physical_column = physical_column
+        self.metadata = metadata
+
+    @classmethod
+    def build(cls, optimizer, source_adjoints, layout):
+        sources = cp.asarray(source_adjoints)
+        if sources.ndim == 2:
+            sources = sources[None]
+        physical_nao = int(optimizer.cell.cell.nao_nr())
+        physical_naux = int(optimizer.auxcell.cell.nao_nr())
+        row = cp.asarray(layout['row'], dtype=cp.int32)
+        column = cp.asarray(layout['column'], dtype=cp.int32)
+        weights = cp.asarray(layout['weights'], dtype=sources.dtype)
+        expected = (physical_naux, len(row))
+        if sources.ndim != 3 or sources.shape[1:] != expected:
+            raise ValueError(
+                'packed source adjoints must have shape '
+                f'(nobservable,{expected[0]},{expected[1]}), got '
+                f'{sources.shape}')
+        if sources.dtype.kind == 'c':
+            imaginary = float(cp.max(cp.abs(sources.imag)).get())
+            if imaginary > 1.e-10:
+                raise NotImplementedError(
+                    'Gamma packed RSDF source adjoints must be real')
+            sources = sources.real
+        # Convert packed-variable derivatives to one derivative per symmetric
+        # dense entry before applying the auxiliary recontraction.
+        per_entry = sources / weights[None, None]
+        auxiliary_sources = optimizer.auxcell.apply_C_dot(
+            per_entry, axis=1)
+        ao_coefficients = cp.asarray(optimizer.cell.ctr_coeff)
+        if ao_coefficients.shape[1] != physical_nao:
+            raise ValueError('sorted AO recontraction matrix is inconsistent')
+        return cls(
+            optimizer, auxiliary_sources, ao_coefficients, row, column, {
+                'physical_packed_source_bytes': int(sources.nbytes),
+                'auxiliary_transformed_packed_bytes': int(
+                    auxiliary_sources.nbytes),
+                'ao_coefficient_bytes': int(ao_coefficients.nbytes),
+                'persistent_dense_source_bytes': 0,
+                'physical_pair_count': len(row),
+                'maximum_projected_pair_bytes': 0,
+            })
+
+    def project(self, pair_addresses, pair_block_size=512):
+        '''Return per-entry sources for selected sorted AO pair addresses.'''
+        addresses = cp.asarray(pair_addresses, dtype=cp.int64)
+        sorted_nao = int(self.ao_coefficients.shape[0])
+        target_row, target_column = divmod(addresses, sorted_nao)
+        nobs, sorted_naux, _physical_pairs = self.auxiliary_sources.shape
+        block_size = max(1, min(len(addresses), int(pair_block_size)))
+        output = cp.empty(
+            (nobs, len(addresses), sorted_naux),
+            dtype=self.auxiliary_sources.dtype)
+        row = self.physical_row
+        column = self.physical_column
+        off_diagonal = (row != column).astype(output.dtype)
+        for p0 in range(0, len(addresses), block_size):
+            p1 = min(len(addresses), p0 + block_size)
+            i = target_row[p0:p1]
+            j = target_column[p0:p1]
+            coefficient = (
+                self.ao_coefficients[i[:, None], row[None]]
+                * self.ao_coefficients[j[:, None], column[None]])
+            coefficient += (
+                self.ao_coefficients[i[:, None], column[None]]
+                * self.ao_coefficients[j[:, None], row[None]]
+                * off_diagonal[None])
+            output[:, p0:p1] = cp.einsum(
+                'sQp,kp->skQ', self.auxiliary_sources, coefficient,
+                optimize=True)
+        self.metadata['maximum_projected_pair_bytes'] = max(
+            self.metadata['maximum_projected_pair_bytes'],
+            int(output.nbytes))
+        return output
 
 
 def _sorted_sources(optimizer, source_adjoints):
@@ -258,6 +416,30 @@ def _contract_short_range(optimizer, sources):
     return (ao_derivative + aux_derivative) * 2.0
 
 
+def _contract_short_range_packed(optimizer, transform):
+    '''Consume direct sorted shell-pair sources in the native SR kernel.'''
+    context = _ShortRangeContext.build(optimizer)
+    pair_addresses = optimizer.pair_and_diag_indices(
+        cart=True, original_ao_order=False)[0]
+    sources = transform.project(pair_addresses)
+    ao_derivative = cp.zeros((len(sources), context.cell.natm, 3))
+    aux_derivative = cp.zeros_like(ao_derivative)
+    for batch_id in range(context.batch_count):
+        start, stop = context.auxiliary_ao_range(batch_id)
+        compressed = cp.ascontiguousarray(sources[..., start:stop])
+        for source_id in range(len(sources)):
+            context.run(
+                batch_id, compressed[source_id], ao_derivative[source_id],
+                aux_derivative[source_id])
+    metadata = {
+        'sorted_pair_count': len(pair_addresses),
+        'projected_pair_bytes': int(sources.nbytes),
+        'observable_count': len(sources),
+        'kernel_calls': int(context.batch_count * len(sources)),
+    }
+    return (ao_derivative + aux_derivative) * 2.0, metadata
+
+
 def _validate_task_pool(shell_pair_offsets, auxiliary_offsets):
     shell_pairs = np.diff(cp.asnumpy(shell_pair_offsets))
     auxiliary_shells = np.diff(auxiliary_offsets)
@@ -334,6 +516,96 @@ def _contract_reciprocal(optimizer, sources, with_df):
     }
 
 
+def _contract_reciprocal_packed(optimizer, transform, with_df):
+    '''Contract reciprocal response from direct sorted unique-pair sources.'''
+    cell = optimizer.cell
+    auxcell = optimizer.auxcell
+    mesh = np.asarray(optimizer.mesh, dtype=int)
+    vectors = asarray(auxcell.get_Gv(mesh))
+    coulomb = _gamma_coulomb_vector(
+        _weighted_coulG_kpts(cell, mesh, 0.0, float(optimizer.omega)),
+        len(vectors))
+    full_grid_count = len(vectors)
+    gamma_symmetry = bool(
+        with_df.source_reciprocal_gamma_conjugate_symmetry)
+    if gamma_symmetry:
+        indices, multiplicities = gamma_conjugate_reciprocal_indices(mesh)
+        vectors = vectors[indices]
+        coulomb = coulomb[indices] * asarray(multiplicities)
+    ft_optimizer = ft_ao.FTOpt.from_intopt(optimizer)
+    evaluator = ft_optimizer.ft_evaluator(
+        compressing=False, cart=True, original_ao_order=False)[0]
+    pair_addresses = ft_optimizer.pair_and_diag_indices(
+        cart=True, original_ao_order=False)[0]
+    sources = transform.project(pair_addresses)
+    nao = int(ft_optimizer.cell.nao)
+    naux = int(sources.shape[-1])
+    i_addr, j_addr = divmod(pair_addresses, nao)
+    # The AO-center CUDA kernel consumes only its screened shell-pair list.
+    # The auxiliary-center phase derivative is a contraction with the full
+    # Fourier AO-pair matrix and therefore needs every unique lower-triangle
+    # pair, including pairs screened from the AO derivative task list.
+    aux_i_addr, aux_j_addr = cp.tril_indices(nao)
+    auxiliary_pair_addresses = aux_i_addr * nao + aux_j_addr
+    auxiliary_sources = transform.project(auxiliary_pair_addresses)
+    auxiliary_pair_weights = cp.where(
+        aux_i_addr == aux_j_addr, 1., 2.)
+    kernel_inputs = _fourier_kernel_inputs(cell, ft_optimizer)
+    free_bytes = int(get_avail_mem(exclude_memory_pool=True))
+    plan = plan_gamma_reciprocal_blocks(
+        len(vectors), nao, naux * len(sources), 1, free_bytes,
+        memory_fraction=float(with_df.source_reciprocal_memory_fraction),
+        minimum_reserve_bytes=int(
+            with_df.source_reciprocal_minimum_reserve_bytes),
+        block_alignment=int(with_df.source_reciprocal_block_alignment),
+        maximum_block_size=with_df.source_reciprocal_max_block_size)
+    ao_derivative = cp.zeros((len(sources), cell.natm, 3))
+    aux_partial = cp.zeros((len(sources), 3, naux))
+
+    def worker(start, stop):
+        return _reciprocal_packed_block(
+            cell, auxcell, sources, auxiliary_sources,
+            vectors, coulomb, evaluator, start, stop, nao=nao,
+            i_addr=i_addr, j_addr=j_addr,
+            aux_i_addr=aux_i_addr, aux_j_addr=aux_j_addr,
+            auxiliary_pair_weights=auxiliary_pair_weights,
+            permutation_symmetry=ft_optimizer.permutation_symmetry,
+            **kernel_inputs)
+
+    def accept(_start, _stop, result):
+        ao_derivative[:] += result[0]
+        aux_partial[:] += result[1]
+
+    execution = execute_gamma_reciprocal_blocks(
+        len(vectors), plan.initial_block_size, worker, accept,
+        phase='rsdf_source_reciprocal_packed',
+        is_oom=_is_gpu_out_of_memory,
+        block_alignment=plan.block_alignment,
+        on_oom=_release_cached_blocks)
+    value = ao_derivative * 2.0 + _group_auxiliary_batch(auxcell, aux_partial)
+    return value, {
+        'policy': {
+            'memory_fraction': float(with_df.source_reciprocal_memory_fraction),
+            'minimum_reserve_bytes': int(
+                with_df.source_reciprocal_minimum_reserve_bytes),
+            'maximum_block_size': with_df.source_reciprocal_max_block_size,
+            'lifetime_shortening': (
+                'packed sorted pair sources persist; dense AO-pair source '
+                'exists only for the current reciprocal G block'),
+            'gamma_conjugate_symmetry': gamma_symmetry,
+            'full_grid_count': int(full_grid_count),
+            'evaluated_grid_count': len(vectors),
+            'sorted_pair_count': len(pair_addresses),
+            'projected_pair_bytes': int(sources.nbytes),
+            'auxiliary_full_pair_count': len(aux_i_addr),
+            'auxiliary_projected_pair_bytes': int(
+                auxiliary_sources.nbytes),
+        },
+        'plan': plan.as_dict(),
+        'execution': execution.as_dict(),
+    }
+
+
 def _reciprocal_block(cell, auxcell, sources, vectors, coulomb, evaluator,
                       start, stop, *, nao, i_addr, j_addr,
                       permutation_symmetry, **kernel_inputs):
@@ -355,6 +627,44 @@ def _reciprocal_block(cell, auxcell, sources, vectors, coulomb, evaluator,
     del pair_complex, pair_real, auxiliary_source
     ao_source = cp.einsum(
         'spqr,rG->spqG', sources, auxiliary_weighted, optimize=True)
+    ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
+    ao_derivative = cp.stack([
+        _run_fourier_kernel(
+            cell, source, block_vectors, width,
+            permutation_symmetry=permutation_symmetry, **kernel_inputs)
+        for source in ao_source])
+    return ao_derivative, auxiliary_partial
+
+
+def _reciprocal_packed_block(
+        cell, auxcell, sources, auxiliary_sources,
+        vectors, coulomb, evaluator, start, stop, *, nao,
+        i_addr, j_addr, aux_i_addr, aux_j_addr,
+        auxiliary_pair_weights, permutation_symmetry, **kernel_inputs):
+    '''Evaluate one reciprocal block from per-entry sorted pair sources.'''
+    width = int(stop - start)
+    block_vectors = vectors[start:stop]
+    pair_real = evaluator(block_vectors).view(np.float64).reshape(
+        nao, nao, width * 2)
+    pair_complex = pair_real.view(np.complex128)
+    auxiliary_g = ft_ao.ft_ao(auxcell, block_vectors).T
+    auxiliary_weighted = auxiliary_g.conj() * coulomb[start:stop]
+    auxiliary_source = cp.einsum(
+        'skr,kG,k->srG', auxiliary_sources,
+        pair_complex[aux_i_addr, aux_j_addr], auxiliary_pair_weights,
+        optimize=True)
+    auxiliary_source *= coulomb[start:stop]
+    auxiliary_source = cp.ascontiguousarray(auxiliary_source).view(np.float64)
+    auxiliary_partial = _auxiliary_phase_derivative(
+        auxiliary_g, block_vectors, auxiliary_source)
+    del auxiliary_source
+
+    ao_pair_source = cp.einsum(
+        'skr,rG->skG', sources, auxiliary_weighted, optimize=True)
+    ao_source = cp.zeros(
+        (len(ao_pair_source), nao, nao, width), dtype=np.complex128)
+    ao_source[:, i_addr, j_addr] = ao_pair_source
+    ao_source[:, j_addr, i_addr] = ao_pair_source
     ao_source = cp.ascontiguousarray(ao_source).view(np.float64)
     ao_derivative = cp.stack([
         _run_fourier_kernel(

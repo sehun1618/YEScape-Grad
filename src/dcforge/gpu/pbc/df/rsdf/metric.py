@@ -157,9 +157,16 @@ def build_metric_contraction_context(with_df):
     return context
 
 
-def contract_metric_derivative(with_df, metric_adjoints):
-    r'''Convenience wrapper for a complete direct metric contraction.'''
-    return build_metric_contraction_context(with_df).contract(metric_adjoints)
+def contract_metric_derivative(with_df, metric_adjoints, context=None):
+    r'''Contract metric adjoints through a new or caller-owned context.
+
+    ``context`` is an execution-only reuse hook.  Target-J and source-Fock
+    keep separate adjoints, but the expensive screened ``ip1/ip2`` and
+    reciprocal Fourier data need only be prepared once.
+    '''
+    if context is None:
+        context = build_metric_contraction_context(with_df)
+    return context.contract(metric_adjoints)
 
 
 def _contract_short_range(adjoints, ip1, ip2, atom_ids, natm):

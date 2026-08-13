@@ -1,11 +1,20 @@
 '''Gamma-point GPU range-separated Gaussian density fitting.'''
 
+from dcforge.gpu.pbc.df.checkpoint import (
+    identity_fingerprint,
+    load_provider_factor_checkpoint,
+    provider_factor_identity,
+    save_provider_factor_checkpoint,
+)
 from dcforge.gpu.pbc.df.rsdf.adjoint import (
     expand_packed_source_adjoint,
+    expand_packed_source_adjoints,
     make_cderi_observable_adjoints,
     make_packed_cderi_observable_adjoint,
+    make_packed_cderi_observable_adjoints,
     push_cderi_adjoints,
     push_packed_cderi_adjoint,
+    push_packed_cderi_adjoints,
 )
 from dcforge.gpu.pbc.df.rsdf.kpts_response import (
     make_kpts_contracted_gradient_response,
@@ -20,22 +29,33 @@ from dcforge.gpu.pbc.df.rsdf.response import make_gradient_response
 from dcforge.gpu.pbc.df.rsdf.rsdf import RSDF
 from dcforge.gpu.pbc.df.rsdf.source import (
     build_source_optimizer,
+    contract_packed_source_derivative,
     contract_source_derivative,
 )
+from dcforge.gpu.pbc.df.rsdf.stress import make_rsdf_strain_response
 
 __all__ = [
     'RSDF',
     'build_metric_contraction_context',
     'build_source_optimizer',
     'contract_metric_derivative',
+    'contract_packed_source_derivative',
     'contract_source_derivative',
     'expand_packed_source_adjoint',
+    'expand_packed_source_adjoints',
+    'identity_fingerprint',
+    'load_provider_factor_checkpoint',
     'make_cderi_observable_adjoints',
     'make_gradient_response',
     'make_kpts_contracted_gradient_response',
     'make_kpts_full_coulomb_response_probe',
     'make_kpts_gradient_response',
     'make_packed_cderi_observable_adjoint',
+    'make_packed_cderi_observable_adjoints',
+    'make_rsdf_strain_response',
+    'provider_factor_identity',
     'push_cderi_adjoints',
     'push_packed_cderi_adjoint',
+    'push_packed_cderi_adjoints',
+    'save_provider_factor_checkpoint',
 ]

@@ -35,12 +35,19 @@ from dcforge.gpu.pbc.energy.rhf_dft import (
     _target_fock_signature,
     _target_xc_name,
 )
+from dcforge.gpu.pbc.grad.memory import resolve_memory_policy
 from dcforge.gpu.pbc.grad.rhf_nv import (
     grad_fock_direct,
     grad_fock_gdf,
     grad_fock_rsdf,
     make_ovlp_response_intermediate,
     nonvariational_correction,
+)
+from dcforge.gpu.pbc.grad.rhf_state import (
+    get_response_state,
+    make_response_state_signature,
+    store_response_state,
+    use_response_state,
 )
 from dcforge.gpu.pbc.grad.rhf_zvec import gen_vind, solve_z_vector
 from dcforge.gpu.pbc.grad.skeleton import (
@@ -151,6 +158,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     cell = mf_grad.cell
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
     _check_input(mf)
+    resolve_memory_policy(mf_grad, required_property='gradient')
     if not isinstance(mf.with_df, (FFTDF, GDF, RSDF)):
         raise NotImplementedError('unsupported GPU PBC analytic-gradient provider')
     if mf.e_dft is None:
@@ -168,6 +176,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     # the production mathematical path or a performance optimization.
     profile = {} if mf_grad.profile_gradient_stages else None
     mf_grad.z_response_profile = None
+    mf_grad.response_state_reused = False
     mf_grad.z_warm_start_metadata = None
     mf_grad.hcore_stage_profile = None
     mf_grad.hcore_pp_loc_part1_plan = None
@@ -223,79 +232,90 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     fvind = mf_hf.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
-    if isinstance(mf.with_df, (GDF, RSDF)):
-        # Keep GPU4PySCF's AO-density response as the oracle used by the
-        # moving-overlap term below.  Repeated Z-vector actions can exploit
-        # their known cross-factor density without changing the PySCF
-        # ``gen_response`` contract or the orbital-Hessian equation.
-        response_mode = mf_grad.df_cphf_response_mode
-        if response_mode == 'direct_vo':
-            cache_mode = (
-                mf_grad.df_cphf_response_cache
-                if isinstance(mf.with_df, GDF) else 'recompute')
-            vind = gen_df_vind(
-                mf_hf, Co, Cv, cache_mode=cache_mode,
-                memory_fraction=mf_grad.df_cphf_response_memory_fraction,
-                minimum_reserve_bytes=(
-                    mf_grad.df_cphf_response_minimum_reserve_bytes),
-                profile_detail=(
-                    mf_grad.profile_gradient_stages
-                    or mf_grad.profile_df_cphf_response))
-        elif response_mode == 'ao_oracle':
-            vind = gen_df_vind_ao_oracle(mf_hf, Co, Cv)
-        else:
-            raise ValueError(
-                'df_cphf_response_mode must be direct_vo or ao_oracle')
-    else:
-        vind = gen_vind(Co, Cv, fvind)
+    response_signature = make_response_state_signature(
+        mf_grad, mo_energy, mo_coeff, mo_occ, dm0)
+    response_state = get_response_state(mf_grad, response_signature)
     _progress(mf_grad, 'z_vector')
     stage_start = _profile_start(mf_grad)
-    try:
-        zvec, z_info = solve_z_vector(
-            mo_energy, mo_occ, fvo, vind,
-            conv_tol=mf_grad.cphf_conv_tol,
-            residual_tol=mf_grad.cphf_residual_tol,
-            max_cycle=mf_grad.cphf_max_cycle,
-            refinement_solver=mf_grad.cphf_refinement_solver,
-            initial_guess=mf_grad.z_initial_guess,
-            log=log,
-        )
-    finally:
-        close_response = getattr(vind, 'close', None)
-        if close_response is not None:
-            mf_grad.z_response_profile = close_response()
-        if 'z_info' not in locals():
-            mf_grad.z_initial_guess = None
+    if response_state is None:
+        if isinstance(mf.with_df, (GDF, RSDF)):
+            # Keep GPU4PySCF's AO-density response as the oracle used by the
+            # moving-overlap term below.  Repeated Z-vector actions can
+            # exploit their known cross-factor density without changing the
+            # PySCF ``gen_response`` contract or the Hessian equation.
+            response_mode = mf_grad.df_cphf_response_mode
+            if response_mode == 'direct_vo':
+                vind = gen_df_vind(
+                    mf_hf, Co, Cv,
+                    cache_mode=mf_grad.df_cphf_response_cache,
+                    memory_fraction=(
+                        mf_grad.df_cphf_response_memory_fraction),
+                    minimum_reserve_bytes=(
+                        mf_grad.df_cphf_response_minimum_reserve_bytes),
+                    profile_detail=(
+                        mf_grad.profile_gradient_stages
+                        or mf_grad.profile_df_cphf_response))
+            elif response_mode == 'ao_oracle':
+                vind = gen_df_vind_ao_oracle(mf_hf, Co, Cv)
+            else:
+                raise ValueError(
+                    'df_cphf_response_mode must be direct_vo or ao_oracle')
+        else:
+            vind = gen_vind(Co, Cv, fvind)
+        try:
+            zvec, z_info = solve_z_vector(
+                mo_energy, mo_occ, fvo, vind,
+                conv_tol=mf_grad.cphf_conv_tol,
+                residual_tol=mf_grad.cphf_residual_tol,
+                max_cycle=mf_grad.cphf_max_cycle,
+                refinement_solver=mf_grad.cphf_refinement_solver,
+                initial_guess=mf_grad.z_initial_guess,
+                log=log,
+            )
+        finally:
+            close_response = getattr(vind, 'close', None)
+            if close_response is not None:
+                mf_grad.z_response_profile = close_response()
+            if 'z_info' not in locals():
+                mf_grad.z_initial_guess = None
+        z_warm_start_metadata = {
+            **(mf_grad.z_warm_start_projection or {}),
+            'requested': z_info['initial_guess_requested'],
+            'used': z_info['initial_guess_used'],
+            'fallback_reason': z_info['initial_guess_fallback_reason'],
+            'initial_residual_max_abs': z_info[
+                'initial_residual_max_abs'],
+            'diagonal_initial_residual_max_abs': z_info[
+                'diagonal_initial_residual_max_abs'],
+        }
+        response_orbitals = Cv @ zvec
+        dz = response_orbitals @ Co.conj().T
+        dz = dz + dz.conj().T
+        response_state = store_response_state(
+            mf_grad, response_signature, owner='gradient',
+            mo_energy=mo_energy, mo_coeff=mo_coeff, mo_occ=mo_occ,
+            Co=Co, Cv=Cv, dm0=dm0, target_fock=fock, fvo=fvo, foo=foo,
+            zvec=zvec, z_info=z_info,
+            response_orbitals=response_orbitals, dz=dz,
+            z_response_profile=mf_grad.z_response_profile,
+            z_warm_start_metadata=z_warm_start_metadata)
+        use_response_state(mf_grad, response_state, reused=False)
+    else:
+        zvec = response_state['zvec']
+        z_info = response_state['z_info']
+        response_orbitals = response_state['response_orbitals']
+        dz = response_state['dz']
+        use_response_state(mf_grad, response_state, reused=True)
+        z_warm_start_metadata = response_state.get(
+            'z_warm_start_metadata')
     _profile_stop(mf_grad, profile, 'z_vector_seconds', stage_start)
-    mf_grad.zvec = zvec
-    mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
-    mf_grad.z_residual_max_abs = z_info['residual_max_abs']
-    mf_grad.z_residual_relative = z_info['residual_relative']
-    mf_grad.z_solver = z_info['solver']
-    mf_grad.z_dimension = z_info['dimension']
-    mf_grad.z_primary_wall_seconds = z_info['primary_wall_seconds']
-    mf_grad.z_refinement_wall_seconds = z_info['refinement_wall_seconds']
-    mf_grad.z_refinement_iterations = z_info['refinement_iterations']
-    mf_grad.z_wall_seconds = z_info['wall_seconds']
-    mf_grad.z_response_backend = z_info['response_backend']
-    mf_grad.z_warm_start_metadata = {
-        **(mf_grad.z_warm_start_projection or {}),
-        'requested': z_info['initial_guess_requested'],
-        'used': z_info['initial_guess_used'],
-        'fallback_reason': z_info['initial_guess_fallback_reason'],
-        'initial_residual_max_abs': z_info['initial_residual_max_abs'],
-        'diagonal_initial_residual_max_abs': (
-            z_info['diagonal_initial_residual_max_abs']),
-    }
+    mf_grad.z_warm_start_metadata = z_warm_start_metadata
     # A projected guess belongs to exactly one geometry and one solve.
     mf_grad.z_initial_guess = None
     # ``U=C_v Z`` is both the natural response-orbital factor of
     # ``D_Z=U C_o^T+C_o U^T`` and the existing first half of the AO-density
     # construction.  Retain it so the optional MO-factorized GDF adjoint can
     # consume the exact physical factors without refactorizing ``D_Z``.
-    response_orbitals = Cv @ zvec
-    dz = response_orbitals @ Co.conj().T
-    dz = dz + dz.conj().T
     ovlp_response_intermediate = None
     release_cderi = (
         isinstance(mf.with_df, (GDF, RSDF))
@@ -719,6 +739,10 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'df_cphf_response_memory_fraction',
         'df_cphf_response_minimum_reserve_bytes',
         'profile_df_cphf_response', 'z_response_profile',
+        'response_state', 'response_state_signature',
+        'response_state_token', 'response_state_reused',
+        'response_state_owner', 'response_state_reuse_count',
+        'z_solve_count',
         'z_warm_start', 'z_warm_start_min_subspace_overlap',
         'z_initial_guess', 'z_warm_start_projection',
         'z_warm_start_metadata',
@@ -728,6 +752,10 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'de_hcore_components',
         'de_fock_hcore_components',
         'profile_gradient_stages', 'gradient_stage_profile',
+        'profile_stress_stages', 'stress_stage_profile',
+        'stress_memory_preflight', 'stress_reference_options',
+        'stress_report',
+        'gaussian_df_strain_response', 'gdf_strain_response',
         'progress_callback',
         'grid_response', 'target_fock_reused', 'xc_deriv_backend',
         'de_j_backend', 'de_j_native', 'de_j_source', 'de_j_metric',
@@ -744,9 +772,11 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'gdf_reciprocal_derivative', 'gdf_response_profile',
         'gdf_response_workspace',
         'z_primary_wall_seconds', 'z_refinement_wall_seconds',
-        'z_refinement_iterations', 'z_wall_seconds', 'z_response_backend',
+        'z_refinement_iterations', 'z_wall_seconds',
+        'z_current_wall_seconds', 'z_response_backend',
         'rsdf_response_metadata', 'rsdf_source_reciprocal',
         'cderi_release_metadata',
+        'memory_policy', 'property_sequence', 'resolved_memory_policy',
     }
 
     def __init__(self, mf):
@@ -767,15 +797,32 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # virtual projection.  The former complete-AO J/K route is retained
         # as an explicit numerical oracle, never selected automatically.
         self.df_cphf_response_mode = 'direct_vo'
-        # Adaptive GDF Z-response cache.  ``recompute`` remains the exact
-        # storage oracle.  Production ``auto`` selects only a bounded cache
-        # that leaves both the predicted action workspace and an explicit
-        # device reserve; any allocation failure falls back to recomputation.
+        # Adaptive Gaussian-DF Z-response cache shared by GDF and RSDF.
+        # ``recompute`` remains the exact storage oracle.  Production
+        # ``auto`` selects only a bounded cache that leaves both the predicted
+        # action workspace and an explicit device reserve; any allocation
+        # failure falls back to recomputation.
         self.df_cphf_response_cache = 'auto'
         self.df_cphf_response_memory_fraction = 0.8
         self.df_cphf_response_minimum_reserve_bytes = 4 * 1024**3
         self.profile_df_cphf_response = False
         self.z_response_profile = None
+        # ``custom`` preserves every existing fine-grained option.  Users may
+        # select fast/balanced/low_memory explicitly and must declare whether
+        # stress follows gradient so CDERI lifetime is planned globally.
+        self.memory_policy = 'custom'
+        self.property_sequence = ('gradient', 'stress')
+        self.resolved_memory_policy = None
+        # Nuclear gradients and homogeneous strain share the same target
+        # adjoint equation.  Cache only its bounded perturbation-independent
+        # solution, never the large direct-VO response workspace.
+        self.response_state = None
+        self.response_state_signature = None
+        self.response_state_token = None
+        self.response_state_reused = False
+        self.response_state_owner = None
+        self.response_state_reuse_count = 0
+        self.z_solve_count = 0
         # Scanner-only response warm start.  The previous raw VO amplitude is
         # never reused directly: :class:`RHFDFTGradScanner` transports it
         # through current/previous AO cross-overlaps and the solver accepts it
@@ -808,6 +855,16 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # request stream-synchronized stage timings through this opt-in flag.
         self.profile_gradient_stages = False
         self.gradient_stage_profile = None
+        # Stress profiling is separately opt-in because each stage boundary
+        # synchronizes the CUDA stream and records memory snapshots.  It does
+        # not alter any mesh, block policy, solver tolerance or term owner.
+        self.profile_stress_stages = False
+        self.stress_stage_profile = None
+        self.stress_memory_preflight = None
+        self.stress_reference_options = None
+        self.stress_report = None
+        self.gaussian_df_strain_response = None
+        self.gdf_strain_response = None
         # Optional queue/profiler callback.  It receives stage labels only;
         # it cannot alter arrays, solver tolerances, or the term ledger.
         self.progress_callback = None
@@ -858,7 +915,45 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         self.z_refinement_wall_seconds = None
         self.z_refinement_iterations = None
         self.z_wall_seconds = None
+        self.z_current_wall_seconds = None
         self.z_response_backend = None
+
+    def reset(self, cell=None):
+        '''Reset the active Cell and discard all derivative result caches.
+
+        GPU4PySCF's base reset delegates the geometry change to the source,
+        target and shared provider.  DC-Forge additionally owns a target Fock,
+        Z-vector, GDF strain response, multigrid task ledger and assembled
+        stress terms.  None of those quantities is transferable to a new
+        geometry or lattice, so a scanner must clear them before reconverging
+        the source state.
+        '''
+        gpu_rhf_grad.GradientsBase.reset(self, cell)
+        for name in (
+                'zvec', 'z_info', 'z_response_profile',
+                'response_state', 'response_state_signature',
+                'response_state_token', 'response_state_owner',
+                'gaussian_df_strain_response', 'gdf_strain_response',
+                'hcore_strain_components',
+                'target_xc_strain_metadata', 'ewald_strain',
+                'work_hcore', 'work_j', 'work_xc', 'work_ovlp',
+                'work_ewald', 'work_fock', 'work_ovlp_energy',
+                'work_ovlp_response', 'work_skeleton', 'work_nvar',
+                'work_raw', 'stress_raw', 'stress_tensor', 'stress_voigt',
+                'pressure', 'virial_tensor', 'stress_terms',
+                'stress_owner_ledger', 'stress_execution_boundary',
+                'stress_symmetry_residual',
+                'stress_recomposition_residual',
+                'stress_memory_preflight', 'stress_stage_profile',
+                'stress_report',
+                'production_analytic', 'gpu_native_complete',
+                'low_level_numerical_components'):
+            setattr(self, name, None)
+        self.target_fock_reused = False
+        self.response_state_reused = False
+        self.response_state_reuse_count = 0
+        self.z_solve_count = 0
+        return self
 
     def dump_flags(self, verbose=None):
         '''Log GPU PBC response controls in PySCF style.'''
@@ -879,10 +974,15 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                     self.df_cphf_response_minimum_reserve_bytes)
         logger.info(self, 'profile_df_cphf_response = %s',
                     self.profile_df_cphf_response)
+        logger.info(self, 'memory_policy = %s', self.memory_policy)
+        logger.info(self, 'property_sequence = %s', self.property_sequence)
         logger.info(self, 'z_warm_start = %s', self.z_warm_start)
         logger.info(self, 'z_warm_start_min_subspace_overlap = %.3f',
                     self.z_warm_start_min_subspace_overlap)
         logger.info(self, 'z_response_backend = %s', self.z_response_backend)
+        logger.info(self, 'response_state_reused = %s',
+                    self.response_state_reused)
+        logger.info(self, 'z_solve_count = %d', self.z_solve_count)
         logger.info(self, 'hcore_batch_size = %d', self.hcore_batch_size)
         logger.info(self, 'hcore_method = %s', self.hcore_method)
         logger.info(self, 'gdf_response_mode = %s', self.gdf_response_mode)
@@ -892,6 +992,16 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                     self.measure_gdf_response_boundary)
         logger.info(self, 'profile_gradient_stages = %s',
                     self.profile_gradient_stages)
+        logger.info(self, 'profile_stress_stages = %s',
+                    self.profile_stress_stages)
+        return self
+
+    def set_property_sequence(self, *properties):
+        '''Declare the ordered property lifecycle for memory planning.'''
+        if len(properties) == 1 and isinstance(properties[0], (list, tuple)):
+            properties = tuple(properties[0])
+        self.property_sequence = tuple(properties)
+        self.resolved_memory_policy = None
         return self
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,
@@ -922,9 +1032,26 @@ class Gradients(gpu_rhf_grad.GradientsBase):
     grad_elec = grad_elec
     grad = kernel
 
+    def get_stress(self):
+        '''Return the homogeneous-strain derivative of ``E_DFA[P_RHF]``.
+
+        The implementation is routed through the DC-Forge stress namespace so
+        GPU4PySCF's conventional FFTDF-RKS stress cannot be returned for a
+        nonvariational GDF target by inheritance or accidental delegation.
+        '''
+        from dcforge.gpu.pbc.stress.rhf_dft import kernel
+
+        return kernel(self)
+
     def as_scanner(self):
         '''Return a PySCF-style energy-and-gradient scanner.'''
         return as_scanner(self)
+
+    def as_stress_scanner(self, **reference_options):
+        '''Return a production analytic energy-and-stress scanner.'''
+        from dcforge.gpu.pbc.stress.rhf_dft import as_stress_scanner
+
+        return as_stress_scanner(self, **reference_options)
 
     def to_cpu(self):
         raise NotImplementedError('GPU PBC gradient state conversion is not implemented')

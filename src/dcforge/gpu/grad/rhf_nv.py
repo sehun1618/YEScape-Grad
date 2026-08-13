@@ -206,7 +206,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
             Directly contracted source-Fock term in Ha/Bohr.
 
     Notes:
-        ``_jk_energies_per_atom`` is a private GPU4PySCF 1.8.0 API. The
+        ``_jk_energies_per_atom`` is a private GPU4PySCF 1.8.1 API. The
         ``make_h1`` oracle guards its cross-density coefficients.
     '''
     mol = mf_grad.mol
