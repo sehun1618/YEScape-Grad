@@ -53,6 +53,15 @@ def contract_rhf_mo_response_long_range_block(
     structural rather than tied to a concrete class import, keeping the pure
     contraction helper independently testable and avoiding an import cycle.
     '''
+    precision = str(getattr(
+        factors, 'derivative_precision', 'fp64')).lower()
+    if precision == 'mixed':
+        return _contract_rhf_mo_response_long_range_block_mixed(
+            factors, pair_fourier, auxiliary_fourier,
+            auxiliary_weighted,
+            include_metric_source=include_metric_source)
+    if precision != 'fp64':
+        raise ValueError('derivative_precision must be fp64 or mixed')
     return contract_rhf_mo_factorized_long_range_block(
         pair_fourier, auxiliary_fourier, auxiliary_weighted,
         factors.occupied_coefficients, factors.response_orbitals,
@@ -78,12 +87,148 @@ def build_rhf_mo_response_short_range_source_block(
     if start < 0 or stop <= start or stop > naux:
         raise ValueError(
             'auxiliary interval must satisfy 0 <= start < stop <= naux')
+    precision = str(getattr(
+        factors, 'derivative_precision', 'fp64')).lower()
+    if precision == 'mixed':
+        return _build_rhf_mo_response_short_range_source_block_mixed(
+            factors, pair_addresses, auxiliary_start=start,
+            auxiliary_stop=stop, pair_block_size=pair_block_size, out=out,
+            pair_indices=pair_indices)
+    if precision != 'fp64':
+        raise ValueError('derivative_precision must be fp64 or mixed')
     return build_rhf_mo_factorized_short_range_source_block(
         pair_addresses, factors.occupied_coefficients,
         factors.response_orbitals, factors.source_factor[start:stop],
         factors.response_factor[start:stop],
         pair_block_size=pair_block_size, out=out,
         pair_indices=pair_indices)
+
+
+def _mixed_factor_cache(factors):
+    '''Return one lazily constructed FP32 view of the MO adjoint factors.'''
+    names = (
+        '_dcforge_occupied32', '_dcforge_response32',
+        '_dcforge_source32', '_dcforge_response_factor32')
+    if all(hasattr(factors, name) for name in names):
+        return tuple(getattr(factors, name) for name in names)
+    values = tuple(cp.asarray(value, dtype=cp.float32) for value in (
+        factors.occupied_coefficients, factors.response_orbitals,
+        factors.source_factor, factors.response_factor))
+    for name, value in zip(names, values, strict=True):
+        setattr(factors, name, value)
+    return values
+
+
+def _contract_rhf_mo_response_long_range_block_mixed(
+        factors, pair_fourier, auxiliary_fourier, auxiliary_weighted,
+        include_metric_source=True):
+    r'''Build one LR derivative source with FP32 MO contractions.
+
+    The Fourier primitives and metric source enter as FP64.  Only the large
+    ``C/U/A/K`` products are evaluated in FP32; each complete transaction is
+    promoted before it enters the FP64 derivative reduction.
+    '''
+    occupied, response, source_factor, response_factor = (
+        _mixed_factor_cache(factors))
+    nao, nocc = map(int, occupied.shape)
+    naux = int(source_factor.shape[0])
+    pair_real = _fourier_real_view(
+        pair_fourier, 'pair_fourier', leading_shape=(nao, nao))
+    auxiliary_real = _fourier_real_view(
+        auxiliary_fourier, 'auxiliary_fourier', leading_shape=(naux,))
+    weighted_real = _fourier_real_view(
+        auxiliary_weighted, 'auxiliary_weighted', leading_shape=(naux,))
+    pair32 = pair_real.astype(cp.float32)
+    weighted32 = weighted_real.astype(cp.float32)
+
+    transformed = contract('pi,pqG->iqG', occupied, pair32)
+    occupied_pair = contract('iqG,qj->ijG', transformed, occupied)
+    mixed_pair = contract('iqG,qj->ijG', transformed, response)
+    auxiliary_low = contract(
+        'rij,ijG->rG', source_factor, occupied_pair)
+    contract('rij,ijG->rG', response_factor, mixed_pair,
+             alpha=1., beta=1., out=auxiliary_low)
+    contract('rij,jiG->rG', response_factor, mixed_pair,
+             alpha=1., beta=1., out=auxiliary_low)
+    auxiliary_source = auxiliary_low.astype(cp.float64)
+    if include_metric_source:
+        metric = cp.asarray(factors.metric_source, dtype=cp.float64)
+        contract('sr,sG->rG', metric, auxiliary_real,
+                 alpha=-1., beta=1., out=auxiliary_source)
+
+    weighted_source = contract(
+        'rij,rG->ijG', source_factor, weighted32)
+    weighted_response = contract(
+        'rij,rG->ijG', response_factor, weighted32)
+    left = contract('pi,ijG->pjG', occupied, weighted_source)
+    ao_low = contract('pjG,qj->pqG', left, occupied)
+    left = contract('pi,ijG->pjG', occupied, weighted_response)
+    contract('pjG,qj->pqG', left, response,
+             alpha=1., beta=1., out=ao_low)
+    left = contract('pi,ijG->pjG', response, weighted_response)
+    contract('pjG,qj->pqG', left, occupied,
+             alpha=1., beta=1., out=ao_low)
+    return (cp.ascontiguousarray(auxiliary_source),
+            cp.ascontiguousarray(ao_low.astype(cp.float64)))
+
+
+def _mixed_raw_pair_values(
+        output, left, right, row, column, maximum, accumulate):
+    '''Accumulate FP32 raw-pair dot products into an FP64 destination.'''
+    for q0, q1 in lib.prange(0, int(row.size), int(maximum)):
+        value = contract(
+            'rki,ki->rk', left[:, row[q0:q1]], right[column[q0:q1]])
+        value = value.T.astype(cp.float64)
+        if accumulate:
+            output[q0:q1] += value
+        else:
+            output[q0:q1] = value
+
+
+def _build_rhf_mo_response_short_range_source_block_mixed(
+        factors, pair_addresses, auxiliary_start=0, auxiliary_stop=None,
+        pair_block_size=DEFAULT_RAW_PAIR_BLOCK_SIZE, out=None,
+        pair_indices=None):
+    '''Build one SR raw-pair source with FP32 dots and FP64 output.'''
+    occupied, response, source_all, response_all = _mixed_factor_cache(
+        factors)
+    naux = int(source_all.shape[0])
+    start = int(auxiliary_start)
+    stop = naux if auxiliary_stop is None else int(auxiliary_stop)
+    source_factor = source_all[start:stop]
+    response_factor = response_all[start:stop]
+    nao = int(occupied.shape[0])
+    if pair_indices is None:
+        addresses = cp.asarray(pair_addresses, dtype=cp.int64).ravel()
+        row, column = prepare_rhf_mo_short_range_pair_indices(
+            addresses, nao)
+    else:
+        row, column = pair_indices
+        row = cp.asarray(row, dtype=cp.int64).ravel()
+        column = cp.asarray(column, dtype=cp.int64).ravel()
+    pair_count = int(row.size)
+    maximum = _block_size(
+        pair_block_size, pair_count, 'pair_block_size')
+    if out is None:
+        output = cp.empty(
+            (pair_count, stop - start), dtype=cp.float64)
+    else:
+        output = cp.asarray(out)
+        if output.shape != (pair_count, stop - start):
+            raise ValueError(
+                'out must match the raw-pair and auxiliary block dimensions')
+        if output.dtype != cp.float64:
+            raise ValueError('mixed SR output must use FP64 dtype')
+    left = contract('mi,rij->rmj', occupied, source_factor)
+    _mixed_raw_pair_values(
+        output, left, occupied, row, column, maximum, False)
+    left = contract('mi,rij->rmj', occupied, response_factor)
+    _mixed_raw_pair_values(
+        output, left, response, row, column, maximum, True)
+    left = contract('mi,rij->rmj', response, response_factor)
+    _mixed_raw_pair_values(
+        output, left, occupied, row, column, maximum, True)
+    return output
 
 
 def contract_rhf_mo_factorized_long_range_block(

@@ -6,6 +6,8 @@ the target evaluates a supported DFA on that converged density and never
 executes a target RKS SCF cycle.
 '''
 
+import warnings
+
 import cupy as cp
 import numpy as np
 from gpu4pyscf.lib.cupy_helper import tag_array
@@ -19,6 +21,11 @@ from pyscf.pbc import gto
 from dcforge.gpu.pbc import multigrid as dc_multigrid
 from dcforge.gpu.pbc.df.fft import FFTDF
 from dcforge.gpu.pbc.df.gdf import GDF
+from dcforge.gpu.pbc.df.gdf.precision import (
+    GDFBuildPrecisionWarning,
+    GDFMixedPrecisionWarning,
+    normalize_profile as normalize_gdf_precision_profile,
+)
 from dcforge.gpu.pbc.df.rsdf import RSDF
 
 _SUPPORTED_TARGET_XC = ('PBE', 'R2SCAN')
@@ -144,6 +151,23 @@ class RHFDFT(rks.RKS):
         'mf_hf', 'e_hf', 'e_dft', 'dm_hf', 'target_fock',
         'target_fock_signature', '_source_converged', 'multigrid_backend',
         'multigrid_with_j', 'source_jk_backend',
+        'source_precision_policy', 'source_precision_policy_effective',
+        'source_precision_block_size', 'source_precision_copy_block_size',
+        'source_precision_energy_normalization',
+        'source_precision_adaptive_norm_fraction',
+        'source_precision_coarse_minimum_cycle',
+        'source_precision_coarse_energy_change_per_unit',
+        'source_precision_coarse_density_change_norm',
+        'source_precision_coarse_ao_commutator_norm',
+        'source_precision_fine_minimum_cycle',
+        'source_precision_fine_energy_change_per_unit',
+        'source_precision_fine_density_change_norm',
+        'source_precision_fine_ao_commutator_norm',
+        'source_precision_final_energy_tol_per_unit',
+        'source_precision_final_residual_tol',
+        'source_precision_fallback', 'source_precision_report',
+        'gdf_precision_profile', 'gdf_precision_profile_effective',
+        'gdf_precision_report', '_gdf_precision_warning_profile',
     }
     _hf_options = (
         'max_memory', 'verbose', 'stdout', 'chkfile', 'conv_tol',
@@ -180,11 +204,53 @@ class RHFDFT(rks.RKS):
         self.multigrid_backend = None
         self.multigrid_with_j = False
         self.source_jk_backend = self.with_df.backend_name
+        # Native FP64 remains the default.  The guarded mixed route must be
+        # requested explicitly and is limited to positive real-Gamma GDF RHF.
+        self.source_precision_policy = 'fp64'
+        self.source_precision_policy_effective = 'fp64'
+        self.source_precision_block_size = 256
+        self.source_precision_copy_block_size = 256
+        self.source_precision_energy_normalization = 1
+        self.source_precision_adaptive_norm_fraction = .9
+        self.source_precision_coarse_minimum_cycle = 2
+        self.source_precision_coarse_energy_change_per_unit = 1.e-4
+        self.source_precision_coarse_density_change_norm = 1.e-1
+        self.source_precision_coarse_ao_commutator_norm = 1.e-1
+        self.source_precision_fine_minimum_cycle = 4
+        self.source_precision_fine_energy_change_per_unit = 1.e-7
+        self.source_precision_fine_density_change_norm = 1.e-3
+        self.source_precision_fine_ao_commutator_norm = 1.e-3
+        self.source_precision_final_energy_tol_per_unit = 1.e-7
+        self.source_precision_final_residual_tol = 1.e-5
+        self.source_precision_fallback = True
+        self.source_precision_report = None
+        self.gdf_precision_profile = 'fp64'
+        self.gdf_precision_profile_effective = 'fp64'
+        self.gdf_precision_report = None
+        self._gdf_precision_warning_profile = None
 
     @property
     def device(self):
         '''Return the backend owner without moving any state to the host.'''
         return 'gpu'
+
+    def dump_flags(self, verbose=None):
+        '''Log fixed-density and GDF precision controls in PySCF style.'''
+        rks.RKS.dump_flags(self, verbose)
+        logger.info(self, 'gdf_precision_profile = %s',
+                    self.gdf_precision_profile)
+        logger.info(self, 'gdf_precision_profile_effective = %s',
+                    self.gdf_precision_profile_effective)
+        logger.info(self, 'source_precision_policy = %s',
+                    self.source_precision_policy)
+        logger.info(self, 'source_precision_policy_effective = %s',
+                    self.source_precision_policy_effective)
+        if self.gdf_precision_profile == 'fp32_build':
+            logger.warn(
+                self, 'fp32_build uses an approximate FP32/complex64 CDERI '
+                'transformation; SCF/CPHF residuals do not bound its error '
+                'relative to fp64')
+        return self
 
     def kernel_hf(self, dm0=None, **kwargs):
         '''Run source GPU RHF with the active FFTDF/GDF/RSDF provider.
@@ -200,8 +266,52 @@ class RHFDFT(rks.RKS):
                 Converged source RHF energy in Hartree.
         '''
         _check_input(self)
+        self._apply_gdf_precision_profile()
         self._copy_hf_options(self, self.mf_hf)
-        e_hf = self.mf_hf.kernel(dm0=dm0, **kwargs)
+        policy = str(self.source_precision_policy).strip().lower()
+        if policy not in ('fp64', 'mixed', 'persistent_mixed'):
+            raise ValueError(
+                'source_precision_policy must be fp64, mixed, or '
+                'persistent_mixed')
+        self.source_precision_report = None
+        if policy == 'fp64':
+            e_hf = self.mf_hf.kernel(dm0=dm0, **kwargs)
+            self.source_precision_policy_effective = 'fp64'
+        else:
+            if not isinstance(self.with_df, GDF):
+                raise NotImplementedError(
+                    'source mixed precision requires GPU real-Gamma GDF')
+            from dcforge.gpu.pbc.scf import run_mixed_source_scf
+
+            e_hf, report = run_mixed_source_scf(
+                self.mf_hf, dm0=dm0,
+                block_size=self.source_precision_block_size,
+                copy_block_size=self.source_precision_copy_block_size,
+                energy_normalization=(
+                    self.source_precision_energy_normalization),
+                adaptive_norm_fraction=(
+                    self.source_precision_adaptive_norm_fraction),
+                thresholds=self._source_precision_thresholds(),
+                final_energy_tol_per_unit=(
+                    self.source_precision_final_energy_tol_per_unit),
+                final_residual_tol=(
+                    self.source_precision_final_residual_tol),
+                fallback=bool(self.source_precision_fallback),
+                kernel_kwargs=kwargs,
+                persistent=policy == 'persistent_mixed')
+            self.source_precision_report = report
+            self.source_precision_policy_effective = report[
+                'effective_policy']
+        self.gdf_precision_profile_effective = (
+            self.with_df.gdf_precision_profile_effective
+            if isinstance(self.with_df, GDF) else 'fp64')
+        self.gdf_precision_report = (
+            None if not isinstance(self.with_df, GDF) else {
+                'requested_profile': self.gdf_precision_profile,
+                'effective_profile': self.gdf_precision_profile_effective,
+                'provider': self.with_df.gdf_precision_report,
+                'source_scf': self.source_precision_report,
+            })
         if not self.mf_hf.converged:
             raise RuntimeError('periodic source RHF calculation did not converge')
         self._source_converged = True
@@ -330,6 +440,110 @@ class RHFDFT(rks.RKS):
             raise TypeError('with_df must be dcforge GPU PBC GDF')
         return self._set_provider(with_df)
 
+    def set_gdf_precision_profile(
+            self, profile='fp64', block_size=256,
+            energy_normalization=1):
+        r'''Select the real-Gamma GDF precision policy.
+
+        Args:
+            profile : str
+                ``'fp64'`` retains the reference GPU4PySCF GDF build,
+                storage, source SCF, Z-vector and derivative contractions.
+                ``'mixed'`` builds CDERI in FP64, stores it in FP32, and uses
+                staged mixed-precision SCF/Z/derivative contractions.
+                ``'fp32_build'`` additionally evaluates the large CDERI
+                metric transformation and reciprocal contraction in
+                FP32/complex64.
+            block_size : int
+                Auxiliary rows transferred for each source J/K contraction.
+            energy_normalization : int
+                Positive physical count used only by SCF precision-transition
+                gates.  For a water-only Cell this is normally ``nwater``.
+
+        Returns:
+            RHFDFT
+                This workflow, following PySCF's chainable style.
+
+        Notes:
+            ``mixed`` is an opt-in moderate approximation.  It discards CDERI
+            bits only after the native FP64 transformation and must be checked
+            against ``fp64`` on a representative subset.
+
+            ``fp32_build`` is an aggressive experimental approximation.  FP32
+            roundoff is accumulated while CDERI is formed, so a converged SCF
+            or CPHF residual proves stationarity only for that approximate
+            Hamiltonian.  It does not bound the error relative to ``fp64``.
+            Recovering the reference result requires rebuilding CDERI.
+
+            Both accelerated profiles currently require a positive-metric,
+            single-GPU, three-dimensional real-Gamma GDF calculation with
+            mapped-host CDERI.  Sampled k-points, RSDF and stress are excluded.
+        '''
+        profile = normalize_gdf_precision_profile(profile)
+        if not isinstance(self.with_df, GDF):
+            raise NotImplementedError(
+                'GDF precision profiles require density_fit/GDF')
+        if int(block_size) < 1:
+            raise ValueError('GDF precision block_size must be positive')
+        if int(energy_normalization) < 1:
+            raise ValueError('energy_normalization must be positive')
+        self.gdf_precision_profile = profile
+        self.gdf_precision_profile_effective = None
+        self.gdf_precision_report = None
+        self.source_precision_block_size = int(block_size)
+        self.source_precision_copy_block_size = int(block_size)
+        self.source_precision_energy_normalization = int(
+            energy_normalization)
+        self._apply_gdf_precision_profile(force_warning=True)
+        return self
+
+    def source_mixed_precision(
+            self, block_size=256, copy_block_size=256,
+            energy_normalization=1, adaptive_norm_fraction=.9,
+            fallback=True):
+        '''Enable guarded mixed-to-native FP64 source RHF.
+
+        Args:
+            block_size : int
+                Auxiliary rows per FP32 J/K contraction.
+            copy_block_size : int
+                Auxiliary rows converted while building the mapped-host FP32
+                sidecar.
+            energy_normalization : int
+                Positive physical count used only to normalize SCF transition
+                gates.  For a water-only Cell this is normally ``nwater``.
+            adaptive_norm_fraction : float
+                Factor-norm fraction whose adaptive K outer product is FP64.
+            fallback : bool
+                Resume from the current density with native FP64 when an
+                allocation or the mandatory final audit fails.
+
+        Returns:
+            RHFDFT
+                This workflow, following PySCF's chainable configuration style.
+        '''
+        if not isinstance(self.with_df, GDF):
+            raise NotImplementedError(
+                'source_mixed_precision requires density_fit/GDF')
+        if int(block_size) < 1 or int(copy_block_size) < 1:
+            raise ValueError('source mixed-precision block sizes must be positive')
+        if int(energy_normalization) < 1:
+            raise ValueError('energy_normalization must be positive')
+        if not 0. < float(adaptive_norm_fraction) <= 1.:
+            raise ValueError('adaptive_norm_fraction must be in (0,1]')
+        self.source_precision_policy = 'mixed'
+        self.source_precision_block_size = int(block_size)
+        self.source_precision_copy_block_size = int(copy_block_size)
+        self.source_precision_energy_normalization = int(
+            energy_normalization)
+        self.source_precision_adaptive_norm_fraction = float(
+            adaptive_norm_fraction)
+        self.source_precision_fallback = bool(fallback)
+        if str(self.with_df.cderi_storage).lower() == 'auto':
+            self.with_df.cderi_auto_sidecar_factor = max(
+                .5, float(self.with_df.cderi_auto_sidecar_factor))
+        return self
+
     def rs_density_fit(self, auxbasis=None, with_df=None):
         '''Replace source and target by one shared Gamma-point GPU RSDF provider.'''
         if with_df is None:
@@ -421,6 +635,12 @@ class RHFDFT(rks.RKS):
         self.e_hf = self.e_dft = self.dm_hf = self.target_fock = None
         self.target_fock_signature = None
         self._source_converged = False
+        self.source_precision_policy_effective = (
+            'fp64' if self.source_precision_policy == 'fp64' else None)
+        self.source_precision_report = None
+        self.gdf_precision_profile_effective = (
+            'fp64' if self.gdf_precision_profile == 'fp64' else None)
+        self.gdf_precision_report = None
         self.source_jk_backend = getattr(
             self.mf_hf, 'dcforge_source_jk_backend',
             self.with_df.backend_name)
@@ -440,7 +660,11 @@ class RHFDFT(rks.RKS):
             raise NotImplementedError('unsupported GPU PBC analytic-gradient provider')
         from dcforge.gpu.pbc.grad.rhf_dft import Gradients
 
-        return Gradients(self)
+        mf_grad = Gradients(self)
+        if self.gdf_precision_profile in ('mixed', 'fp32_build'):
+            mf_grad.precision_policy = 'mixed'
+            mf_grad.gdf_derivative_precision = 'mixed'
+        return mf_grad
 
     Gradients = nuc_grad_method
 
@@ -478,9 +702,84 @@ class RHFDFT(rks.RKS):
             if hasattr(source, key) and hasattr(target, key):
                 setattr(target, key, getattr(source, key))
 
+    def _source_precision_thresholds(self):
+        '''Return the scalar mixed-to-native transition ledger for one run.'''
+        return {
+            'coarse': {
+                'minimum_cycle': self.source_precision_coarse_minimum_cycle,
+                'energy_change_per_unit_ha': (
+                    self.source_precision_coarse_energy_change_per_unit),
+                'density_change_norm': (
+                    self.source_precision_coarse_density_change_norm),
+                'ao_commutator_norm': (
+                    self.source_precision_coarse_ao_commutator_norm),
+            },
+            'fine': {
+                'minimum_cycle': self.source_precision_fine_minimum_cycle,
+                'energy_change_per_unit_ha': (
+                    self.source_precision_fine_energy_change_per_unit),
+                'density_change_norm': (
+                    self.source_precision_fine_density_change_norm),
+                'ao_commutator_norm': (
+                    self.source_precision_fine_ao_commutator_norm),
+            },
+        }
+
+    def _apply_gdf_precision_profile(self, force_warning=False):
+        '''Synchronize one public profile across provider and source SCF.'''
+        profile = normalize_gdf_precision_profile(
+            self.gdf_precision_profile)
+        if profile != 'fp64' and not isinstance(self.with_df, GDF):
+            raise NotImplementedError(
+                'GDF precision profiles require density_fit/GDF')
+        if isinstance(self.with_df, GDF):
+            built = self.with_df._cderi is not None
+            built_profile = self.with_df.gdf_precision_profile_effective
+            if built and built_profile != profile:
+                # A factor cannot change precision by relabeling or casting.
+                # Invalidate source orbitals and rebuild from primitives under
+                # the requested profile, matching PySCF's reset-on-Hamiltonian
+                # change semantics.
+                self.reset()
+            self.with_df.gdf_precision_profile = profile
+            self.with_df.gdf_derivative_precision = (
+                'mixed' if profile != 'fp64' else 'fp64')
+        if profile != 'fp64':
+            self.source_precision_policy = 'persistent_mixed'
+            # There is no separate sidecar: source SCF and response reuse the
+            # provider-owned persistent FP32 factor.
+            self.with_df.cderi_auto_sidecar_factor = 0.
+            if (force_warning
+                    or self._gdf_precision_warning_profile != profile):
+                if profile == 'mixed':
+                    warnings.warn(
+                        "gdf_precision_profile='mixed' stores the completed "
+                        'FP64-built CDERI in FP32 and uses mixed SCF/Z/gradient '
+                        'contractions. Validate energy and force errors against '
+                        "'fp64' on a representative subset.",
+                        GDFMixedPrecisionWarning, stacklevel=3)
+                else:
+                    warnings.warn(
+                        "gdf_precision_profile='fp32_build' is an aggressive "
+                        'experimental approximation: the CDERI transformation '
+                        'itself uses FP32/complex64 and accumulated roundoff can '
+                        'bias energies and forces. SCF/CPHF residuals do not '
+                        "measure that bias. Rebuild with 'fp64' for an oracle.",
+                        GDFBuildPrecisionWarning, stacklevel=3)
+                self._gdf_precision_warning_profile = profile
+        elif self.source_precision_policy == 'persistent_mixed':
+            self.source_precision_policy = 'fp64'
+        self.gdf_precision_profile_effective = (
+            'fp64' if profile == 'fp64' else None)
+
     def _set_provider(self, provider):
         if provider.cell is not self.cell:
             raise ValueError('density-fitting provider must own the active Cell')
+        if (self.gdf_precision_profile != 'fp64'
+                and not isinstance(provider, GDF)):
+            raise NotImplementedError(
+                'non-FP64 GDF precision profiles cannot be transferred to '
+                'FFTDF or RSDF')
         if getattr(self.mf_hf, 'dcforge_experimental_source', None):
             mf_hf = DFRHF(self.cell, exxdiv=self.exxdiv)
             self._copy_hf_options(self, mf_hf)
@@ -494,6 +793,16 @@ class RHFDFT(rks.RKS):
         self.target_fock_signature = None
         self._source_converged = False
         self.source_jk_backend = provider.backend_name
+        self.source_precision_policy_effective = (
+            'fp64' if self.source_precision_policy == 'fp64' else None)
+        self.source_precision_report = None
+        if isinstance(provider, GDF):
+            provider.gdf_precision_profile = self.gdf_precision_profile
+            provider.gdf_derivative_precision = (
+                'mixed' if self.gdf_precision_profile != 'fp64' else 'fp64')
+        self.gdf_precision_profile_effective = (
+            'fp64' if self.gdf_precision_profile == 'fp64' else None)
+        self.gdf_precision_report = None
         self.converged = False
         return self
 

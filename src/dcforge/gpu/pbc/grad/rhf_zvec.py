@@ -10,7 +10,7 @@ from gpu4pyscf.scf import cphf
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
-    '''Return ``[(A+B)^HF Z - F^PBE_vo]`` in the Gamma VO space.
+    '''Return ``[(A+B)^HF Z - F^target_vo]`` in the Gamma VO space.
 
     Args:
         zvec : cupy.ndarray of shape (nvir, nocc)
@@ -104,7 +104,7 @@ def _dense_solve(mo_energy, mo_occ, fvo, vind):
     return zvec, asymmetry
 
 
-def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+def _gmres_solve(mo_energy, mo_occ, fvo, vind, krylov_tol, max_cycle,
                  initial_guess=None):
     '''Solve the device-resident VO adjoint equation after CPHF stagnation.
 
@@ -120,9 +120,9 @@ def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
             Positive right-hand side of the adjoint equation.
         vind : callable
             Source-HF two-electron VO Hessian action.
-        conv_tol : float
-            CPHF convergence request.  GMRES uses the stricter of this value
-            and ``1e-10`` for its relative Krylov stopping criterion.
+        krylov_tol : float
+            Effective relative Krylov stopping criterion resolved by
+            :func:`solve_z_vector`.  The solver does not silently tighten it.
         max_cycle : int
             Maximum restarted GMRES cycle count.
 
@@ -153,7 +153,7 @@ def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
 
     zvec, info = gmres(
         operator, fvo.ravel(), M=inverse_gap,
-        rtol=min(float(conv_tol), 1e-10), atol=0.,
+        rtol=float(krylov_tol), atol=0.,
         restart=min(nov, 80), maxiter=int(max_cycle),
         # The diagonal-gap solution is both a useful initial guess and avoids
         # passing GMRES's otherwise exact-zero initial vector into the
@@ -169,7 +169,7 @@ def _gmres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
     return cp.asarray(zvec).reshape(nvir, nocc), int(info), iteration_count
 
 
-def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+def _minres_solve(mo_energy, mo_occ, fvo, vind, krylov_tol, max_cycle,
                   initial_guess=None):
     '''Solve the real-symmetric Gamma adjoint with preconditioned MINRES.
 
@@ -209,7 +209,7 @@ def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
 
     zvec, info = minres(
         operator, fvo.ravel(), M=inverse_gap,
-        tol=min(float(conv_tol), 1e-10), maxiter=int(max_cycle),
+        tol=float(krylov_tol), maxiter=int(max_cycle),
         # A nonzero diagonal-gap initial guess preserves the GDF provider
         # contract just as in GMRES: its factorizer cannot reshape an exact
         # zero transition density, although the mathematical action is zero.
@@ -224,8 +224,8 @@ def _minres_solve(mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
 def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
                    residual_tol=1e-8, max_cycle=200,
                    dense_oracle_size=256, refinement_solver='minres',
-                   initial_guess=None, log=None):
-    '''Solve ``[(A+B)^HF]^T Z = F^PBE_vo`` with a residual gate.
+                   initial_guess=None, krylov_tol=None, log=None):
+    '''Solve ``[(A+B)^HF]^T Z = F^target_vo`` with a residual gate.
 
     ``s1=None`` is deliberate: this is the geometry-independent adjoint
     equation.  Nuclear overlap derivatives enter the explicit response terms
@@ -246,6 +246,13 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
     Kwargs:
         conv_tol : float
             Requested GPU4PySCF CPHF Krylov tolerance.
+        krylov_tol : float or None
+            Explicit matrix-free MINRES/GMRES stopping tolerance. ``None``
+            preserves the production safety policy
+            ``min(conv_tol, 1e-10)``. A positive explicit value is an
+            experiment-only override; it never replaces ``residual_tol`` as
+            the physical acceptance gate. Small systems that use the
+            GPU4PySCF CPHF/dense route do not consume this option.
         residual_tol : float
             Absolute threshold on the reconstructed unpreconditioned physical
             residual.  This is the acceptance criterion for every solver.
@@ -280,6 +287,14 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
     refinement_solver = str(refinement_solver).lower()
     if refinement_solver not in ('gmres', 'minres'):
         raise ValueError("refinement_solver must be 'gmres' or 'minres'")
+    conv_tol = float(conv_tol)
+    residual_tol = float(residual_tol)
+    if conv_tol <= 0. or residual_tol <= 0.:
+        raise ValueError('conv_tol and residual_tol must be positive')
+    requested_krylov_tol = (
+        None if krylov_tol is None else float(krylov_tol))
+    if requested_krylov_tol is not None and requested_krylov_tol <= 0.:
+        raise ValueError('krylov_tol must be positive or None')
 
     total_start = time.perf_counter()
     gap = (mo_energy[mo_occ == 0, None] - mo_energy[mo_occ > 0])
@@ -295,6 +310,16 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
     # direct matrix-free route remains exact and is accepted only through the
     # same independently reconstructed residual below.
     use_cphf_primary = fvo.size <= dense_oracle_size
+    production_krylov_tol = min(conv_tol, 1e-10)
+    if use_cphf_primary:
+        effective_krylov_tol = conv_tol
+        krylov_tolerance_policy = 'gpu4pyscf_cphf_requested'
+    elif requested_krylov_tol is None:
+        effective_krylov_tol = production_krylov_tol
+        krylov_tolerance_policy = 'production_safety_cap'
+    else:
+        effective_krylov_tol = requested_krylov_tol
+        krylov_tolerance_policy = 'explicit_matrix_free_experiment'
     selected_initial_guess = None
     if initial_guess_requested and use_cphf_primary:
         initial_guess_fallback_reason = (
@@ -340,6 +365,9 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
     matrix_asymmetry = None
     refinement_wall_seconds = 0.
     refinement_iterations = None
+    cleanup_wall_seconds = 0.
+    cleanup_iterations = None
+    cleanup_krylov_tol = None
     if residual_max_abs > residual_tol and fvo.size <= dense_oracle_size:
         refinement_start = time.perf_counter()
         zvec, matrix_asymmetry = _dense_solve(
@@ -354,13 +382,37 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         iterative_solve = (
             _minres_solve if refinement_solver == 'minres' else _gmres_solve)
         zvec, iterative_info, refinement_iterations = iterative_solve(
-            mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
+            mo_energy, mo_occ, fvo, vind, effective_krylov_tol, max_cycle,
             initial_guess=selected_initial_guess)
         refinement_wall_seconds = time.perf_counter() - refinement_start
         solver = f'cupyx_{refinement_solver}(info={iterative_info})'
         residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, vind)
         residual_max_abs = (
             float(cp.max(cp.abs(residual)).get()) if residual.size else 0.0)
+        # A loose experiment may stop before the unchanged physical residual
+        # gate.  Measure the real cost of recovering that gate by restarting
+        # the same fixed-precision solver from the approximate Z vector at the
+        # established production tolerance.  This cleanup is deliberately
+        # absent when the requested residual gate is already satisfied.
+        if (residual_max_abs > residual_tol
+                and requested_krylov_tol is not None
+                and effective_krylov_tol > production_krylov_tol):
+            cleanup_start = time.perf_counter()
+            cleanup_krylov_tol = production_krylov_tol
+            zvec, cleanup_info, cleanup_iterations = iterative_solve(
+                mo_energy, mo_occ, fvo, vind, cleanup_krylov_tol, max_cycle,
+                initial_guess=zvec)
+            cleanup_wall_seconds = time.perf_counter() - cleanup_start
+            refinement_wall_seconds += cleanup_wall_seconds
+            refinement_iterations += cleanup_iterations
+            solver += (
+                f'->fp64_cleanup_{refinement_solver}'
+                f'(info={cleanup_info})')
+            residual = get_z_residual(
+                zvec, mo_energy, mo_occ, fvo, vind)
+            residual_max_abs = (
+                float(cp.max(cp.abs(residual)).get())
+                if residual.size else 0.0)
         # MINRES uses the real-Gamma Hessian symmetry.  Preserve a nonsymmetric
         # Krylov oracle for the rare case in which its own stopping criterion
         # is satisfied but the unpreconditioned physical residual is not.
@@ -369,8 +421,8 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         if residual_max_abs > residual_tol and refinement_solver == 'minres':
             refinement_start = time.perf_counter()
             zvec, gmres_info, gmres_iterations = _gmres_solve(
-                mo_energy, mo_occ, fvo, vind, conv_tol, max_cycle,
-                initial_guess=selected_initial_guess)
+                mo_energy, mo_occ, fvo, vind, production_krylov_tol,
+                max_cycle, initial_guess=zvec)
             refinement_wall_seconds += time.perf_counter() - refinement_start
             refinement_iterations += gmres_iterations
             solver += f'->cupyx_gmres(info={gmres_info})'
@@ -393,6 +445,14 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind, conv_tol=1e-9,
         'primary_wall_seconds': primary_wall_seconds,
         'refinement_wall_seconds': refinement_wall_seconds,
         'refinement_iterations': refinement_iterations,
+        'requested_conv_tol': conv_tol,
+        'requested_krylov_tol': requested_krylov_tol,
+        'effective_krylov_tol': effective_krylov_tol,
+        'krylov_tolerance_policy': krylov_tolerance_policy,
+        'physical_residual_tol': residual_tol,
+        'cleanup_krylov_tol': cleanup_krylov_tol,
+        'cleanup_wall_seconds': cleanup_wall_seconds,
+        'cleanup_iterations': cleanup_iterations,
         'response_backend': getattr(vind, 'backend', 'ao_density_gen_response'),
         'initial_guess_requested': initial_guess_requested,
         'initial_guess_used': initial_guess_used,

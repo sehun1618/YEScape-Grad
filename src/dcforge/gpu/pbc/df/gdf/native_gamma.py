@@ -251,6 +251,8 @@ def target_j_fock_derivative(
         occupied_coefficients=occupied_coefficients,
         response_orbitals=response_orbitals,
         adjoint_backend=adjoint_backend,
+        derivative_precision=getattr(
+            provider, 'gdf_derivative_precision', 'fp64'),
         profile_detail=profile_detail)
     provider.adjoint_host_cache_plan = metadata['adjoint'].get(
         'host_cache_plan')
@@ -304,6 +306,8 @@ def fock_bilinear_derivative(
         occupied_coefficients=occupied_coefficients,
         response_orbitals=response_orbitals,
         adjoint_backend=adjoint_backend,
+        derivative_precision=getattr(
+            provider, 'gdf_derivative_precision', 'fp64'),
         profile_detail=profile_detail)
     provider.adjoint_host_cache_plan = metadata['adjoint'].get(
         'host_cache_plan')
@@ -793,7 +797,7 @@ def _direct_adjoint_derivative(
         reciprocal_options, include_target_j=True, response_sign=-1.,
         profile_detail=False, adjoint_options=None,
         occupied_coefficients=None, response_orbitals=None,
-        adjoint_backend='auto'):
+        adjoint_backend='auto', derivative_precision='fp64'):
     r'''Apply the fused target-J/Z term through one primitive reverse adjoint.
 
     ``_signed_derivative`` is retained as the polarization reference route for
@@ -884,7 +888,11 @@ def _direct_adjoint_derivative(
                 response_sign=response_sign, profile_detail=profile_detail,
                 sorted_mo_factors=sorted_mo_factors,
                 backend_requested=backend_requested,
-                backend_fallback_reason=backend_fallback_reason)
+                backend_fallback_reason=backend_fallback_reason,
+                derivative_precision=derivative_precision)
+    if str(derivative_precision).lower() != 'fp64':
+        raise NotImplementedError(
+            'mixed GDF derivative contractions require mo_direct response')
     total_start = time.perf_counter() if profile_detail else None
     stage_start = total_start
     cell = intopt.cell
@@ -1077,7 +1085,7 @@ def _direct_rhf_mo_adjoint_derivative(
         reciprocal_options, include_target_j=True, response_sign=-1.,
         profile_detail=False, sorted_mo_factors=None,
         backend_requested='mo_direct',
-        backend_fallback_reason=None):
+        backend_fallback_reason=None, derivative_precision='fp64'):
     r'''Evaluate the exact RHF adjoint without persistent packed AO pairs.
 
     This is the promoted production NR3/NR4 path.  Short-range and
@@ -1094,6 +1102,10 @@ def _direct_rhf_mo_adjoint_derivative(
     explicit ``adjoint_backend='mo_direct'`` route.
     '''
     profile = {} if profile_detail else None
+    derivative_precision = str(derivative_precision).lower()
+    if derivative_precision not in ('fp64', 'mixed'):
+        raise ValueError(
+            'derivative_precision must be fp64 or mixed')
     total_start = time.perf_counter() if profile_detail else None
     stage_start = total_start
     cell = intopt.cell
@@ -1149,6 +1161,7 @@ def _direct_rhf_mo_adjoint_derivative(
         occupied, response, occupied_projection, mixed_projection,
         include_target_j=include_target_j, response_sign=response_sign,
         overwrite_projections=True)
+    factors.derivative_precision = derivative_precision
     projection_bytes = int(
         occupied_projection.nbytes + mixed_projection.nbytes)
     factor_bytes = int(
@@ -1179,6 +1192,12 @@ def _direct_rhf_mo_adjoint_derivative(
         'gradient_integration': (
             'production_mo_direct' if backend_requested == 'auto'
             else 'explicit_validation'),
+        'derivative_contraction_precision': derivative_precision,
+        'derivative_precision_note': (
+            None if derivative_precision == 'fp64' else
+            'MO source contractions use FP32 GEMM with FP64 transaction '
+            'outputs; primitive integrals, metric derivative and atom '
+            'reduction remain FP64'),
     }
     if profile_detail:
         stage_start = _finish_profile_stage(
@@ -1245,6 +1264,18 @@ def _direct_rhf_mo_adjoint_derivative(
                    + short_range_components['metric']),
         'ewald': np.asarray(ewald, dtype=float),
     }
+    term_components_by_range = {
+        'source_short_range': np.asarray(
+            short_range_components['source'], dtype=float),
+        'source_long_range': np.asarray(
+            long_range_components['source'], dtype=float),
+        'metric_central': np.asarray(metric_derivative, dtype=float),
+        'metric_short_range': np.asarray(
+            short_range_components['metric'], dtype=float),
+        'metric_long_range': np.asarray(
+            long_range_components['metric'], dtype=float),
+        'ewald': np.asarray(ewald, dtype=float),
+    }
     component_sum = sum(term_components.values())
     reciprocal_pair_cache = _mo_direct_pair_cache_metadata(
         reciprocal_options)
@@ -1272,6 +1303,7 @@ def _direct_rhf_mo_adjoint_derivative(
             naux * nao ** 2 * np.dtype(np.float64).itemsize),
         'signed_state_full_rank_bytes_avoided': 2 * naux * nao ** 2 * 8,
         'term_components': term_components,
+        'term_components_by_range': term_components_by_range,
         'term_component_residual_max_abs': float(np.max(np.abs(
             np.asarray(value, dtype=float) - component_sum))),
     }

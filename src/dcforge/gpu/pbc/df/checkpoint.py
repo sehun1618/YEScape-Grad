@@ -157,6 +157,11 @@ def save_provider_factor_checkpoint(
             Checkpoint provenance and exact byte/checksum metadata.
     '''
     _validate_built_provider(provider)
+    if getattr(provider, 'gdf_precision_profile', 'fp64') != 'fp64':
+        raise NotImplementedError(
+            'mixed-precision GDF factor checkpoints are not yet supported; '
+            'a checkpoint must not erase whether quantization occurred during '
+            'or after CDERI transformation')
     rows = max(1, int(block_size))
     identity = provider_factor_identity(provider) if identity is None else identity
     expected = provider_factor_identity(provider)
@@ -255,6 +260,10 @@ def load_provider_factor_checkpoint(
     ``hdf5`` leaves them in the user-owned checkpoint and streams slices.
     Dataset checksums are verified before any arrays are installed.
     '''
+    if getattr(provider, 'gdf_precision_profile', 'fp64') != 'fp64':
+        raise NotImplementedError(
+            'mixed-precision GDF profiles currently require a fresh provider '
+            'build; provider-factor checkpoint restore is FP64-only')
     if storage not in ('mapped_host', 'hdf5'):
         raise ValueError("storage must be 'mapped_host' or 'hdf5'")
     rows = max(1, int(block_size))

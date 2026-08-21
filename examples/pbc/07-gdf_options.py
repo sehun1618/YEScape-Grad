@@ -100,6 +100,9 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_residual_tol=1e-8,
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
+    # Fully FP64 is the public default.  See Case 7 below for the guarded
+    # response-only mixed-precision policy.
+    precision_policy='fp64',
     df_cphf_response_mode='direct_vo',
     # ``auto`` is already the production default; it is written explicitly
     # here only because this file documents the available controls.  It may
@@ -241,3 +244,30 @@ print('  term recomposition max abs = '
 # mf_grad.run()
 # stress = mf_grad.get_stress()  # requires an XC-only-MG stress workflow
 # print(mf_grad.resolved_memory_policy)
+
+
+#
+# Case 7: guarded mixed precision for only the direct-VO Z-vector action
+#
+# Energy, source SCF, target Fock, the accepted FP64 physical residual,
+# nuclear response and final gradient remain FP64.  The large repeated
+# CDERI products inside the Z solve use FP32 GEMM with FP64 inter-block sums.
+# A failed residual/refinement gate reruns the canonical FP64 solve and
+# records ``precision_policy_effective='fp64_fallback'``.
+#
+# mf_grad = mf.nuc_grad_method()
+# mf_grad.precision_policy = 'mixed'
+# mf_grad.run()
+# print(mf_grad.precision_policy_effective)
+# print(mf_grad.precision_fallback_reason)
+# print(mf_grad.mixed_precision_report)
+#
+# To avoid retaining a mapped-host FP64 CDERI beside the temporary FP32
+# sidecar, choose HDF5 *before* source SCF and request the capacity policy:
+#
+# mf = RHFDFT(cell, xc='PBE').density_fit(auxbasis='gth-szv')
+# mf.with_df.cderi_storage = 'hdf5'
+# mf.run()
+# mf_grad = mf.nuc_grad_method()
+# mf_grad.precision_policy = 'mixed_lowmem'
+# mf_grad.run()

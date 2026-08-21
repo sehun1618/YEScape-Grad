@@ -22,6 +22,7 @@ from dcforge.gpu.pbc.df.gdf import (
     target_j_fock_energy_derivative,
     target_j_fock_signed_energy_derivative,
 )
+from dcforge.gpu.pbc.df.rhf_mixed_response import solve_mixed_gdf_z_vector
 from dcforge.gpu.pbc.df.rhf_response import (
     gen_vind as gen_df_vind,
 )
@@ -200,6 +201,26 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         raise NotImplementedError(
             "hcore_method='gdf' requires a GPU GDF provider; "
             "use 'auto' or 'grid'")
+    precision_policy = str(mf_grad.precision_policy).lower()
+    if precision_policy not in ('fp64', 'mixed', 'mixed_lowmem'):
+        raise ValueError(
+            'precision_policy must be fp64, mixed, or mixed_lowmem')
+    if precision_policy != 'fp64' and not isinstance(mf.with_df, GDF):
+        raise NotImplementedError(
+            'mixed precision currently requires real-Gamma GDF')
+    derivative_precision = str(
+        mf_grad.gdf_derivative_precision).lower()
+    if derivative_precision not in ('fp64', 'mixed'):
+        raise ValueError(
+            'gdf_derivative_precision must be fp64 or mixed')
+    if derivative_precision != 'fp64' and not isinstance(mf.with_df, GDF):
+        raise NotImplementedError(
+            'mixed GDF derivative contractions require real-Gamma GDF')
+    if isinstance(mf.with_df, GDF):
+        mf.with_df.gdf_derivative_precision = derivative_precision
+    mf_grad.precision_policy_effective = precision_policy
+    mf_grad.precision_fallback_reason = None
+    mf_grad.mixed_precision_report = None
     total_start = _profile_start(mf_grad)
 
     mo_energy = cp.asarray(mo_energy)
@@ -238,7 +259,27 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     _progress(mf_grad, 'z_vector')
     stage_start = _profile_start(mf_grad)
     if response_state is None:
-        if isinstance(mf.with_df, (GDF, RSDF)):
+        if precision_policy != 'fp64':
+            if mf_grad.df_cphf_response_mode != 'direct_vo':
+                raise ValueError(
+                    "precision_policy='mixed' requires "
+                    "df_cphf_response_mode='direct_vo'")
+            zvec, z_info, mixed_profile = solve_mixed_gdf_z_vector(
+                mf_hf, mo_energy, mo_occ, Co, Cv, fvo,
+                conv_tol=mf_grad.cphf_conv_tol,
+                residual_tol=mf_grad.cphf_residual_tol,
+                max_cycle=mf_grad.cphf_max_cycle,
+                refinement_solver=mf_grad.cphf_refinement_solver,
+                initial_guess=mf_grad.z_initial_guess,
+                require_hdf5=precision_policy == 'mixed_lowmem',
+                log=log)
+            mf_grad.z_response_profile = mixed_profile
+            mf_grad.mixed_precision_report = mixed_profile
+            fallback = mixed_profile.get('fallback')
+            if fallback is not None:
+                mf_grad.precision_policy_effective = 'fp64_fallback'
+                mf_grad.precision_fallback_reason = fallback['reason']
+        elif isinstance(mf.with_df, (GDF, RSDF)):
             # Keep GPU4PySCF's AO-density response as the oracle used by the
             # moving-overlap term below.  Repeated Z-vector actions can
             # exploit their known cross-factor density without changing the
@@ -262,22 +303,24 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                     'df_cphf_response_mode must be direct_vo or ao_oracle')
         else:
             vind = gen_vind(Co, Cv, fvind)
-        try:
-            zvec, z_info = solve_z_vector(
-                mo_energy, mo_occ, fvo, vind,
-                conv_tol=mf_grad.cphf_conv_tol,
-                residual_tol=mf_grad.cphf_residual_tol,
-                max_cycle=mf_grad.cphf_max_cycle,
-                refinement_solver=mf_grad.cphf_refinement_solver,
-                initial_guess=mf_grad.z_initial_guess,
-                log=log,
-            )
-        finally:
-            close_response = getattr(vind, 'close', None)
-            if close_response is not None:
-                mf_grad.z_response_profile = close_response()
-            if 'z_info' not in locals():
-                mf_grad.z_initial_guess = None
+        if precision_policy == 'fp64':
+            try:
+                zvec, z_info = solve_z_vector(
+                    mo_energy, mo_occ, fvo, vind,
+                    conv_tol=mf_grad.cphf_conv_tol,
+                    krylov_tol=mf_grad.cphf_krylov_tol,
+                    residual_tol=mf_grad.cphf_residual_tol,
+                    max_cycle=mf_grad.cphf_max_cycle,
+                    refinement_solver=mf_grad.cphf_refinement_solver,
+                    initial_guess=mf_grad.z_initial_guess,
+                    log=log,
+                )
+            finally:
+                close_response = getattr(vind, 'close', None)
+                if close_response is not None:
+                    mf_grad.z_response_profile = close_response()
+                if 'z_info' not in locals():
+                    mf_grad.z_initial_guess = None
         z_warm_start_metadata = {
             **(mf_grad.z_warm_start_projection or {}),
             'requested': z_info['initial_guess_requested'],
@@ -308,6 +351,15 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         use_response_state(mf_grad, response_state, reused=True)
         z_warm_start_metadata = response_state.get(
             'z_warm_start_metadata')
+    if precision_policy != 'fp64' and mf_grad.mixed_precision_report is None:
+        # A second gradient/stress call may reuse the bounded response state
+        # without rebuilding FP32 CDERI.  Preserve the original precision
+        # ledger so reuse is never mislabeled as an ordinary FP64 solve.
+        mf_grad.mixed_precision_report = mf_grad.z_response_profile
+        fallback = (mf_grad.mixed_precision_report or {}).get('fallback')
+        if fallback is not None:
+            mf_grad.precision_policy_effective = 'fp64_fallback'
+            mf_grad.precision_fallback_reason = fallback['reason']
     _profile_stop(mf_grad, profile, 'z_vector_seconds', stage_start)
     mf_grad.z_warm_start_metadata = z_warm_start_metadata
     # A projected guess belongs to exactly one geometry and one solve.
@@ -381,6 +433,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             raise ValueError(
                 f"gdf_adjoint_backend='{adjoint_backend}' requires the direct "
                 "gdf_response_mode='auto' or 'fused' route")
+        if (derivative_precision == 'mixed'
+                and response_mode not in ('auto', 'fused')):
+            raise ValueError(
+                "gdf_derivative_precision='mixed' requires "
+                "gdf_response_mode='auto' or 'fused'")
         # ``P`` and ``D_Z`` contract the identical local H1.  ``auto`` uses
         # the analytic GDF-operator SR/LR pseudopotential representation and
         # never materializes the all-atom H1 tensor.  ``grid`` retains the
@@ -474,6 +531,8 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             mf_grad.gdf_adjoint_backend_fallback_reason = adjoint_metadata[
                 'backend_fallback_reason']
             components = response_memory['term_components']
+            mf_grad.gdf_response_range_components = response_memory.get(
+                'term_components_by_range')
             _progress(mf_grad, 'source_fock')
             stage_start = _profile_start(mf_grad)
             de_fock = grad_fock_gdf(
@@ -603,6 +662,8 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             # that exact subterm partition without pretending to have dispatched
             # separately cached target-J and source-Fock kernels.
             components = response_memory['term_components']
+            mf_grad.gdf_response_range_components = response_memory.get(
+                'term_components_by_range')
             mf_grad.de_j_fock_source = np.asarray(components['source'])
             mf_grad.de_j_fock_metric = np.asarray(components['metric'])
             mf_grad.de_j_fock_ewald = np.asarray(components['ewald'])
@@ -733,8 +794,12 @@ class Gradients(gpu_rhf_grad.GradientsBase):
     '''Analytic nuclear gradient of Gamma-point GPU ``E_DFA[P_RHF]``.'''
 
     _keys = gpu_rhf_grad.GradientsBase._keys | {
-        'cphf_conv_tol', 'cphf_residual_tol', 'cphf_max_cycle',
+        'cphf_conv_tol', 'cphf_krylov_tol', 'cphf_residual_tol',
+        'cphf_max_cycle',
         'cphf_refinement_solver', 'df_cphf_response_mode',
+        'precision_policy', 'precision_policy_effective',
+        'precision_fallback_reason', 'mixed_precision_report',
+        'gdf_derivative_precision',
         'df_cphf_response_cache',
         'df_cphf_response_memory_fraction',
         'df_cphf_response_minimum_reserve_bytes',
@@ -770,10 +835,14 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'de_j_fock_term_residual_max_abs',
         'gdf_reciprocal_memory_plan', 'gdf_reciprocal_zero_order',
         'gdf_reciprocal_derivative', 'gdf_response_profile',
-        'gdf_response_workspace',
+        'gdf_response_workspace', 'gdf_response_range_components',
         'z_primary_wall_seconds', 'z_refinement_wall_seconds',
         'z_refinement_iterations', 'z_wall_seconds',
         'z_current_wall_seconds', 'z_response_backend',
+        'z_requested_conv_tol', 'z_requested_krylov_tol',
+        'z_effective_krylov_tol', 'z_krylov_tolerance_policy',
+        'z_physical_residual_tol', 'z_cleanup_krylov_tol',
+        'z_cleanup_wall_seconds', 'z_cleanup_iterations',
         'rsdf_response_metadata', 'rsdf_source_reciprocal',
         'cderi_release_metadata',
         'memory_policy', 'property_sequence', 'resolved_memory_policy',
@@ -787,12 +856,31 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         gpu_rhf_grad.GradientsBase.__init__(self, mf)
         self.grid_response = True
         self.cphf_conv_tol = 1e-9
+        # ``None`` preserves the established matrix-free safety cap
+        # ``min(cphf_conv_tol, 1e-10)``.  A positive value is an explicit
+        # tolerance-study override and remains subordinate to the separately
+        # reconstructed physical residual gate.
+        self.cphf_krylov_tol = None
         self.cphf_residual_tol = 1e-8
         self.cphf_max_cycle = 200
         # At real Gamma the restricted orbital Hessian is self-adjoint.  The
         # MINRES route avoids restarted-GMRES storage; ``rhf_zvec`` retries
         # GMRES if its independently reconstructed residual is not accepted.
         self.cphf_refinement_solver = 'minres'
+        # The public default remains the fully FP64 response.  ``mixed`` is
+        # an explicit real-Gamma GDF opt-in that accelerates only repeated
+        # direct-VO products and accepts the result through an FP64 physical
+        # residual.  ``mixed_lowmem`` has the same arithmetic but requires an
+        # HDF5-backed FP64 source factor so the large FP64 CDERI is not also
+        # resident in mapped host memory.
+        self.precision_policy = 'fp64'
+        self.precision_policy_effective = 'fp64'
+        self.precision_fallback_reason = None
+        self.mixed_precision_report = None
+        # The public GDF precision profiles may lower only the large MO-source
+        # products in the native nuclear response.  Primitive derivative
+        # integrals, metric derivative and atom reduction remain FP64.
+        self.gdf_derivative_precision = 'fp64'
         # GDF/RSDF production accumulates only ``(J-K/2) C_occ`` before the
         # virtual projection.  The former complete-AO J/K route is retained
         # as an explicit numerical oracle, never selected automatically.
@@ -908,12 +996,21 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         self.gdf_reciprocal_derivative = None
         self.gdf_response_profile = None
         self.gdf_response_workspace = None
+        self.gdf_response_range_components = None
         self.rsdf_response_metadata = None
         self.rsdf_source_reciprocal = None
         self.cderi_release_metadata = None
         self.z_primary_wall_seconds = None
         self.z_refinement_wall_seconds = None
         self.z_refinement_iterations = None
+        self.z_requested_conv_tol = None
+        self.z_requested_krylov_tol = None
+        self.z_effective_krylov_tol = None
+        self.z_krylov_tolerance_policy = None
+        self.z_physical_residual_tol = None
+        self.z_cleanup_krylov_tol = None
+        self.z_cleanup_wall_seconds = None
+        self.z_cleanup_iterations = None
         self.z_wall_seconds = None
         self.z_current_wall_seconds = None
         self.z_response_backend = None
@@ -931,8 +1028,19 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         gpu_rhf_grad.GradientsBase.reset(self, cell)
         for name in (
                 'zvec', 'z_info', 'z_response_profile',
+                'z_rhs_max_abs', 'z_residual_max_abs',
+                'z_residual_relative', 'z_solver', 'z_dimension',
+                'z_primary_wall_seconds', 'z_refinement_wall_seconds',
+                'z_refinement_iterations', 'z_requested_conv_tol',
+                'z_requested_krylov_tol', 'z_effective_krylov_tol',
+                'z_krylov_tolerance_policy', 'z_physical_residual_tol',
+                'z_cleanup_krylov_tol', 'z_cleanup_wall_seconds',
+                'z_cleanup_iterations', 'z_wall_seconds',
+                'z_current_wall_seconds', 'z_response_backend',
+                'mixed_precision_report',
                 'response_state', 'response_state_signature',
                 'response_state_token', 'response_state_owner',
+                'gdf_response_range_components',
                 'gaussian_df_strain_response', 'gdf_strain_response',
                 'hcore_strain_components',
                 'target_xc_strain_metadata', 'ewald_strain',
@@ -950,6 +1058,8 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                 'low_level_numerical_components'):
             setattr(self, name, None)
         self.target_fock_reused = False
+        self.precision_policy_effective = str(self.precision_policy)
+        self.precision_fallback_reason = None
         self.response_state_reused = False
         self.response_state_reuse_count = 0
         self.z_solve_count = 0
@@ -960,10 +1070,18 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         gpu_rhf_grad.GradientsBase.dump_flags(self, verbose)
         logger.info(self, 'grid_response = %s', self.grid_response)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
+        logger.info(self, 'cphf_krylov_tol = %s', self.cphf_krylov_tol)
         logger.info(self, 'cphf_residual_tol = %g', self.cphf_residual_tol)
         logger.info(self, 'cphf_max_cycle = %d', self.cphf_max_cycle)
         logger.info(self, 'cphf_refinement_solver = %s',
                     self.cphf_refinement_solver)
+        logger.info(self, 'precision_policy = %s', self.precision_policy)
+        logger.info(self, 'precision_policy_effective = %s',
+                    self.precision_policy_effective)
+        logger.info(self, 'precision_fallback_reason = %s',
+                    self.precision_fallback_reason)
+        logger.info(self, 'gdf_derivative_precision = %s',
+                    self.gdf_derivative_precision)
         logger.info(self, 'df_cphf_response_mode = %s',
                     self.df_cphf_response_mode)
         logger.info(self, 'df_cphf_response_cache = %s',
@@ -1039,6 +1157,11 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         GPU4PySCF's conventional FFTDF-RKS stress cannot be returned for a
         nonvariational GDF target by inheritance or accidental delegation.
         '''
+        if getattr(self.base, 'gdf_precision_profile', 'fp64') != 'fp64':
+            raise NotImplementedError(
+                'GDF mixed-precision profiles are validated for energy and '
+                'nuclear gradient only; rebuild with profile=\'fp64\' before '
+                'analytic stress')
         from dcforge.gpu.pbc.stress.rhf_dft import kernel
 
         return kernel(self)
@@ -1049,6 +1172,9 @@ class Gradients(gpu_rhf_grad.GradientsBase):
 
     def as_stress_scanner(self, **reference_options):
         '''Return a production analytic energy-and-stress scanner.'''
+        if getattr(self.base, 'gdf_precision_profile', 'fp64') != 'fp64':
+            raise NotImplementedError(
+                'GDF mixed-precision profiles do not support stress scanners')
         from dcforge.gpu.pbc.stress.rhf_dft import as_stress_scanner
 
         return as_stress_scanner(self, **reference_options)

@@ -14,14 +14,21 @@ from pathlib import Path
 import cupy as cp
 import h5py
 import numpy as np
-from gpu4pyscf.lib.cupy_helper import get_avail_mem
+from gpu4pyscf.lib.cupy_helper import empty_mapped, get_avail_mem
 from pyscf.pbc.df import df as cpu_df
 
 CDERI_KEYS = {
     'cderi_storage', 'cderi_storage_path', 'cderi_storage_block_size',
     'cderi_preflight_max_bytes', 'cderi_memory_metadata',
+    'cderi_storage_resolved', 'cderi_auto_memory_fraction',
+    'cderi_auto_minimum_reserve_bytes', 'cderi_auto_max_bytes',
+    'cderi_auto_sidecar_factor', 'cderi_auto_plan',
+    '_cderi_preflight_memory_metadata',
     'release_cderi_after_response', '_cderi_storage_files',
 }
+
+DEFAULT_CDERI_AUTO_MEMORY_FRACTION = .8
+DEFAULT_CDERI_AUTO_MINIMUM_RESERVE_BYTES = 16 * 1024**3
 
 
 class H5CDERI:
@@ -50,10 +57,22 @@ class H5CDERI:
 def init_cderi_options(provider):
     '''Initialize PySCF-style provider options for CDERI memory ownership.'''
     provider.cderi_storage = 'mapped_host'
+    provider.cderi_storage_resolved = 'mapped_host'
     provider.cderi_storage_path = None
     provider.cderi_storage_block_size = 256
     provider.cderi_preflight_max_bytes = None
     provider.cderi_memory_metadata = None
+    provider.cderi_auto_memory_fraction = DEFAULT_CDERI_AUTO_MEMORY_FRACTION
+    provider.cderi_auto_minimum_reserve_bytes = (
+        DEFAULT_CDERI_AUTO_MINIMUM_RESERVE_BYTES)
+    provider.cderi_auto_max_bytes = None
+    # Additional persistent host storage required by the selected downstream
+    # algorithm, expressed relative to the exact FP64 central factor.  The
+    # production mixed-precision source and response paths use one FP32 copy,
+    # hence 0.5.  The ordinary FP64 path leaves this at zero.
+    provider.cderi_auto_sidecar_factor = 0.
+    provider.cderi_auto_plan = None
+    provider._cderi_preflight_memory_metadata = None
     provider.release_cderi_after_response = False
     provider._cderi_storage_files = []
 
@@ -81,6 +100,7 @@ def preflight_cderi_memory(provider):
     lower_pairs = nao * (nao + 1) // 2
     lower_bytes = factor_blocks * naux * lower_pairs * dtype.itemsize
     square_bytes = factor_blocks * naux * nao * nao * dtype.itemsize
+    available_host = _available_host_bytes()
     report = {
         'phase': 'preflight',
         'storage_policy': str(provider.cderi_storage),
@@ -92,7 +112,7 @@ def preflight_cderi_memory(provider):
         'lower_triangle_pair_estimate': lower_pairs,
         'lower_triangle_bytes_estimate': int(lower_bytes),
         'physical_square_bytes_bound': int(square_bytes),
-        'available_host_bytes': _available_host_bytes(),
+        'available_host_bytes': available_host,
         'available_device_bytes': _available_device_bytes(),
         'configured_max_bytes': provider.cderi_preflight_max_bytes,
     }
@@ -103,15 +123,25 @@ def preflight_cderi_memory(provider):
             f'estimate={lower_bytes} bytes, limit={int(limit)} bytes; choose '
             'a smaller explicit auxbasis, cderi_storage=\'hdf5\', or raise '
             'the explicit limit')
+    provider._cderi_preflight_memory_metadata = dict(report)
+    provider.cderi_auto_plan = resolve_cderi_storage(
+        provider, central_bytes=lower_bytes,
+        available_host_bytes=available_host, phase='preflight')
+    report['storage_policy_resolved'] = provider.cderi_storage_resolved
+    report['auto_storage_plan'] = provider.cderi_auto_plan
     provider.cderi_memory_metadata = report
     return report
 
 
 def finalize_cderi_storage(provider):
     '''Apply the selected storage policy and record the exact built footprint.'''
-    policy = str(provider.cderi_storage).lower()
-    if policy not in ('mapped_host', 'hdf5'):
-        raise ValueError("cderi_storage must be 'mapped_host' or 'hdf5'")
+    exact_bytes = _central_bytes(provider)
+    preflight = getattr(provider, '_cderi_preflight_memory_metadata', None) or {}
+    provider.cderi_auto_plan = resolve_cderi_storage(
+        provider, central_bytes=exact_bytes,
+        available_host_bytes=preflight.get('available_host_bytes'),
+        phase='post_build')
+    policy = provider.cderi_storage_resolved
     if policy == 'hdf5':
         _externalize_to_hdf5(provider)
     provider.cderi_memory_metadata = cderi_memory_report(provider)
@@ -137,6 +167,12 @@ def cderi_memory_report(provider, response_observables=2):
                 'bytes': int(nbytes),
                 'storage_class': type(value).__name__,
             }
+            storage = getattr(value, 'storage', None)
+            if storage is not None:
+                entry['compatibility_dtype'] = np.dtype(value.dtype).name
+                entry['physical_storage_dtype'] = np.dtype(
+                    storage.dtype).name
+                entry['physical_storage_class'] = type(storage).__name__
             if isinstance(value, H5CDERI):
                 entry['path'] = value.path
                 entry['dataset'] = value.dataset
@@ -152,6 +188,9 @@ def cderi_memory_report(provider, response_observables=2):
     return {
         'phase': 'built' if entries else 'released_or_unbuilt',
         'storage_policy': str(provider.cderi_storage),
+        'storage_policy_resolved': str(getattr(
+            provider, 'cderi_storage_resolved', provider.cderi_storage)),
+        'auto_storage_plan': getattr(provider, 'cderi_auto_plan', None),
         'entries': entries,
         'central_bytes': int(total),
         'physical_nao': nao,
@@ -179,6 +218,151 @@ def cderi_block(provider, key, p0, p1, *, positive=True):
     if mapping is None or key not in mapping:
         raise KeyError(f'CDERI block {key} is unavailable')
     return np.asarray(mapping[key][p0:p1])
+
+
+def copy_gamma_cderi_fp32(provider, block_size=None):
+    '''Return one mapped-host FP32 copy of the built real-Gamma factor.
+
+    Args:
+        provider : dcforge.gpu.pbc.df.gdf.GDF
+            Built positive-metric real-Gamma provider.
+
+    Kwargs:
+        block_size : int or None
+            Number of auxiliary rows converted at once.  ``None`` uses the
+            provider's CDERI storage block size.
+
+    Returns:
+        tuple
+            ``(storage, report)`` where ``storage`` is a persistent mapped-host
+            FP32 array and ``report`` records its exact ownership and copy time.
+
+    Notes:
+        Conversion happens once.  Subsequent source-SCF or CPHF iterations read
+        this FP32 array directly; they never round an HDF5 FP64 slice again.
+    '''
+    import time
+
+    if provider._cderi is None:
+        provider.build(j_only=False)
+    if getattr(provider, '_cderip', None):
+        raise NotImplementedError(
+            'mixed precision requires a positive real-Gamma metric')
+    if set(provider._cderi) != {0}:
+        raise NotImplementedError(
+            'mixed precision requires one real-Gamma CDERI factor')
+    # ``mixed`` and ``fp32_build`` providers already own the sole persistent
+    # FP32 factor.  Reuse that exact allocation for source SCF and CPHF rather
+    # than creating a second half-sized sidecar.  The compatibility view
+    # advertises FP64 slices only to unmodified GPU4PySCF consumers.
+    from dcforge.gpu.pbc.df.gdf.precision import get_fp32_storage
+
+    resident = get_fp32_storage(provider)
+    if resident is not None:
+        return resident, {
+            'storage_class': type(resident).__name__,
+            'storage_dtype': np.dtype(resident.dtype).name,
+            'shape': [int(value) for value in resident.shape],
+            'bytes': int(resident.nbytes),
+            'copy_block_size': None,
+            'copy_seconds': 0.,
+            'source_storage_class': type(provider._cderi[0]).__name__,
+            'source_storage_dtype': np.dtype(
+                provider._cderi[0].dtype).name,
+            'reused_provider_storage': True,
+        }
+    source = provider._cderi[0]
+    block_size = (
+        provider.cderi_storage_block_size
+        if block_size is None else int(block_size))
+    if block_size < 1:
+        raise ValueError('FP32 CDERI copy block_size must be positive')
+    started = time.perf_counter()
+    output = empty_mapped(source.shape, dtype=np.float32)
+    for p0 in range(0, int(source.shape[0]), block_size):
+        p1 = min(int(source.shape[0]), p0 + block_size)
+        output[p0:p1] = cderi_block(provider, 0, p0, p1)
+    return output, {
+        'storage_class': type(output).__name__,
+        'storage_dtype': np.dtype(output.dtype).name,
+        'shape': [int(value) for value in output.shape],
+        'bytes': int(output.nbytes),
+        'copy_block_size': int(block_size),
+        'copy_seconds': time.perf_counter() - started,
+        'source_storage_class': type(source).__name__,
+        'source_storage_dtype': np.dtype(source.dtype).name,
+        'reused_provider_storage': False,
+    }
+
+
+def resolve_cderi_storage(
+        provider, central_bytes, available_host_bytes=None, phase='preflight'):
+    '''Resolve ``auto`` to mapped-host or HDF5 from a live host-memory budget.
+
+    ``central_bytes`` is the estimated pre-build or exact post-build FP64
+    footprint.  ``cderi_auto_sidecar_factor`` reserves additional persistent
+    storage such as the 0.5-size FP32 mixed-precision factor.  The calculation
+    is deterministic for the recorded memory snapshot and never changes an
+    integral, threshold, or density-fitting representation.
+    '''
+    requested = str(provider.cderi_storage).strip().lower()
+    if requested not in ('mapped_host', 'hdf5', 'auto'):
+        raise ValueError(
+            "cderi_storage must be 'mapped_host', 'hdf5', or 'auto'")
+    central_bytes = int(central_bytes)
+    sidecar_factor = float(provider.cderi_auto_sidecar_factor)
+    if sidecar_factor < 0.:
+        raise ValueError('cderi_auto_sidecar_factor must be nonnegative')
+    fraction = float(provider.cderi_auto_memory_fraction)
+    if not 0. < fraction <= 1.:
+        raise ValueError('cderi_auto_memory_fraction must be in (0,1]')
+    reserve = int(provider.cderi_auto_minimum_reserve_bytes)
+    if reserve < 0:
+        raise ValueError(
+            'cderi_auto_minimum_reserve_bytes must be nonnegative')
+    maximum = provider.cderi_auto_max_bytes
+    if maximum is not None and int(maximum) <= 0:
+        raise ValueError('cderi_auto_max_bytes must be positive or None')
+    available = (
+        _available_host_bytes()
+        if available_host_bytes is None else int(available_host_bytes))
+    sidecar_bytes = int(np.ceil(central_bytes * sidecar_factor))
+    required = central_bytes + sidecar_bytes
+    budgets = []
+    if available is not None:
+        budgets.extend((int(available * fraction), max(0, available - reserve)))
+    if maximum is not None:
+        budgets.append(int(maximum))
+    budget = min(budgets) if budgets else None
+    if requested == 'auto':
+        resolved = (
+            'mapped_host'
+            if budget is not None and required <= budget else 'hdf5')
+        reason = (
+            'central factor and declared sidecar fit the host-memory budget'
+            if resolved == 'mapped_host' else
+            'host-memory capacity is unknown or the declared resident set '
+            'exceeds the budget')
+    else:
+        resolved = requested
+        reason = 'explicit user storage policy'
+    provider.cderi_storage_resolved = resolved
+    return {
+        'phase': str(phase),
+        'requested': requested,
+        'resolved': resolved,
+        'reason': reason,
+        'central_bytes': central_bytes,
+        'sidecar_factor': sidecar_factor,
+        'sidecar_bytes': sidecar_bytes,
+        'required_resident_bytes': required,
+        'available_host_bytes_before_build': available,
+        'memory_fraction': fraction,
+        'minimum_reserve_bytes': reserve,
+        'maximum_resident_bytes': (
+            None if maximum is None else int(maximum)),
+        'resolved_budget_bytes': budget,
+    }
 
 
 def release_cderi(provider):
@@ -316,6 +500,15 @@ def _nbytes(value):
     if nbytes is not None:
         return int(nbytes)
     return int(np.prod(value.shape, dtype=np.int64) * np.dtype(value.dtype).itemsize)
+
+
+def _central_bytes(provider):
+    '''Return the exact bytes represented by all positive/negative factors.'''
+    total = 0
+    for mapping in (provider._cderi, getattr(provider, '_cderip', None)):
+        if mapping is not None:
+            total += sum(_nbytes(value) for value in mapping.values())
+    return int(total)
 
 
 def _available_host_bytes():

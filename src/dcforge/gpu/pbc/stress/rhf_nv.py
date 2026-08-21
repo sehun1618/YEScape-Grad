@@ -276,6 +276,7 @@ def make_z_state(
             zvec, z_info = solve_z_vector(
                 mo_energy, mo_occ, fvo, vind,
                 conv_tol=mf_grad.cphf_conv_tol,
+                krylov_tol=mf_grad.cphf_krylov_tol,
                 residual_tol=mf_grad.cphf_residual_tol,
                 max_cycle=mf_grad.cphf_max_cycle,
                 refinement_solver=mf_grad.cphf_refinement_solver,

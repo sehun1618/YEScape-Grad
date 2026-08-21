@@ -53,6 +53,11 @@ from dcforge.gpu.pbc.df.gdf.build_memory import (
     bounded_native_build_memory,
 )
 from dcforge.gpu.pbc.df.gdf.build_profile import profile_native_gamma_build
+from dcforge.gpu.pbc.df.gdf.precision import (
+    build_context as gdf_precision_build_context,
+    install_fp32_view,
+    normalize_profile as normalize_gdf_precision_profile,
+)
 
 _FIXED_OMEGA_LOCK = threading.RLock()
 
@@ -102,6 +107,8 @@ class GDF(df.GDF):
         'kpts_reference', 'kpts_roundtrip_max_abs',
         'omega',
         'resolved_omega', 'resolved_source_mesh', 'resolved_metric_mesh',
+        'gdf_precision_profile', 'gdf_precision_profile_effective',
+        'gdf_precision_report', 'gdf_derivative_precision',
     } | PP_LOC_PART1_KEYS | CDERI_KEYS
 
     def __init__(self, cell, kpts=None, auxbasis=None):
@@ -210,6 +217,14 @@ class GDF(df.GDF):
         self.resolved_omega = None
         self.resolved_source_mesh = None
         self.resolved_metric_mesh = None
+        # FP64 is the immutable default.  The two opt-in profiles are limited
+        # to the positive-metric, single-device, real-Gamma route.  The
+        # provider owns the CDERI construction/storage boundary, while the
+        # RHFDFT and gradient drivers own the downstream arithmetic schedule.
+        self.gdf_precision_profile = 'fp64'
+        self.gdf_precision_profile_effective = 'fp64'
+        self.gdf_precision_report = None
+        self.gdf_derivative_precision = 'fp64'
         init_cderi_options(self)
         init_pp_loc_part1(self)
         if auxbasis is not None:
@@ -239,13 +254,60 @@ class GDF(df.GDF):
             remain the inherited implementation.  The resolved query history
             is available in ``native_build_memory_plan``.
         '''
+        precision_profile = normalize_gdf_precision_profile(
+            self.gdf_precision_profile)
+        if precision_profile != 'fp64':
+            if not self.is_gamma_point:
+                raise NotImplementedError(
+                    'GDF mixed-precision profiles require real Gamma')
+            if int(self.cell.dimension) != 3:
+                raise NotImplementedError(
+                    'GDF mixed-precision profiles require a 3D Cell')
+            if int(rsdf_builder.num_devices) != 1:
+                raise NotImplementedError(
+                    'GDF mixed-precision profiles are single-GPU only')
+            if str(self.cderi_storage).lower() not in (
+                    'mapped_host', 'auto'):
+                raise NotImplementedError(
+                    'GDF mixed-precision profiles require mapped-host CDERI')
+            # The selected profile already stores the only persistent factor
+            # in FP32, so no additional FP32 sidecar must enter the auto
+            # storage estimate.
+            self.cderi_auto_sidecar_factor = 0.
         preflight_cderi_memory(self)
+        if (precision_profile != 'fp64'
+                and self.cderi_storage_resolved != 'mapped_host'):
+            raise MemoryError(
+                'GDF mixed-precision profiles currently require mapped-host '
+                'storage; increase available host memory or explicitly use '
+                "gdf_precision_profile='fp64' with HDF5 storage")
         profile_context = (
             profile_native_gamma_build(self)
             if self.native_build_profile else nullcontext())
         with (bounded_native_build_memory(self),
-              _fixed_partition_omega(self.omega), profile_context):
+              _fixed_partition_omega(self.omega), profile_context,
+              gdf_precision_build_context(precision_profile) as ledger):
             df.GDF.build(self, j_only=j_only, kpts_band=kpts_band)
+        if precision_profile != 'fp64':
+            storage = install_fp32_view(self)
+            ledger = dict(ledger)
+            ledger.update({
+                'storage_shape': [int(value) for value in storage.shape],
+                'storage_bytes': int(storage.nbytes),
+                'storage_dtype': np.dtype(storage.dtype).name,
+            })
+        else:
+            ledger = dict(ledger)
+        self.gdf_precision_profile_effective = precision_profile
+        self.gdf_precision_report = {
+            'requested_profile': precision_profile,
+            'effective_profile': precision_profile,
+            'build': ledger,
+            'warning': (
+                None if precision_profile == 'fp64' else
+                'The active Hamiltonian contains a quantized FP32 CDERI. '
+                'A later FP64 contraction cannot restore discarded bits.'),
+        }
         self._record_resolved_response_settings()
         finalize_cderi_storage(self)
         return self
@@ -334,7 +396,15 @@ class GDF(df.GDF):
         self.resolved_metric_mesh = None
         self.native_build_memory_plan = None
         self.native_build_substage_profile = None
+        self.gdf_precision_profile_effective = (
+            'fp64' if self.gdf_precision_profile == 'fp64' else None)
+        self.gdf_precision_report = None
         self.adjoint_host_cache_plan = None
+        self.cderi_storage_resolved = (
+            'mapped_host' if self.cderi_storage == 'auto'
+            else str(self.cderi_storage).lower())
+        self.cderi_auto_plan = None
+        self._cderi_preflight_memory_metadata = None
         reset_pp_loc_part1(self)
         return self
 
@@ -413,6 +483,11 @@ class GDF(df.GDF):
             'resolved_metric_mesh': (
                 None if self.resolved_metric_mesh is None
                 else self.resolved_metric_mesh.tolist()),
+            'gdf_precision_profile': self.gdf_precision_profile,
+            'gdf_precision_profile_effective': (
+                self.gdf_precision_profile_effective),
+            'gdf_precision_report': self.gdf_precision_report,
+            'gdf_derivative_precision': self.gdf_derivative_precision,
         }
 
 

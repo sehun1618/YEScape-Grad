@@ -20,6 +20,8 @@ driver는 사용하지 않는다. 같은 수학을 공유하는 변형은 한 �
 | 10 | `10-cpu-kpts-zvec.py` | CPU sampled-k dense/matrix-free real-linear Z-vector 진단 |
 | 11 | `11-cpu-kpts-xc.py` | 같은 KRHF density의 sampled-k LDA/GGA/R2SCAN energy/gradient와 CPU MG 경계 |
 | 12 | `12-gpu-kpts-rhf_dft.py` | GPU full-BZ FFTDF/GDF/RSDF semilocal-DFA@KRHF와 selectable MG Hartree |
+| 17 | `17-gdf-mixed-source.py` | Real-Gamma GDF source HF의 guarded mixed J/K와 native-FP64 audit/fallback |
+| 18 | `18-gdf-precision-profiles.py` | GDF `fp64`, moderate `mixed`, aggressive experimental `fp32_build` 전체-workflow profile |
 
 Repository root에서 파일을 그대로 실행한다.
 
@@ -59,6 +61,12 @@ PYTHONPATH=src conda run --no-capture-output -n gpu \
 
 PYTHONPATH=src conda run --no-capture-output -n gpu \
   python examples/pbc/12-gpu-kpts-rhf_dft.py
+
+PYTHONPATH=src conda run --no-capture-output -n gpu \
+  python examples/pbc/17-gdf-mixed-source.py
+
+PYTHONPATH=src conda run --no-capture-output -n gpu \
+  python examples/pbc/18-gdf-precision-profiles.py
 ```
 
 ## Case를 바꾸는 방법
@@ -90,6 +98,9 @@ mf = RHFDFT(cell, xc='PBE')
 | 정확도/표현 | `cell.ke_cutoff`, `cell.precision`, `cell.mesh` | 유한 수치 표현을 바꾸므로 energy와 gradient를 함께 수렴시킨다. |
 | SCF/response 수렴 | `conv_tol`, `cphf_conv_tol`, `cphf_residual_tol` | 고정된 표현에서 반복해의 정확도를 정한다. |
 | 동등한 알고리즘 경로 | `df_cphf_response_mode`, `df_cphf_response_cache`, `gdf_response_mode`, `hcore_method`, Gamma conjugate reduction | 같은 수학을 다른 contraction, storage 또는 oracle로 계산한다. `direct_vo`와 bounded `auto` cache가 GDF CPHF 기본값이고 `recompute` cache 및 `ao_oracle`이 storage/full-AO oracle이다. |
+| source-SCF 정밀도 정책 | `source_precision_policy='fp64'`, `source_mixed_precision(...)` | 기본은 native FP64다. 명시적 mixed 경로는 FP32 factor J/K에서 시작해 native FP64로 단조 전환하며, 전환마다 DIIS와 incremental Fock을 비운다. |
+| response 정밀도 정책 | `precision_policy='fp64'`, `'mixed'`, `'mixed_lowmem'` | 두 mixed 정책은 real-Gamma GDF direct-VO Z action만 FP32 GEMM/FP64 block sum으로 계산하고 독립 FP64 physical residual로 검사한다. |
+| 전체 GDF 정밀도 profile | `gdf_precision_profile='fp64'`, `'mixed'`, `'fp32_build'` | `fp64`가 기본 reference다. `mixed`는 FP64로 CDERI를 만든 뒤 FP32로 저장하고 mixed SCF/Z/derivative를 묶는다. `fp32_build`는 CDERI 변환까지 FP32/complex64로 낮추는 aggressive experimental 경로다. |
 | storage policy | CDERI storage, reciprocal block size와 memory fraction | Intermediate 크기와 batching을 조절한다. |
 | 자동 결정값 | RSDF source/metric 설정과 local-GTH part-1 plan | Cell과 precision에 따라 backend가 resolve한다. |
 
@@ -103,6 +114,31 @@ auxiliary block으로 읽는다. `cderi_preflight_max_bytes`는 auxbasis를 자�
 명시적 한도를 넘으면 build 전에 실패한다. `release_cderi_after_response=True`는 Z-vector와
 마지막 overlap-response action 이후 factor를 해제하므로, 이후 같은 객체에서 새 SCF를
 시작하면 CDERI를 다시 만든다.
+
+## GDF precision profile
+
+전체 workflow에서 검증된 precision 조합을 한 번에 선택하려면
+`18-gdf-precision-profiles.py`의 `set_gdf_precision_profile()`을 사용한다.
+
+`mixed`는 native FP64 primitive/metric/CDERI transformation 뒤의 완성된 factor만 FP32로
+저장하고, persistent-FP32 source SCF, mixed direct-VO Z-vector와 FP32 MO
+derivative-source contraction을 함께 선택한다. 마지막 source tier는 현재 FP32 factor
+block을 device FP64로 승격해 J/K를 다시 계산하고, Z-vector는 별도의 FP64 physical
+residual로 검사한다. 이 검사는 이미 FP32로 양자화된 Hamiltonian 안에서의 수렴 검사이며
+원래 CDERI bit를 복원하지 않는다. 대표 production 구조 일부에서 `fp64` energy와 force를
+비교한 뒤 사용하는 moderate approximation이다.
+
+`fp32_build`는 CDERI metric transformation과 reciprocal contraction의
+FP32/complex64 계산까지 더한다. 변환 과정의 반올림 오차가 누적될 수 있고,
+SCF/CPHF residual이 작아도 `fp64` energy/force와의 bias는 클 수 있다. 따라서 이 mode는
+aggressive experimental로 분류되며, 실제 basis/auxbasis/cutoff와 구조 분포를 대표하는
+subset에서 `fp64` energy와 gradient RMSD/max error를 별도로 통과시킨 뒤에만 MLIP label
+생성에 사용해야 한다. Reference를 복구하려면 CDERI를 FP64로 새로 build해야 한다.
+
+어느 profile도 numerical threshold, auxbasis 또는 mesh를 자동으로 느슨하게 만들지 않는다.
+현재 accelerated profile은 single-GPU 3D positive-metric real-Gamma GDF energy와 nuclear
+gradient까지만 지원한다. Stress, sampled-k, RSDF 및 provider-factor checkpoint는
+fail-closed하며 `fp64` rebuild가 필요하다.
 
 RSDF의 기본 `response_mode='sequential_packed'`는 unique Gamma AO pair로 target-J와
 source-Fock을 차례로 처리한다. `'dense'`는 값 비교용 oracle이다. GPU real-Gamma

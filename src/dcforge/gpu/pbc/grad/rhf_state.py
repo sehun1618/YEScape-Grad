@@ -61,9 +61,12 @@ def make_response_state_signature(
         getattr(mf.mf_hf, 'exxdiv', None),
         getattr(provider, 'omega', None),
         float(mf_grad.cphf_conv_tol),
+        (None if mf_grad.cphf_krylov_tol is None
+         else float(mf_grad.cphf_krylov_tol)),
         float(mf_grad.cphf_residual_tol),
         int(mf_grad.cphf_max_cycle),
         str(mf_grad.cphf_refinement_solver),
+        str(mf_grad.precision_policy),
         str(mf_grad.df_cphf_response_mode),
         str(mf_grad.df_cphf_response_cache),
         float(mf_grad.df_cphf_response_memory_fraction),
@@ -159,6 +162,15 @@ def use_response_state(mf_grad, state, *, reused):
     mf_grad.z_primary_wall_seconds = z_info['primary_wall_seconds']
     mf_grad.z_refinement_wall_seconds = z_info['refinement_wall_seconds']
     mf_grad.z_refinement_iterations = z_info['refinement_iterations']
+    mf_grad.z_requested_conv_tol = z_info['requested_conv_tol']
+    mf_grad.z_requested_krylov_tol = z_info['requested_krylov_tol']
+    mf_grad.z_effective_krylov_tol = z_info['effective_krylov_tol']
+    mf_grad.z_krylov_tolerance_policy = z_info[
+        'krylov_tolerance_policy']
+    mf_grad.z_physical_residual_tol = z_info['physical_residual_tol']
+    mf_grad.z_cleanup_krylov_tol = z_info['cleanup_krylov_tol']
+    mf_grad.z_cleanup_wall_seconds = z_info['cleanup_wall_seconds']
+    mf_grad.z_cleanup_iterations = z_info['cleanup_iterations']
     mf_grad.z_wall_seconds = z_info['wall_seconds']
     mf_grad.z_current_wall_seconds = (
         0. if reused else z_info['wall_seconds'])
