@@ -100,8 +100,9 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_residual_tol=1e-8,
     cphf_max_cycle=200,
     cphf_refinement_solver='minres',
-    # Fully FP64 is the public default.  See Case 7 below for the guarded
-    # response-only mixed-precision policy.
+    # Z3 mixed response is the real-Gamma GDF default.  Set ``'fp64'`` here
+    # for the canonical all-FP64 Z-vector oracle; see Case 7 for the exact
+    # arithmetic and residual boundaries of both choices.
     precision_policy='fp64',
     df_cphf_response_mode='direct_vo',
     # ``auto`` is already the production default; it is written explicitly
@@ -247,20 +248,39 @@ print('  term recomposition max abs = '
 
 
 #
-# Case 7: guarded mixed precision for only the direct-VO Z-vector action
+# Case 7: default Z3 mixed precision and the explicit FP64 oracle
 #
-# Energy, source SCF, target Fock, the accepted FP64 physical residual,
-# nuclear response and final gradient remain FP64.  The large repeated
-# CDERI products inside the Z solve use FP32 GEMM with FP64 inter-block sums.
-# A failed residual/refinement gate reruns the canonical FP64 solve and
-# records ``precision_policy_effective='fp64_fallback'``.
+# A real-Gamma GDF gradient defaults to ``precision_policy='mixed'``.  Z3 uses
+# FP32 only for the repeated direct-VO Hessian action and accumulates complete
+# auxiliary-block contributions in FP64.  Its quantized residual target
+# (1e-7) is a scheduling diagnostic, not an accuracy claim.  Every candidate
+# is independently checked against the physical operator and accepted only
+# when ``cphf_residual_tol`` (1e-8 by default) is satisfied.
+#
+# If inexpensive defect corrections do not pass that physical gate, Z3 keeps
+# the last finite low-precision vector as an exact-solver seed when it improves
+# the starting residual.  With persistent FP32 CDERI, the factor is transferred
+# in FP32 and promoted on the GPU block-by-block instead of creating an FP64
+# host slice for every action.  The complete decision and transfer ledger is
+# available as ``mixed_precision_report``.
 #
 # mf_grad = mf.nuc_grad_method()
-# mf_grad.precision_policy = 'mixed'
+# assert mf_grad.precision_policy == 'mixed'
 # mf_grad.run()
 # print(mf_grad.precision_policy_effective)
 # print(mf_grad.precision_fallback_reason)
 # print(mf_grad.mixed_precision_report)
+#
+# Request the canonical FP64 Z arithmetic explicitly:
+#
+# mf_grad = mf.nuc_grad_method()
+# mf_grad.precision_policy = 'fp64'
+# mf_grad.run()
+#
+# Important: on a workflow built with ``gdf_precision_profile='mixed'`` or
+# ``'fp32_build'``, this FP64 option still acts on an already quantized CDERI.
+# Recovering the native-FP64 Hamiltonian requires setting the complete profile
+# to ``'fp64'`` before source SCF and rebuilding the factor.
 #
 # To avoid retaining a mapped-host FP64 CDERI beside the temporary FP32
 # sidecar, choose HDF5 *before* source SCF and request the capacity policy:

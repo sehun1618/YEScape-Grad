@@ -50,7 +50,7 @@ def make_response_state_signature(
     mf = mf_grad.base
     provider = mf.with_df
     return (
-        'dcforge.gpu.pbc.rhf_response_state.v1',
+        'dcforge.gpu.pbc.rhf_response_state.v2',
         _target_fock_signature(mf, dm0),
         _array_fingerprint(mo_energy),
         _array_fingerprint(mo_coeff),
@@ -67,6 +67,11 @@ def make_response_state_signature(
         int(mf_grad.cphf_max_cycle),
         str(mf_grad.cphf_refinement_solver),
         str(mf_grad.precision_policy),
+        float(mf_grad.mixed_z_inner_tol),
+        float(mf_grad.mixed_z_correction_tol),
+        float(mf_grad.mixed_z_quantized_residual_tol),
+        float(mf_grad.mixed_z_quantized_hard_reject_tol),
+        int(mf_grad.mixed_z_max_corrections),
         str(mf_grad.df_cphf_response_mode),
         str(mf_grad.df_cphf_response_cache),
         float(mf_grad.df_cphf_response_memory_fraction),

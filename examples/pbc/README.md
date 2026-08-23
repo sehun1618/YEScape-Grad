@@ -99,7 +99,7 @@ mf = RHFDFT(cell, xc='PBE')
 | SCF/response 수렴 | `conv_tol`, `cphf_conv_tol`, `cphf_residual_tol` | 고정된 표현에서 반복해의 정확도를 정한다. |
 | 동등한 알고리즘 경로 | `df_cphf_response_mode`, `df_cphf_response_cache`, `gdf_response_mode`, `hcore_method`, Gamma conjugate reduction | 같은 수학을 다른 contraction, storage 또는 oracle로 계산한다. `direct_vo`와 bounded `auto` cache가 GDF CPHF 기본값이고 `recompute` cache 및 `ao_oracle`이 storage/full-AO oracle이다. |
 | source-SCF 정밀도 정책 | `source_precision_policy='fp64'`, `source_mixed_precision(...)` | 기본은 native FP64다. 명시적 mixed 경로는 FP32 factor J/K에서 시작해 native FP64로 단조 전환하며, 전환마다 DIIS와 incremental Fock을 비운다. |
-| response 정밀도 정책 | `precision_policy='fp64'`, `'mixed'`, `'mixed_lowmem'` | 두 mixed 정책은 real-Gamma GDF direct-VO Z action만 FP32 GEMM/FP64 block sum으로 계산하고 독립 FP64 physical residual로 검사한다. |
+| response 정밀도 정책 | `precision_policy='mixed'`, `'fp64'`, `'mixed_lowmem'` | Real-Gamma GDF의 기본 `mixed`는 Z3 direct-VO action만 FP32로 가속하고 독립 physical residual로 승인한다. `fp64`는 명시적 Z-vector oracle이며 FFTDF/RSDF/sampled-k 기본값이다. |
 | 전체 GDF 정밀도 profile | `gdf_precision_profile='fp64'`, `'mixed'`, `'fp32_build'` | `fp64`가 기본 reference다. `mixed`는 FP64로 CDERI를 만든 뒤 FP32로 저장하고 mixed SCF/Z/derivative를 묶는다. `fp32_build`는 CDERI 변환까지 FP32/complex64로 낮추는 aggressive experimental 경로다. |
 | storage policy | CDERI storage, reciprocal block size와 memory fraction | Intermediate 크기와 batching을 조절한다. |
 | 자동 결정값 | RSDF source/metric 설정과 local-GTH part-1 plan | Cell과 precision에 따라 backend가 resolve한다. |
@@ -114,6 +114,39 @@ auxiliary block으로 읽는다. `cderi_preflight_max_bytes`는 auxbasis를 자�
 명시적 한도를 넘으면 build 전에 실패한다. `release_cderi_after_response=True`는 Z-vector와
 마지막 overlap-response action 이후 factor를 해제하므로, 이후 같은 객체에서 새 SCF를
 시작하면 CDERI를 다시 만든다.
+
+## Z3 mixed Z-vector default
+
+Real-Gamma GDF의 `mf.nuc_grad_method()`는 기본적으로
+`precision_policy='mixed'`인 Z3 response를 선택한다. Z3는 FP32 Krylov 해를 곧바로
+정답으로 간주하지 않는다. 다음 두 residual을 분리한다.
+
+- quantized residual: FP32 inner operator가 자신의 수치 바닥까지 수렴했는지 보는
+  scheduling diagnostic이며 기본 advisory threshold는 `1e-7`이다.
+- physical residual: 실제 provider factor를 FP64 arithmetic으로 적용해 다시 만든
+  residual이며 `cphf_residual_tol=1e-8`만이 최종 승인 기준이다.
+
+Physical gate를 통과하지 못하면 Z3는 저렴한 defect correction을 최대 세 번 수행한다.
+그래도 실패하면 마지막 finite mixed vector의 physical residual을 확인하고, zero guess보다
+좋을 때만 canonical solver에 initial guess로 넘긴다. Canonical solver는 다시 diagonal-gap
+guess와 비교한 뒤 실제 사용 여부를 결정한다. Persistent FP32 provider에서는 매 action마다
+host FP64 slice를 만들지 않고 FP32 block을 device로 보낸 뒤 그 block만 FP64로 승격한다.
+이 경계와 모든 residual/fallback 결정은 `mixed_precision_report`에 남는다.
+
+완전한 FP64 Z-vector arithmetic을 명시하려면:
+
+```python
+mf_grad = mf.nuc_grad_method()
+mf_grad.precision_policy = 'fp64'
+gradient = mf_grad.kernel()
+```
+
+이 선택은 Z 계산의 arithmetic만 바꾼다. 이미
+`gdf_precision_profile='mixed'` 또는 `'fp32_build'`로 CDERI를 양자화했다면 잃어버린
+factor bit는 복구되지 않는다. Hamiltonian까지 native FP64인 reference가 필요하면 source
+SCF 전에 전체 profile을 `fp64`로 지정하고 CDERI를 새로 build해야 한다. `mixed_lowmem`은
+Z3와 같은 arithmetic/gate를 사용하지만, source SCF 전에 FP64 central factor를 HDF5에
+두도록 명시한 capacity mode다.
 
 ## GDF precision profile
 

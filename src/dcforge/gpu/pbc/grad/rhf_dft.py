@@ -272,6 +272,13 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
                 refinement_solver=mf_grad.cphf_refinement_solver,
                 initial_guess=mf_grad.z_initial_guess,
                 require_hdf5=precision_policy == 'mixed_lowmem',
+                inner_tol=mf_grad.mixed_z_inner_tol,
+                correction_tol=mf_grad.mixed_z_correction_tol,
+                quantized_residual_tol=(
+                    mf_grad.mixed_z_quantized_residual_tol),
+                quantized_hard_reject_tol=(
+                    mf_grad.mixed_z_quantized_hard_reject_tol),
+                max_corrections=mf_grad.mixed_z_max_corrections,
                 log=log)
             mf_grad.z_response_profile = mixed_profile
             mf_grad.mixed_precision_report = mixed_profile
@@ -799,6 +806,10 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         'cphf_refinement_solver', 'df_cphf_response_mode',
         'precision_policy', 'precision_policy_effective',
         'precision_fallback_reason', 'mixed_precision_report',
+        'mixed_z_inner_tol', 'mixed_z_correction_tol',
+        'mixed_z_quantized_residual_tol',
+        'mixed_z_quantized_hard_reject_tol',
+        'mixed_z_max_corrections',
         'gdf_derivative_precision',
         'df_cphf_response_cache',
         'df_cphf_response_memory_fraction',
@@ -867,16 +878,35 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         # MINRES route avoids restarted-GMRES storage; ``rhf_zvec`` retries
         # GMRES if its independently reconstructed residual is not accepted.
         self.cphf_refinement_solver = 'minres'
-        # The public default remains the fully FP64 response.  ``mixed`` is
-        # an explicit real-Gamma GDF opt-in that accelerates only repeated
-        # direct-VO products and accepts the result through an FP64 physical
-        # residual.  ``mixed_lowmem`` has the same arithmetic but requires an
-        # HDF5-backed FP64 source factor so the large FP64 CDERI is not also
-        # resident in mapped host memory.
-        self.precision_policy = 'fp64'
-        self.precision_policy_effective = 'fp64'
+        # Z3 is the real-Gamma GDF default.  It uses an FP32 direct-VO action
+        # only as an iterative accelerator; a separately reconstructed
+        # physical residual remains the acceptance gate.  FFTDF, RSDF and
+        # sampled-k providers retain their established FP64 response.
+        #
+        # Set ``precision_policy='fp64'`` explicitly for the canonical
+        # all-FP64 Z solve.  This selects FP64 response arithmetic but cannot
+        # restore CDERI bits already discarded by a workflow-level ``mixed``
+        # or ``fp32_build`` GDF profile; a native-FP64 Hamiltonian requires
+        # rebuilding that profile as ``fp64``.
+        real_gamma_gdf = (
+            isinstance(mf.with_df, GDF)
+            and bool(getattr(mf.with_df, 'is_gamma_point', False)))
+        self.precision_policy = 'mixed' if real_gamma_gdf else 'fp64'
+        self.precision_policy_effective = self.precision_policy
         self.precision_fallback_reason = None
         self.mixed_precision_report = None
+        # Z3's quantized residual is advisory; it measures the FP32 operator's
+        # numerical floor and never replaces ``cphf_residual_tol``.  The
+        # physical residual alone accepts a Z vector.  A severe quantized miss
+        # skips low-operator corrections, while any exact fallback retains the
+        # finite low vector only when it improves the physical starting
+        # residual.  These defaults are the measured Water64/TZVP policy;
+        # changing them defines a new numerical experiment.
+        self.mixed_z_inner_tol = 1e-6
+        self.mixed_z_correction_tol = 1e-5
+        self.mixed_z_quantized_residual_tol = 1e-7
+        self.mixed_z_quantized_hard_reject_tol = 1e-5
+        self.mixed_z_max_corrections = 3
         # The public GDF precision profiles may lower only the large MO-source
         # products in the native nuclear response.  Primitive derivative
         # integrals, metric derivative and atom reduction remain FP64.
@@ -1080,6 +1110,16 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                     self.precision_policy_effective)
         logger.info(self, 'precision_fallback_reason = %s',
                     self.precision_fallback_reason)
+        logger.info(self, 'mixed_z_inner_tol = %g',
+                    self.mixed_z_inner_tol)
+        logger.info(self, 'mixed_z_correction_tol = %g',
+                    self.mixed_z_correction_tol)
+        logger.info(self, 'mixed_z_quantized_residual_tol = %g',
+                    self.mixed_z_quantized_residual_tol)
+        logger.info(self, 'mixed_z_quantized_hard_reject_tol = %g',
+                    self.mixed_z_quantized_hard_reject_tol)
+        logger.info(self, 'mixed_z_max_corrections = %d',
+                    self.mixed_z_max_corrections)
         logger.info(self, 'gdf_derivative_precision = %s',
                     self.gdf_derivative_precision)
         logger.info(self, 'df_cphf_response_mode = %s',

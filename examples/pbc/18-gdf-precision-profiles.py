@@ -52,6 +52,12 @@ mf.max_cycle = 80
 # Source HF, target Hartree and response use GDF.  Only target XC uses MG.
 mf = mf.multigrid_numint(with_j=False)
 mf.run()
+# Both accelerated workflow profiles select the default Z3 mixed response.
+# It uses a separate physical residual gate and retains a finite low-precision
+# solution as an exact-fallback seed.  To compare only the Z-vector arithmetic
+# on the same already-built Hamiltonian, set ``precision_policy='fp64'`` on
+# ``mf_grad`` below.  To recover a true native-FP64 Hamiltonian, instead set
+# the complete ``profile = 'fp64'`` above and rebuild source SCF/CDERI.
 mf_grad = mf.nuc_grad_method().set(
     cphf_conv_tol=1e-9,
     cphf_residual_tol=1e-8,

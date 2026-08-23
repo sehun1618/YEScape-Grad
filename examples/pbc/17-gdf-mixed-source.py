@@ -47,9 +47,10 @@ mf.max_cycle = 80
 mf = mf.multigrid_numint(with_j=False)
 mf.run()
 
-# Analytic response precision is independent of source-SCF precision.  This
-# example keeps the established FP64 CPHF path; set precision_policy='mixed'
-# explicitly only when the separately guarded mixed Z-vector is desired.
+# Analytic response precision is independent of source-SCF precision.  A
+# real-Gamma GDF gradient now defaults to guarded Z3 mixed response, but this
+# example selects the canonical FP64 Z arithmetic explicitly to isolate the
+# source-SCF experiment.
 mf_grad = mf.nuc_grad_method().set(
     precision_policy='fp64',
     cphf_conv_tol=1e-9,
