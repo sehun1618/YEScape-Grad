@@ -60,6 +60,7 @@ mf_grad = mf.nuc_grad_method().set(
     cphf_conv_tol=1e-9,
     cphf_max_cycle=200,
     fock_deriv_method='direct',
+    fock_deriv_planner_limit_bytes=4 * 1024**3,
 ).run()
 
 print('\n[gpu DF]')
@@ -68,6 +69,7 @@ print(f'Target PBE@RHF energy = {energy:.15f} Ha')
 print(f'Auxiliary basis = {mf.auxbasis}')
 print(f'Source/target share with_df = {mf.with_df is mf.mf_hf.with_df}')
 print(f'Response backend = {mf_grad.response_backend_used}')
+print(f'DF derivative planner = {mf_grad.fock_deriv_planner["mode"]}')
 print('Gradient dE/dR [Ha/Bohr]')
 print(mf_grad.de)
 print(f'Z residual max abs = {mf_grad.z_residual_max_abs:.6e}')

@@ -3,6 +3,9 @@
 from gpu4pyscf.df.grad import rks as df_rks_grad
 from gpu4pyscf.lib import logger
 
+from dcforge.gpu.df.grad.memory import (
+    DEFAULT_FOCK_DERIV_PLANNER_LIMIT_BYTES,
+)
 from dcforge.gpu.df.grad.rhf_nv import grad_fock_direct
 from dcforge.gpu.df.grad.rhf_zvec import (
     gen_vind as gen_vind_mo,
@@ -22,7 +25,14 @@ class Gradients(rhf_dft.Gradients, df_rks_grad.Gradients):
     ``energy_ee`` and ``jk_energy_per_atom``.
     '''
 
-    _keys = rhf_dft.Gradients._keys | df_rks_grad.Gradients._keys
+    _keys = (
+        rhf_dft.Gradients._keys
+        | df_rks_grad.Gradients._keys
+        | {
+            'fock_deriv_planner_limit_bytes',
+            'fock_deriv_planner',
+        }
+    )
 
     def __init__(self, mf):
         if not hasattr(mf, 'with_df') or not hasattr(mf.mf_hf, 'with_df'):
@@ -35,11 +45,14 @@ class Gradients(rhf_dft.Gradients, df_rks_grad.Gradients):
         self.auxbasis_response = True
         self.fock_deriv_method = 'direct'
         self.response_backend = 'mo_direct'
+        self.fock_deriv_planner_limit_bytes = DEFAULT_FOCK_DERIV_PLANNER_LIMIT_BYTES
+        self.fock_deriv_planner = None
 
     def grad_fock(self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst):
         '''Return the source-Fock term through the selected DF route.'''
         method = self.fock_deriv_method
         self.fock_deriv_method_used = method
+        self.fock_deriv_planner = None
         if method == 'direct':
             return grad_fock_direct(self, Co, Cv, zvec, dm0, atmlst)
         return rhf_dft.Gradients.grad_fock(
@@ -67,6 +80,11 @@ class Gradients(rhf_dft.Gradients, df_rks_grad.Gradients):
         '''Log common GPU and DF auxiliary-response controls.'''
         rhf_dft.Gradients.dump_flags(self, verbose)
         logger.info(self, 'auxbasis_response = %s', self.auxbasis_response)
+        logger.info(
+            self,
+            'fock_deriv_planner_limit_bytes = %s',
+            self.fock_deriv_planner_limit_bytes,
+        )
         return self
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):

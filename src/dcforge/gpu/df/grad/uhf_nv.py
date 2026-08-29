@@ -7,6 +7,8 @@ from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.lib.cupy_helper import contract
 from pyscf import df
 
+from dcforge.gpu.df.grad.memory import jk_energies_per_atom_bounded
+
 
 def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     r'''Return the DF-UHF source-Fock term by direct contraction.
@@ -83,7 +85,8 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
         auxmol = df.addons.make_auxmol(
             mol, auxbasis=mf_hf.with_df.auxbasis)
     int3c2e_opt = df_tdrhf_grad.Int3c2eOpt(mol, auxmol).build()
-    de_jk = df_tdrhf_grad._jk_energies_per_atom(
+    de_jk = jk_energies_per_atom_bounded(
+        mf_grad,
         int3c2e_opt,
         [[dz, dm], [dza, pa], [dzb, pb]],
         j_factor=[2.0, 0.0, 0.0],

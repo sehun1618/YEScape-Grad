@@ -48,6 +48,12 @@ Molecular 기본 구조는 `structures/water1.xyz`와 `structures/oh.xyz`, basis
 analytic gradient의 구성 조건이다. NLC/VV10, dispersion, fractional occupation과
 ROHF/ROKS는 현재 예제 범위가 아니다.
 
+GPU DF RHF/UHF gradient의 source-Fock derivative는 기본적으로
+`fock_deriv_planner_limit_bytes=4 * 1024**3`을 사용한다. 이 값은
+GPU4PySCF의 derivative auxiliary/block planner가 한 번에 사용할 수 있다고 보는
+workspace를 제한해 peak VRAM을 낮춘다. CuPy allocator 전체의 hard limit는 아니며,
+GPU4PySCF의 자동 planning을 그대로 사용하려면 `None`으로 설정한다.
+
 ## Periodic
 
 PBC 예제는 [`pbc/README.md`](pbc/README.md)에 정리했다. 현재 범위는 fixed 3D cell,
