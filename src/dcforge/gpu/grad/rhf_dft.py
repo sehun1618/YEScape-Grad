@@ -86,6 +86,17 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     mf_grad.z_residual_relative = z_info['residual_relative']
     mf_grad.z_solver = z_info['solver']
 
+    # The target DF skeleton releases the shared device CDERI.  Evaluate the
+    # small DF OO response while that CDERI is still live, then retain only
+    # the occupied-space result through the remaining derivative stages.
+    # Conventional AO response keeps its established late schedule.
+    vzoo = None
+    if mf_grad.response_backend == 'mo_direct':
+        vzoo = mf_grad.get_z_response_oo(Co, Cv, zvec, fvind)
+        mf_grad.z_response_oo_schedule_used = 'early_after_z_solve'
+    else:
+        mf_grad.z_response_oo_schedule_used = 'late_after_derivatives'
+
     s1 = cp.asarray(mf_grad.get_ovlp(mol))
     s1oo, de_ovlp_energy = make_s1_oo_and_grad_ovlp_energy(
         mol, Co, Cv, mo_energy[so], zvec, s1, atmlst)
@@ -106,7 +117,8 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     de_fock = mf_grad.grad_fock(
         Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
-    vzoo = mf_grad.get_z_response_oo(Co, Cv, zvec, fvind)
+    if vzoo is None:
+        vzoo = mf_grad.get_z_response_oo(Co, Cv, zvec, fvind)
     de_ovlp_response = grad_ovlp_response(s1oo, vzoo)
     de_nvar = nonvariational_correction(
         mf_grad, s1oo, de_fock, de_ovlp_energy, de_ovlp_response)
@@ -119,7 +131,7 @@ class Gradients(rks_grad.Gradients):
 
     _keys = rks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'fock_deriv_method',
-        'response_backend',
+        'response_backend', 'z_response_oo_schedule_used',
     }
 
     def __init__(self, mf):
@@ -135,6 +147,7 @@ class Gradients(rks_grad.Gradients):
         self.cphf_max_cycle = 200
         self.fock_deriv_method = 'direct'
         self.response_backend = 'ao'
+        self.z_response_oo_schedule_used = None
 
     def dump_flags(self, verbose=None):
         '''Log GPU grid and source-HF response controls.'''
