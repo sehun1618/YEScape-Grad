@@ -6,6 +6,7 @@ from gpu4pyscf.scf import uhf
 
 from dcforge.cpu.energy.rhf_dft import _check_xc
 from dcforge.gpu._df import default_auxbasis
+from dcforge.gpu.energy.hf_state import GPUHFStateMixin
 from dcforge.gpu.energy.rhf_dft import RHFDFT as GPU_RHFDFT
 
 
@@ -33,7 +34,7 @@ def _check_gpu_contract(mf):
             raise NotImplementedError('GPU UHF-DFT currently requires only_dfj=False')
 
 
-class UHFDFT(uks.UKS):
+class UHFDFT(GPUHFStateMixin, uks.UKS):
     '''Evaluate an NLC-free target XC on a GPU UHF density.
 
     Args:
@@ -55,7 +56,9 @@ class UHFDFT(uks.UKS):
 
     _keys = uks.UKS._keys | {
         'mf_hf', 'e_uhf', 'e_dft', 'dm_hf', '_source_converged',
+        '_source_state_receipt',
     }
+    _hf_state_reference = 'UHF'
     _hf_options = GPU_RHFDFT._hf_options
 
     def __init__(self, mol, xc='PBE', mf_hf=None):
@@ -77,6 +80,7 @@ class UHFDFT(uks.UKS):
         self.e_dft = None
         self.dm_hf = None
         self._source_converged = False
+        self._source_state_receipt = None
 
     @property
     def device(self):
@@ -102,6 +106,7 @@ class UHFDFT(uks.UKS):
         if not self.mf_hf.converged:
             raise RuntimeError('source GPU UHF calculation did not converge')
         self._source_converged = True
+        self._record_native_source_state()
         self._sync_hf_results()
         return float(e_uhf)
 
@@ -138,10 +143,7 @@ class UHFDFT(uks.UKS):
         else:
             if dm0 is not None or kwargs:
                 raise ValueError('dm0/kwargs require run_hf=True')
-            if not self.mf_hf.converged or not self._source_converged:
-                raise RuntimeError(
-                    'run_hf=False requires a source converged with the current GPU representation'
-                )
+            self._assert_valid_source_state()
             self._sync_hf_results()
 
         self.dm_hf = self.make_uhf_rdm1()
@@ -159,7 +161,7 @@ class UHFDFT(uks.UKS):
         uks.UKS.reset(self, mol)
         self.mf_hf.reset(mol)
         self.e_uhf = self.e_dft = self.dm_hf = None
-        self._source_converged = False
+        self._invalidate_source_state()
         return self
 
     def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):
@@ -193,7 +195,7 @@ class UHFDFT(uks.UKS):
         )
         mf = _DFUHFDFT(self, mf_hf.with_df, False)
         mf.mf_hf = mf_hf
-        mf._source_converged = False
+        mf._invalidate_source_state()
         return mf
 
     def nuc_grad_method(self):
@@ -257,5 +259,5 @@ class _DFUHFDFT(df_jk._DFHF, UHFDFT):
         '''Remove density fitting from source and target workflow objects.'''
         mf = df_jk._DFHF.undo_df(self)
         mf.mf_hf = self.mf_hf.undo_df()
-        mf._source_converged = False
+        mf._invalidate_source_state()
         return mf

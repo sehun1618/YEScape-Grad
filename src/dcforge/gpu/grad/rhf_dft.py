@@ -38,6 +38,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     if mf.e_dft is None:
         mf.kernel(run_hf=not mf_hf.converged)
+    mf._assert_valid_source_state()
     _check_xc(mf)
     if mo_energy is None:
         mo_energy = mf.mo_energy

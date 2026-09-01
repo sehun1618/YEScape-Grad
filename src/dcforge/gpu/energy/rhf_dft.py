@@ -7,6 +7,7 @@ from gpu4pyscf.scf import hf
 from dcforge.cpu.energy.rhf_dft import RHFDFT as CPU_RHFDFT
 from dcforge.cpu.energy.rhf_dft import _check_xc
 from dcforge.gpu._df import default_auxbasis
+from dcforge.gpu.energy.hf_state import GPUHFStateMixin
 
 
 def _check_gpu_contract(mf):
@@ -34,7 +35,7 @@ def _check_gpu_contract(mf):
             raise NotImplementedError('GPU RHF-DFT currently requires only_dfj=False')
 
 
-class RHFDFT(rks.RKS):
+class RHFDFT(GPUHFStateMixin, rks.RKS):
     '''Evaluate an NLC-free target XC on a GPU RHF density.
 
     Args:
@@ -56,7 +57,9 @@ class RHFDFT(rks.RKS):
 
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'dm_hf', '_source_converged',
+        '_source_state_receipt',
     }
+    _hf_state_reference = 'RHF'
     _hf_options = CPU_RHFDFT._hf_options
 
     def __init__(self, mol, xc='PBE', mf_hf=None):
@@ -78,6 +81,7 @@ class RHFDFT(rks.RKS):
         self.e_dft = None
         self.dm_hf = None
         self._source_converged = False
+        self._source_state_receipt = None
 
     @property
     def device(self):
@@ -103,6 +107,7 @@ class RHFDFT(rks.RKS):
         if not self.mf_hf.converged:
             raise RuntimeError('source GPU RHF calculation did not converge')
         self._source_converged = True
+        self._record_native_source_state()
         self._sync_hf_results()
         return float(e_hf)
 
@@ -143,10 +148,7 @@ class RHFDFT(rks.RKS):
         else:
             if dm0 is not None or kwargs:
                 raise ValueError('dm0/kwargs require run_hf=True')
-            if not self.mf_hf.converged or not self._source_converged:
-                raise RuntimeError(
-                    'run_hf=False requires a source converged with the current GPU representation'
-                )
+            self._assert_valid_source_state()
             self._sync_hf_results()
 
         self.dm_hf = self.make_hf_rdm1()
@@ -164,7 +166,7 @@ class RHFDFT(rks.RKS):
         rks.RKS.reset(self, mol)
         self.mf_hf.reset(mol)
         self.e_hf = self.e_dft = self.dm_hf = None
-        self._source_converged = False
+        self._invalidate_source_state()
         return self
 
     def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):
@@ -201,7 +203,7 @@ class RHFDFT(rks.RKS):
         # ``density_fit`` copies any existing orbital state, but those orbitals
         # are not evidence that SCF was converged with this newly attached DF
         # representation.  A fresh source kernel establishes that provenance.
-        mf._source_converged = False
+        mf._invalidate_source_state()
         return mf
 
     def nuc_grad_method(self):
@@ -269,5 +271,5 @@ class _DFRHFDFT(df_jk._DFHF, RHFDFT):
         '''Remove density fitting from source and target workflow objects.'''
         mf = df_jk._DFHF.undo_df(self)
         mf.mf_hf = self.mf_hf.undo_df()
-        mf._source_converged = False
+        mf._invalidate_source_state()
         return mf
