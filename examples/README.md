@@ -14,6 +14,8 @@ gradient처럼 바로 이어지는 단계는 같은 case에 두고, conventional
 | `03-gpu-rhf_dft.py` | GPU PBE@RHF conventional/DF case |
 | `04-gpu-uhf_dft.py` | GPU PBE@UHF conventional/DF case |
 | `05-xc-and-grid.py` | 한 RHF density에서 LDA/GGA/MGGA/hybrid/RSH target과 grid level 비교 |
+| `06-save-gpu-hf-states.py` | 별도 GPU DF-RHF/UHF job에서 gradient-ready checkpoint 저장 |
+| `07-restore-gpu-hf-states.py` | 새 process에서 HF SCF 재실행 없이 GPU PBE@RHF/UHF energy와 gradient |
 
 각 RHF/UHF 파일은 source HF를 먼저 수렴하고
 
@@ -38,7 +40,23 @@ PYTHONPATH=src OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 PYTHONPATH=src conda run --no-capture-output -n gpu \
   python examples/05-xc-and-grid.py
+
+mkdir -p /tmp/dcforge-hf-state-example
+cd /tmp/dcforge-hf-state-example
+
+PYTHONPATH=/path/to/DC-Forge/src conda run --no-capture-output -n gpu \
+  python /path/to/DC-Forge/examples/06-save-gpu-hf-states.py
+
+PYTHONPATH=/path/to/DC-Forge/src conda run --no-capture-output -n gpu \
+  python /path/to/DC-Forge/examples/07-restore-gpu-hf-states.py
 ```
+
+마지막 두 명령은 의도적으로 별도 Python process다. 첫 파일은 표준 PySCF `mol/scf`
+group과 DC-Forge checksum/provenance를 함께 가진 `.chk`를 생성한다. 두 번째 파일의
+`from_hf_state()`는 checkpoint가 기록한 conventional/DF와 auxiliary basis를 먼저
+재구성하고 현재 GPU Fock residual을 검사한 뒤에만 `kernel(run_hf=False)`를 허용한다.
+CDERI는 checkpoint에 저장하지 않고 새 process에서 재구성한다.
+이 restart 예제는 `def2-svp`의 H2O singlet(RHF)과 O2 triplet(UHF)을 사용한다.
 
 Molecular 기본 구조는 `structures/water1.xyz`와 `structures/oh.xyz`, basis는
 `aug-cc-pvtz`, PBE quadrature는 `grids.level=4`다. 출력 gradient는

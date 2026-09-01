@@ -307,7 +307,8 @@ def _validate_active_gpu_state(workflow, state):
             'restored GPU HF state failed active validation: '
             + ', '.join(failures))
 
-    _check_representation(source, state.metadata['representation'])
+    _check_representation(
+        source, state.metadata['representation'], require_resolved=True)
     return {
         'orthogonality_max_abs': orthogonality,
         'electron_number_error': electron_error,
@@ -350,7 +351,7 @@ def _check_runtime_provider_contract(workflow):
                 'gradient-ready GPU DF source requires only_dfj=False')
 
 
-def _check_representation(source, expected):
+def _check_representation(source, expected, *, require_resolved=False):
     observed = representation_identity(source)
     if observed.get('kind') != expected.get('kind'):
         raise HFStateMismatchError(
@@ -358,12 +359,26 @@ def _check_representation(source, expected):
     if observed.get('kind') == 'density_fitted':
         if observed.get('only_dfj') or expected.get('only_dfj'):
             raise HFStateMismatchError('GPU DF restore requires only_dfj=False')
-        if canonical_sha256(observed.get('auxbasis')) != canonical_sha256(
-                expected.get('auxbasis')):
-            raise HFStateMismatchError(
-                'checkpoint and active auxiliary basis specifications differ')
-        expected_basis = expected.get('auxbasis_fingerprint')
+        observed_spec = observed.get('auxbasis')
+        expected_spec = expected.get('auxbasis')
         observed_basis = observed.get('auxbasis_fingerprint')
+        expected_basis = expected.get('auxbasis_fingerprint')
+        specification_differs = (
+            canonical_sha256(observed_spec)
+            != canonical_sha256(expected_spec))
+        # GPU4PySCF keeps ``with_df.auxbasis=None`` when its own default was
+        # requested, while DC-Forge resolves the same default to a canonical
+        # basis name before constructing the final shared provider.  Defer
+        # that spelling mismatch until both resolved auxiliary Mole objects
+        # are available, then compare their physical basis fingerprints.
+        if (specification_differs
+                and (observed_basis is None or expected_basis is None)
+                and (require_resolved
+                     or (observed_spec is not None
+                         and expected_spec is not None))):
+            raise HFStateMismatchError(
+                'checkpoint and active auxiliary basis specifications differ; '
+                'resolved basis fingerprints are required to prove equivalence')
         if (expected_basis is not None and observed_basis is not None
                 and expected_basis != observed_basis):
             raise HFStateMismatchError(
