@@ -5,7 +5,14 @@ from gpu4pyscf.dft import uks
 from gpu4pyscf.scf import uhf
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_xc
+from dcforge.cpu.energy.rhf_dft import (
+    _check_df_owner,
+    _check_source_state,
+    _check_xc,
+    _clear_target_state,
+    _make_source_signature,
+    _record_source_signature,
+)
 from dcforge.gpu._df import default_auxbasis
 from dcforge.gpu.energy.rhf_dft import RHFDFT as GPU_RHFDFT
 
@@ -56,7 +63,8 @@ class UHFDFT(uks.UKS):
 
     _keys = uks.UKS._keys | {
         'mf_hf', 'e_uhf', 'e_dft', 'e_d2c', 'dm_hf',
-        'dispersion', 'd2c_result',
+        'dispersion', 'd2c_result', '_source_signature',
+        '_source_state_signature',
     }
     _hf_options = GPU_RHFDFT._hf_options
 
@@ -81,6 +89,8 @@ class UHFDFT(uks.UKS):
         self.dm_hf = None
         self.dispersion = None
         self.d2c_result = None
+        self._source_signature = _make_source_signature(self)
+        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select D2C-D4 parameters matching the current target ``xc``.'''
@@ -113,6 +123,7 @@ class UHFDFT(uks.UKS):
         if not self.mf_hf.converged:
             raise RuntimeError('source GPU UHF calculation did not converge')
         self._sync_hf_results()
+        _record_source_signature(self)
         return float(e_uhf)
 
     def run_uhf(self, dm0=None, **kwargs):
@@ -122,8 +133,7 @@ class UHFDFT(uks.UKS):
 
     def make_uhf_rdm1(self):
         '''Return the converged alpha/beta GPU UHF AO densities.'''
-        if not self.mf_hf.converged:
-            raise RuntimeError('source GPU UHF calculation must be converged')
+        _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
     def kernel(self, dm0=None, run_hf=True, **kwargs):
@@ -148,8 +158,7 @@ class UHFDFT(uks.UKS):
         else:
             if dm0 is not None or kwargs:
                 raise ValueError('dm0/kwargs require run_hf=True')
-            if not self.mf_hf.converged:
-                raise RuntimeError('run_hf=False requires a converged source GPU UHF')
+            _check_source_state(self)
             self._sync_hf_results()
 
         self.dm_hf = self.make_uhf_rdm1()
@@ -159,6 +168,9 @@ class UHFDFT(uks.UKS):
     def energy_tot(self, dm=None, h1e=None, vhf=None):
         '''Evaluate target UHF-DFT energy and optional D2C-D4 correction.'''
         _check_gpu_contract(self)
+        if dm is None:
+            dm = self.make_uhf_rdm1()
+            self._sync_hf_results()
         self.e_dft = float(uks.UKS.energy_tot(self, dm, h1e, vhf))
         self.dispersion = normalize_dispersion(self.dispersion)
         self.e_d2c = 0.0
@@ -201,6 +213,8 @@ class UHFDFT(uks.UKS):
         '''
         if only_dfj:
             raise NotImplementedError('GPU UHF-DFT currently requires only_dfj=False')
+        _check_df_owner(self, with_df)
+        source_was_converged = bool(self.mf_hf.converged)
         auxbasis = default_auxbasis(
             self.mol, auxbasis=auxbasis, with_df=with_df)
         mf_hf = df_jk.density_fit(
@@ -210,6 +224,9 @@ class UHFDFT(uks.UKS):
         )
         mf = _DFUHFDFT(self, mf_hf.with_df, False)
         mf.mf_hf = mf_hf
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf
 
     def nuc_grad_method(self):
@@ -272,6 +289,10 @@ class _DFUHFDFT(df_jk._DFHF, UHFDFT):
 
     def undo_df(self):
         '''Remove density fitting from source and target workflow objects.'''
+        source_was_converged = bool(self.mf_hf.converged)
         mf = df_jk._DFHF.undo_df(self)
         mf.mf_hf = self.mf_hf.undo_df()
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf

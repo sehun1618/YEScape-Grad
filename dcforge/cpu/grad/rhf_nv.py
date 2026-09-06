@@ -261,7 +261,7 @@ def grad_ovlp_response_full(Co, Cv, zvec, s1oo, fvind):
             Overlap-density response contribution in Ha/Bohr.
 
     Notes:
-        This is the full ``3N`` numerical oracle.  The production gradient
+        This is the full ``3N`` numerical reference.  The production gradient
         uses :func:`grad_ovlp_response`, which applies the same self-adjoint
         HF response identity with one AO Z-density.
     '''

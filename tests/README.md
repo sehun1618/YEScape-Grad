@@ -30,6 +30,13 @@ lane; a difficult structure is not allowed to weaken regular tolerances.
 | CPU analytic gradient and term ledger | `cpu/test_gradient.py` | Term recomposition, `direct`/`make_h1`, conventional/DF |
 | CPU complete gradient | `cpu/test_gradient_fd.py` | Relaxed-source central FD |
 | Difficult molecular tails | `cpu/test_stress_cases.py` | Selected FD without weakening regular gates |
+| CPU sampled-k tau-MGGA | `cpu/test_pbc_kpts_xc.py` | Supplied-DM energy, relaxed-source FD, and functional boundaries |
+| CPU PBC source checkpoint | `cpu/test_pbc_hf_state.py` | Gamma/sampled-k energy-gradient parity, provider mismatch, and canonical-state mutation |
+| GPU sampled-k energy | `gpu/test_pbc_kpts_energy.py` | CPU/GPU FFTDF/GDF energy parity and MultiGrid cutoff boundary |
+| GPU sampled-k FFTDF/GDF gradient | `gpu/test_pbc_kpts_gradient.py` | CPU parity, dense/matrix-free Z parity, GDF native-response provenance, term ledger, and relaxed-source FD |
+| GPU sampled-k XC-only MultiGrid | `gpu/test_pbc_kpts_multigrid.py` | FFTDF/GDF Hartree ownership, PBE/r2SCAN energy algebra, Fock Hermiticity, relaxed-source FD, and rejected J+XC controls |
+| GPU real-Gamma GDF acceleration policy | `gpu/test_pbc_gdf_acceleration.py` | Adaptive build budget, default/reference routes, precision-profile warnings, and FP64/Z3 parity |
+| GPU PBC source checkpoint | `gpu/test_pbc_hf_state.py` | Gamma/sampled-k energy-gradient parity with source SCF forbidden after restore |
 | GPU energy | `gpu/test_energy.py` | CPU/GPU parity |
 | GPU analytic gradient routes | `gpu/test_gradient.py` | CPU parity, `direct`/`make_h1`, DF AO/MO-direct parity |
 | GPU complete gradient | `gpu/test_gradient_fd.py` | Relaxed-source central FD |
@@ -72,7 +79,19 @@ Useful focused paths are:
 python -m pytest -q tests/cpu/test_gradient_fd.py -k rhf
 python -m pytest -q tests/gpu/test_gradient_fd.py -k density_fit
 python -m pytest -q tests/unit/test_contracts.py
+
+# Extended sampled-k all-coordinate, symmetry, and eggbox matrix
+python tools/validation/pbc_kpts_mgga.py \
+  --phase gradient symmetry eggbox \
+  --threads 64 \
+  --output /tmp/pbc_kpts_mgga.json
 ```
+
+The validation driver records the effective ``pyscf.lib.num_threads()`` value.
+Without ``--threads`` it preserves the active environment setting. Thread
+scaling is a performance measurement rather than a numerical acceptance gate;
+compare representative 16-, 32-, and 64-thread runs before choosing a machine
+default.
 
 CPU conventional gradients permit `grid_response=False`. The current CPU DF
 path requires both grid and auxiliary-basis response; all GPU paths require

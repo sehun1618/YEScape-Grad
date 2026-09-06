@@ -7,7 +7,7 @@ from gpu4pyscf.grad import uks as uks_grad
 from gpu4pyscf.lib import logger
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_xc
+from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
 from dcforge.gpu.grad.skeleton import skeleton_gradient_uhf
 from dcforge.gpu.grad.uhf_nv import (
     get_z_response_oo as get_z_response_oo_ao,
@@ -21,6 +21,7 @@ from dcforge.gpu.grad.uhf_nv import (
 )
 from dcforge.gpu.grad.uhf_zvec import gen_vind as gen_vind_ao
 from dcforge.gpu.grad.uhf_zvec import solve_z_vector
+from dcforge.tools.zvec import warn_z_residual
 
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
@@ -66,8 +67,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     mol = mf_grad.mol
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
 
+    if mf_hf.converged:
+        _check_source_state(mf)
     if mf.e_dft is None:
         mf.kernel(run_hf=not mf_hf.converged)
+    _check_source_state(mf)
     _check_xc(mf)
     if mo_energy is None:
         mo_energy = mf.mo_energy
@@ -117,12 +121,14 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         max_cycle=mf_grad.cphf_max_cycle,
         log=log,
     )
+    warn_z_residual(log, z_info, mf_grad.cphf_residual_warn_tol)
     mf_grad.zvec = zvec
     mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
     mf_grad.z_rhs_max_abs_spin = z_info['rhs_max_abs_spin']
     mf_grad.z_residual_max_abs = z_info['residual_max_abs']
     mf_grad.z_residual_max_abs_spin = z_info['residual_max_abs_spin']
     mf_grad.z_residual_relative = z_info['residual_relative']
+    mf_grad.z_residual_warning = z_info['physical_residual_warning']
     mf_grad.z_solver = z_info['solver']
 
     # The target DF skeleton releases the shared device CDERI.  Evaluate the
@@ -180,7 +186,8 @@ class Gradients(uks_grad.Gradients):
     '''Unrestricted target-DFT-on-UHF analytic GPU gradient driver.'''
 
     _keys = uks_grad.Gradients._keys | {
-        'cphf_conv_tol', 'cphf_max_cycle', 'fock_deriv_method',
+        'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
+        'fock_deriv_method', 'z_residual_warning',
         'response_backend', 'z_response_oo_schedule_used',
         'de_d2c', 'd2c_result',
     }
@@ -196,6 +203,8 @@ class Gradients(uks_grad.Gradients):
         self.grid_response = True
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
+        self.cphf_residual_warn_tol = 1e-8
+        self.z_residual_warning = None
         self.fock_deriv_method = 'direct'
         self.response_backend = 'ao'
         self.z_response_oo_schedule_used = None
@@ -208,6 +217,9 @@ class Gradients(uks_grad.Gradients):
         logger.info(self, 'grid_response = %s', self.grid_response)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
         logger.info(self, 'cphf_max_cycle = %d', self.cphf_max_cycle)
+        logger.info(
+            self, 'cphf_residual_warn_tol = %s',
+            self.cphf_residual_warn_tol)
         logger.info(self, 'fock_deriv_method = %s', self.fock_deriv_method)
         logger.info(self, 'response_backend = %s', self.response_backend)
         logger.info(self, 'dispersion = %s', self.base.dispersion)
@@ -242,6 +254,8 @@ class Gradients(uks_grad.Gradients):
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate all-atom ``dE/dR`` with complete target-grid response.'''
+        if self.base.mf_hf.converged:
+            _check_source_state(self.base)
         if not self.grid_response:
             raise NotImplementedError('GPU UHF gradient requires grid_response=True')
         if atmlst is not None and list(atmlst) != list(range(self.mol.natm)):

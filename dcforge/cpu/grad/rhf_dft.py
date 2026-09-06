@@ -5,7 +5,7 @@ from pyscf.grad import rks as rks_grad
 from pyscf.lib import logger
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_xc
+from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
 from dcforge.cpu.grad.rhf_nv import (
     grad_fock_direct,
     grad_fock_make_h1,
@@ -13,6 +13,7 @@ from dcforge.cpu.grad.rhf_nv import (
 )
 from dcforge.cpu.grad.rhf_zvec import solve_z_vector
 from dcforge.cpu.grad.skeleton import skeleton_gradient
+from dcforge.tools.zvec import warn_z_residual
 
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
@@ -77,8 +78,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     mol = mf_grad.mol
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
 
+    if mf_hf.converged:
+        _check_source_state(mf)
     if mf.e_dft is None:
         mf.kernel(run_hf=not mf_hf.converged)
+    _check_source_state(mf)
     _check_xc(mf)
     if mo_energy is None: mo_energy = mf.mo_energy
     if mo_coeff is None:  mo_coeff = mf.mo_coeff
@@ -111,10 +115,12 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         max_cycle=mf_grad.cphf_max_cycle,
         log=log,
     )
+    warn_z_residual(log, z_info, mf_grad.cphf_residual_warn_tol)
     mf_grad.zvec = zvec
     mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
     mf_grad.z_residual_max_abs = z_info['residual_max_abs']
     mf_grad.z_residual_relative = z_info['residual_relative']
+    mf_grad.z_residual_warning = z_info['physical_residual_warning']
     mf_grad.z_solver = z_info['solver']
 
     # These are perturbation-specific geometric quantities.  S^lambda does
@@ -152,7 +158,8 @@ class Gradients(rks_grad.Gradients):
     '''
 
     _keys = rks_grad.Gradients._keys | {
-        'cphf_conv_tol', 'cphf_max_cycle', 'fock_deriv_method',
+        'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
+        'fock_deriv_method', 'z_residual_warning',
         'de_d2c', 'd2c_result',
     }
 
@@ -164,6 +171,8 @@ class Gradients(rks_grad.Gradients):
         self.grid_response = True
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
+        self.cphf_residual_warn_tol = 1e-8
+        self.z_residual_warning = None
         self.fock_deriv_method = 'direct'
         self.de_d2c = None
         self.d2c_result = None
@@ -173,6 +182,9 @@ class Gradients(rks_grad.Gradients):
         rks_grad.Gradients.dump_flags(self, verbose)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
         logger.info(self, 'cphf_max_cycle = %d', self.cphf_max_cycle)
+        logger.info(
+            self, 'cphf_residual_warn_tol = %s',
+            self.cphf_residual_warn_tol)
         logger.info(self, 'fock_deriv_method = %s', self.fock_deriv_method)
         logger.info(self, 'dispersion = %s', self.base.dispersion)
         return self
@@ -193,6 +205,8 @@ class Gradients(rks_grad.Gradients):
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate ``dE/dR`` and retain the term-resolved gradient ledger.'''
+        if self.base.mf_hf.converged:
+            _check_source_state(self.base)
         if atmlst is not None:
             atmlst = np.asarray(atmlst, dtype=int)
         de = rks_grad.Gradients.kernel(

@@ -1,5 +1,5 @@
-'''CPU implementations of DC-Forge molecular operations.'''
+'''CPU implementations of molecular and periodic DC-Forge operations.'''
 
-from dcforge.cpu import df, disp, energy, grad
+from dcforge.cpu import df, disp, energy, grad, pbc
 
-__all__ = ['df', 'disp', 'energy', 'grad']
+__all__ = ['df', 'disp', 'energy', 'grad', 'pbc']

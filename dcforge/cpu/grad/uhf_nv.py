@@ -10,7 +10,7 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
                       atmlst):
     '''Return the source-Fock term through PySCF ``Hessian.make_h1``.
 
-    This is the unrestricted numerical oracle for the direct contracted
+    This is the unrestricted numerical reference for the direct contracted
     route. Conventional UHF retains the alpha and beta ``make_h1`` tensors.
     DF-UHF instead consumes PySCF's ``df.hessian.uhf._gen_jk`` atom iterator
     and immediately projects each yielded spin Fock derivative to its VO

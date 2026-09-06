@@ -24,6 +24,8 @@ def assert_gradient_ledger(mf_grad, gradient):
         rtol=0,
     )
     assert np.isfinite(mf_grad.z_residual_max_abs)
+    assert mf_grad.z_residual_warning == (
+        mf_grad.z_residual_max_abs > mf_grad.cphf_residual_warn_tol)
 
 
 @pytest.mark.parametrize(
@@ -74,7 +76,7 @@ def test_gpu_direct_and_make_h1_routes_agree(workflow, name, density_fit):
     "workflow,name",
     [(GPU_RHFDFT, "water1.xyz"), (GPU_UHFDFT, "o2_triplet.xyz")],
 )
-def test_gpu_df_mo_direct_response_matches_ao_oracle(workflow, name):
+def test_gpu_df_mo_direct_response_matches_ao_reference(workflow, name):
     mol = make_mol(name, basis="sto-3g")
     mf, _ = run_workflow(workflow, mol, density_fit=True)
     grad_mo = mf.nuc_grad_method()

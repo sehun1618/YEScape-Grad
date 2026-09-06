@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "pyscf==2.14.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dc-forge"
+version = "0.0.1"
+description = "Density-corrected DFT components built around PySCF"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pyscf==2.14.0",
+    "scipy",
+]
+
+[project.optional-dependencies]
+gpu-cu13 = [
+    "gpu4pyscf-cuda13x==1.8.1",
+    "cupy-cuda13x",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dcforge*"]

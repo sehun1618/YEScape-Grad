@@ -5,7 +5,15 @@ from pyscf.df import df_jk
 from pyscf.dft import uks
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import RHFDFT, _check_xc
+from dcforge.cpu.energy.rhf_dft import (
+    RHFDFT,
+    _check_df_owner,
+    _check_source_state,
+    _check_xc,
+    _clear_target_state,
+    _make_source_signature,
+    _record_source_signature,
+)
 
 
 class UHFDFT(uks.UKS):
@@ -29,7 +37,8 @@ class UHFDFT(uks.UKS):
 
     _keys = uks.UKS._keys | {
         'mf_hf', 'e_uhf', 'e_dft', 'e_d2c', 'dm_hf',
-        'dispersion', 'd2c_result',
+        'dispersion', 'd2c_result', '_source_signature',
+        '_source_state_signature',
     }
     _hf_options = RHFDFT._hf_options
 
@@ -52,6 +61,8 @@ class UHFDFT(uks.UKS):
         self.dm_hf = None
         self.dispersion = None
         self.d2c_result = None
+        self._source_signature = _make_source_signature(self)
+        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select D2C-D4 parameters matching the current target ``xc``.'''
@@ -78,6 +89,7 @@ class UHFDFT(uks.UKS):
         if not self.mf_hf.converged:
             raise RuntimeError('source UHF calculation did not converge')
         self._sync_hf_results()
+        _record_source_signature(self)
         return e_uhf
 
     def run_uhf(self, dm0=None, **kwargs):
@@ -93,8 +105,7 @@ class UHFDFT(uks.UKS):
                 Alpha/beta source density matrices with occupation one per
                 occupied spin orbital.
         '''
-        if not self.mf_hf.converged:
-            raise RuntimeError('source UHF calculation must be converged')
+        _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
     def kernel(self, dm0=None, run_hf=True, **kwargs):
@@ -120,8 +131,7 @@ class UHFDFT(uks.UKS):
         else:
             if dm0 is not None or kwargs:
                 raise ValueError('dm0/kwargs require run_hf=True')
-            if not self.mf_hf.converged:
-                raise RuntimeError('run_hf=False requires a converged source UHF')
+            _check_source_state(self)
             self._sync_hf_results()
 
         self.dm_hf = self.make_uhf_rdm1()
@@ -144,6 +154,9 @@ class UHFDFT(uks.UKS):
                 Target UKS-on-UHF plus optional D2C-D4 energy in Hartree.
         '''
         _check_xc(self)
+        if dm is None:
+            dm = self.make_uhf_rdm1()
+            self._sync_hf_results()
         self.e_dft = float(uks.UKS.energy_tot(self, dm, h1e, vhf))
         self.dispersion = normalize_dispersion(self.dispersion)
         self.e_d2c = 0.0
@@ -192,6 +205,8 @@ class UHFDFT(uks.UKS):
             UHFDFT
                 Copied density-fitted UHF-DFT workflow.
         '''
+        _check_df_owner(self, with_df)
+        source_was_converged = bool(self.mf_hf.converged)
         mf_hf = df_jk.density_fit(
             self.mf_hf,
             auxbasis=auxbasis,
@@ -200,6 +215,9 @@ class UHFDFT(uks.UKS):
         )
         mf = _DFUHFDFT(self, mf_hf.with_df, only_dfj)
         mf.mf_hf = mf_hf
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf
 
     def _sync_hf_results(self):
@@ -225,8 +243,12 @@ class _DFUHFDFT(df_jk._DFHF, UHFDFT):
 
     def undo_df(self):
         '''Remove density fitting from both source and target objects.'''
+        source_was_converged = bool(self.mf_hf.converged)
         mf = df_jk._DFHF.undo_df(self)
         mf.mf_hf = self.mf_hf.undo_df()
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf
 
     def nuc_grad_method(self):

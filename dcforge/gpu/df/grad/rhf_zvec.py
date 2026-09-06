@@ -58,7 +58,7 @@ def gen_vind(mf_hf, Co, Cv):
         potential is returned to the CPHF solver.
 
         The conventional function ``dcforge.gpu.grad.rhf_zvec.gen_vind``
-        remains necessary as an AO oracle and for non-DF sources. This DF
+        remains necessary as an AO reference and for non-DF sources. This DF
         function is separate because it depends on a private three-center
         kernel and a tagged-density contract that the conventional provider
         does not have. The common Z solver accepts either callable, so the
@@ -102,7 +102,7 @@ def get_z_response_oo(mf_hf, Co, Cv, zvec):
         function forms ``G[D_Z]`` in AO space and then projects it; this
         function asks the DF-Hessian kernel for the OO block directly. Both
         remain available because the AO route is the independent numerical
-        oracle and the MO-direct route avoids a full ``(nao,nao)`` response
+        reference and the MO-direct route avoids a full ``(nao,nao)`` response
         output in production.
     '''
     zleft = Cv @ zvec

@@ -24,6 +24,8 @@ def assert_gradient_ledger(mf_grad, gradient):
         rtol=0,
     )
     assert np.isfinite(mf_grad.z_residual_max_abs)
+    assert mf_grad.z_residual_warning == (
+        mf_grad.z_residual_max_abs > mf_grad.cphf_residual_warn_tol)
 
 
 @pytest.mark.cpu

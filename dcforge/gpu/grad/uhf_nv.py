@@ -27,9 +27,9 @@ def make_s1_oo_and_grad_ovlp_energy(
     to alpha and beta and changes the restricted factor four to factor two per
     spin.
 
-    It exists separately from the full spin-wise ``make_s1_oo_vo`` oracle for
+    It exists separately from the full spin-wise ``make_s1_oo_vo`` reference for
     the same reason as the RHF helper: production retains only both ``s1oo``
-    tensors, whereas an oracle caller may need the actual ``s1vo`` arrays.
+    tensors, whereas a reference caller may need the actual ``s1vo`` arrays.
     Making this distinction explicit prevents an accidental
     ``(2,3N,nvir_s,nocc_s)`` production allocation.
 
@@ -137,7 +137,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     Notes:
         The mathematical term belongs to the common GPU ``grad`` layer. The
         private conventional four-center kernel is guarded by the retained
-        ``make_h1`` oracle.
+        ``make_h1`` reference.
     '''
     mol = mf_grad.mol
     mf_hf = mf_grad.base.mf_hf
@@ -216,7 +216,7 @@ def grad_ovlp_energy(s1vo, e_occ, zvec):
 def grad_ovlp_response_full(Co, Cv, zvec, s1oo, fvind):
     '''Return the UHF overlap response with the full perturbation batch.
 
-    This ``3N`` implementation is a numerical oracle for the production
+    This ``3N`` implementation is a numerical reference for the production
     single-adjoint order and is not called by the default gradient driver.
     '''
     nset, ncart = s1oo[0].shape[:2]

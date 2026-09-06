@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 from pyscf import gto
+from pyscf.pbc import gto as pbcgto
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,3 +119,18 @@ def as_numpy(value):
     if hasattr(value, "get"):
         value = value.get()
     return np.asarray(value)
+
+
+def make_water_cell(*, ke_cutoff=40, precision=1e-7):
+    '''Build the small real-Gamma GTH water cell used by PBC tests.'''
+    cell = pbcgto.Cell()
+    cell.atom = 'O 0 0 0; H 0 1.43 1.10; H 0 -1.43 1.10'
+    cell.a = np.eye(3) * 7.0
+    cell.unit = 'Bohr'
+    cell.basis = 'gth-szv'
+    cell.pseudo = 'gth-hf'
+    cell.ke_cutoff = ke_cutoff
+    cell.precision = precision
+    cell.verbose = 0
+    cell.build()
+    return cell

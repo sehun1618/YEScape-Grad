@@ -107,7 +107,7 @@ def gen_vind(mf_hf, Co, Cv):
         potentials and projects them afterward. This DF version passes the
         same coupled spin densities to the three-center Hessian kernel and
         receives only the two VO blocks. The functions coexist so
-        ``response_backend='ao'`` remains an independent oracle while
+        ``response_backend='ao'`` remains an independent reference while
         ``'mo_direct'`` avoids AO response outputs. The common UCPHF solver and
         physical-residual diagnostic are shared.
     '''

@@ -1,5 +1,8 @@
 '''Restricted HF-DFT energy workflow built on PySCF RKS.'''
 
+import hashlib
+
+import numpy as np
 from pyscf import scf
 from pyscf.df import df_jk
 from pyscf.dft import rks
@@ -7,8 +10,172 @@ from pyscf.dft import rks
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 
 
+def _check_df_owner(mf, with_df=None):
+    '''Require every molecular DF provider to own the active ``Mole``.
+
+    A DF object is not a geometry-independent option container.  Its auxiliary
+    basis and three-center integrals belong to the ``Mole`` used to construct
+    it.  Equal AO dimensions are therefore insufficient: attaching a provider
+    from another geometry can produce shape-compatible but physically mixed
+    one- and two-electron Hamiltonian terms.
+
+    ``with_df`` validates a provider supplied to :meth:`density_fit` before
+    PySCF copies it into the source and target objects.  The attached providers
+    are checked as well so direct attribute mutation fails at the next energy
+    or gradient entry point.
+    '''
+    providers = [('with_df', with_df)]
+    target_df = getattr(mf, 'with_df', None)
+    source = getattr(mf, 'mf_hf', None)
+    source_df = getattr(source, 'with_df', None)
+    providers.extend((('target with_df', target_df),
+                      ('source with_df', source_df)))
+
+    if source is not None and source.mol is not mf.mol:
+        raise ValueError(
+            'source HF and the HF-DFT workflow must reference the same Mole object')
+
+    for name, provider in providers:
+        if provider is not None and getattr(provider, 'mol', None) is not mf.mol:
+            raise ValueError(
+                f'{name} and the HF-DFT workflow must reference the same Mole object')
+
+    if source is not None:
+        if (target_df is None) != (source_df is None):
+            raise ValueError(
+                'source HF and target DFT must use the same DF representation')
+        if target_df is not None and target_df is not source_df:
+            raise ValueError(
+                'source HF and target DFT must share one molecular with_df')
+
+
+def _make_source_signature(mf):
+    '''Describe the molecular Hamiltonian represented by the source HF state.
+
+    The signature intentionally excludes execution-only controls such as
+    ``max_memory``, ``verbose`` and SCF tolerances.  It records only molecule
+    and DF choices that can change the stationary source-HF orbitals used by
+    the Z-vector gradient.
+    '''
+    _check_df_owner(mf)
+    mol = mf.mol
+    mf_hf = mf.mf_hf
+    with_df = getattr(mf_hf, 'with_df', None)
+    if with_df is None:
+        df_signature = ('conventional',)
+    else:
+        df_signature = (
+            'density_fit',
+            type(with_df).__module__,
+            type(with_df).__qualname__,
+            repr(with_df.auxbasis),
+            bool(getattr(mf_hf, 'only_dfj', False)),
+        )
+
+    return (
+        tuple(mol.atom_charges().tolist()),
+        mol.atom_coords().tobytes(),
+        repr(mol._basis),
+        repr(mol._ecp),
+        repr(mol._pseudo),
+        repr(mol.nucmod),
+        int(mol.charge),
+        int(mol.spin),
+        bool(mol.cart),
+        df_signature,
+    )
+
+
+def _array_digest(value):
+    '''Return a byte-sensitive digest without importing a GPU dependency.
+
+    CuPy arrays expose an explicit ``get`` method.  Calling it here keeps this
+    common molecular-state check usable by the GPU facade without making the
+    CPU package import CuPy or GPU4PySCF.  Molecular canonical arrays are
+    transferred only at source-state validation boundaries, not inside an SCF
+    or CPHF iteration.
+    '''
+    if isinstance(value, (tuple, list)):
+        return tuple(_array_digest(item) for item in value)
+    getter = getattr(value, 'get', None)
+    if callable(getter):
+        value = getter()
+    value = np.ascontiguousarray(value)
+    digest = hashlib.sha256()
+    digest.update(value.dtype.str.encode('ascii'))
+    digest.update(np.asarray(value.shape, dtype=np.int64).tobytes())
+    digest.update(value.tobytes())
+    return digest.hexdigest()
+
+
+def _make_source_state_signature(mf):
+    '''Fingerprint the canonical source arrays required by the Z-vector.'''
+    values = tuple(
+        getattr(mf.mf_hf, name, None)
+        for name in ('mo_energy', 'mo_coeff', 'mo_occ')
+    )
+    if any(value is None for value in values):
+        return None
+    return tuple(_array_digest(value) for value in values)
+
+
+def _record_source_signature(mf):
+    '''Record the Hamiltonian and canonical state assigned to the source HF.'''
+    mf._source_signature = _make_source_signature(mf)
+    mf._source_state_signature = _make_source_state_signature(mf)
+
+
+def _check_source_state(mf):
+    '''Require source orbitals stationary for the current molecular problem.'''
+    _check_df_owner(mf)
+    if not mf.mf_hf.converged:
+        raise RuntimeError('source HF calculation must be converged')
+    if mf._source_signature != _make_source_signature(mf):
+        raise RuntimeError(
+            'source HF state does not match the current molecule or DF '
+            'representation; run mf.kernel() again')
+    state_signature = _make_source_state_signature(mf)
+    if state_signature is None:
+        raise RuntimeError('source HF calculation has no canonical orbital state')
+    if mf._source_state_signature is None:
+        # A standard PySCF checkpoint has no DC-Forge receipt.  The caller may
+        # attach a separately validated canonical state and set ``converged``;
+        # seal it on its first DC-Forge use so later in-place mutation is still
+        # detected.  The checkpoint example performs the physical validation
+        # before this boundary.
+        mf._source_state_signature = state_signature
+    elif mf._source_state_signature != state_signature:
+        raise RuntimeError(
+            'source HF canonical orbitals changed after validation; '
+            'run mf.kernel() again')
+
+    facade_values = tuple(
+        getattr(mf, name, None)
+        for name in ('mo_energy', 'mo_coeff', 'mo_occ')
+    )
+    if (any(value is not None for value in facade_values)
+            and (any(value is None for value in facade_values)
+                 or tuple(_array_digest(value) for value in facade_values)
+                 != state_signature)):
+        raise RuntimeError(
+            'HF-DFT canonical orbitals do not match the source HF state; '
+            'run mf.kernel() again')
+
+
+def _clear_target_state(mf):
+    '''Discard copied target results after a source representation change.'''
+    for name in ('e_hf', 'e_uhf'):
+        if hasattr(mf, name):
+            setattr(mf, name, None)
+    mf.e_dft = mf.e_d2c = mf.dm_hf = None
+    mf.d2c_result = None
+    mf.e_tot = None
+    mf.converged = False
+
+
 def _check_xc(mf):
-    '''Reject target terms outside the molecular HF-DFT contract.'''
+    '''Validate molecular representation ownership and target-XC terms.'''
+    _check_df_owner(mf)
     if not hasattr(mf, '_numint'):
         return
 
@@ -28,7 +195,8 @@ class RHFDFT(rks.RKS):
 
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'e_d2c', 'dm_hf',
-        'dispersion', 'd2c_result',
+        'dispersion', 'd2c_result', '_source_signature',
+        '_source_state_signature',
     }
     _hf_options = (
         'max_memory', 'verbose', 'stdout', 'chkfile',
@@ -58,6 +226,8 @@ class RHFDFT(rks.RKS):
         self.dm_hf = None
         self.dispersion = None
         self.d2c_result = None
+        self._source_signature = _make_source_signature(self)
+        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select an additive geometry-only dispersion correction.
@@ -88,6 +258,7 @@ class RHFDFT(rks.RKS):
         if not self.mf_hf.converged:
             raise RuntimeError('source RHF calculation did not converge')
         self._sync_hf_results()
+        _record_source_signature(self)
         return e_hf
 
     def run_hf(self, dm0=None, **kwargs):
@@ -95,8 +266,7 @@ class RHFDFT(rks.RKS):
         return self
 
     def make_hf_rdm1(self):
-        if not self.mf_hf.converged:
-            raise RuntimeError('source RHF calculation must be converged')
+        _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
     def kernel(self, dm0=None, run_hf=True, **kwargs):
@@ -107,8 +277,7 @@ class RHFDFT(rks.RKS):
         else:
             if dm0 is not None or kwargs:
                 raise ValueError('dm0/kwargs require run_hf=True')
-            if not self.mf_hf.converged:
-                raise RuntimeError('run_hf=False requires a converged source RHF')
+            _check_source_state(self)
             self._sync_hf_results()
 
         self.dm_hf = self.make_hf_rdm1()
@@ -118,6 +287,9 @@ class RHFDFT(rks.RKS):
     def energy_tot(self, dm=None, h1e=None, vhf=None):
         '''Evaluate target HF-DFT energy and optional D2C-D4 correction.'''
         _check_xc(self)
+        if dm is None:
+            dm = self.make_hf_rdm1()
+            self._sync_hf_results()
         self.e_dft = float(rks.RKS.energy_tot(self, dm, h1e, vhf))
         self.dispersion = normalize_dispersion(self.dispersion)
         self.e_d2c = 0.0
@@ -173,6 +345,8 @@ class RHFDFT(rks.RKS):
             then attached to the target evaluator, keeping source and target
             on one explicit three-center-integral representation.
         '''
+        _check_df_owner(self, with_df)
+        source_was_converged = bool(self.mf_hf.converged)
         mf_hf = df_jk.density_fit(
             self.mf_hf,
             auxbasis=auxbasis,
@@ -181,6 +355,9 @@ class RHFDFT(rks.RKS):
         )
         mf = _DFRHFDFT(self, mf_hf.with_df, only_dfj)
         mf.mf_hf = mf_hf
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf
 
     def _sync_hf_results(self):
@@ -206,8 +383,12 @@ class _DFRHFDFT(df_jk._DFHF, RHFDFT):
 
     def undo_df(self):
         '''Remove density fitting from both source and target workflow objects.'''
+        source_was_converged = bool(self.mf_hf.converged)
         mf = df_jk._DFHF.undo_df(self)
         mf.mf_hf = self.mf_hf.undo_df()
+        _clear_target_state(mf)
+        if not source_was_converged:
+            _record_source_signature(mf)
         return mf
 
     def nuc_grad_method(self):

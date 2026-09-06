@@ -24,7 +24,7 @@ def test_source_and_target_must_share_one_molecule():
 
 def test_run_hf_false_requires_converged_source():
     mf = RHFDFT(make_mol("water1.xyz", basis="sto-3g"), xc="PBE")
-    with pytest.raises(RuntimeError, match="converged source RHF"):
+    with pytest.raises(RuntimeError, match="source HF calculation must be converged"):
         mf.kernel(run_hf=False)
 
 

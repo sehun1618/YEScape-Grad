@@ -38,7 +38,7 @@ def make_s1_oo_vo(mol, Co, Cv, s1, atmlst):
             Full moving-basis virtual-occupied overlap blocks.
 
     Notes:
-        This is the reusable transformation/oracle interface: callers that
+        This is the reusable transformation/reference interface: callers that
         need the actual ``S^lambda_vo`` values receive the complete tensor.
         No virtual-virtual block or ``(3N,nmo,nmo)`` tensor is formed.
 
@@ -114,7 +114,7 @@ def make_s1_oo_and_grad_ovlp_energy(
         A separate function is intentional. Folding this behavior into
         ``make_s1_oo_vo`` through optional arguments would make its return type
         depend on flags and obscure whether the memory-heavy VO tensor exists.
-        The explicit names keep the materialized oracle and streamed
+        The explicit names keep the materialized reference and streamed
         production paths independently testable. Streaming reduces persistent
         VO storage; it is not assumed to make the small contraction itself
         faster.
@@ -143,7 +143,7 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
     '''Return the source-Fock term through GPU4PySCF ``make_h1``.
 
     This reference route materializes ``(N_atom,3,nmo,nocc)`` before selecting
-    its VO rows.  It remains available as the numerical oracle for the DF
+    its VO rows.  It remains available as the numerical reference for the DF
     direct contracted implementation.
 
     The tensor is the explicit source-HF operator derivative at the fixed
@@ -207,7 +207,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
     Notes:
         ``_jk_energies_per_atom`` is a private GPU4PySCF 1.8.1 API. The
-        ``make_h1`` oracle guards its cross-density coefficients.
+        ``make_h1`` reference guards its cross-density coefficients.
     '''
     mol = mf_grad.mol
     mf_hf = mf_grad.base.mf_hf
@@ -266,7 +266,7 @@ def grad_ovlp_energy(s1vo, e_occ, zvec):
 def grad_ovlp_response_full(Co, Cv, zvec, s1oo, fvind):
     '''Return the overlap-response term with the full perturbation batch.
 
-    This function is the numerical oracle for the production single-adjoint
+    This function is the numerical reference for the production single-adjoint
     contraction.  It forms ``3N`` occupied-space AO densities and must not be
     used by the default gradient driver.
     '''
