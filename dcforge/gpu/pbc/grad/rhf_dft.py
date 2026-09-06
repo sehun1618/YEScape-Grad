@@ -1035,14 +1035,16 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         self.df_cphf_response_minimum_reserve_bytes = 4 * 1024**3
         self.profile_df_cphf_response = False
         self.z_response_profile = None
-        # Exact experiment: retain the final physical direct-VO action's
+        # Retain the final physical direct-VO action's
         # ``V[D_Z] C_occ`` columns and reuse their occupied projection in the
         # moving-overlap term.  The Hessian transition density carries a
         # factor two, so the response context applies the required one-half
         # scaling.  Exact amplitude identity is mandatory; every mismatch
-        # falls back to the established AO ``fvind`` evaluation.  Defaulting
-        # to ``False`` preserves the production allocation and execution path.
-        self.terminal_response_reuse = False
+        # falls back to the established AO ``fvind`` evaluation.  This is the
+        # default because it removes one otherwise redundant source-HF Fock
+        # action without changing the response amplitude; ``False`` remains
+        # the explicit numerical-reference route.
+        self.terminal_response_reuse = True
         self.terminal_response_reuse_used = False
         self.terminal_response_reuse_fallback_reason = None
         self.terminal_response_reuse_metadata = None

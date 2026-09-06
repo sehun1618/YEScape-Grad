@@ -37,6 +37,7 @@ print('Z response precision:', mf_grad.precision_policy_effective)
 print('GDF response mode:', mf_grad.gdf_response_mode)
 print('GDF adjoint backend:', mf_grad.gdf_adjoint_backend_used)
 print('Physical Z residual:', mf_grad.z_residual_max_abs)
+print('Terminal Z response reused:', mf_grad.terminal_response_reuse_used)
 print('CDERI build memory plan:', mf.with_df.native_build_memory_plan)
 
 # Approximate Hamiltonians are explicit opt-ins and emit warnings.  ``mixed``

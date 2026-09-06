@@ -1,5 +1,6 @@
 '''Small contract checks for migrated real-Gamma GDF accelerations.'''
 
+import time
 import warnings
 from types import SimpleNamespace
 
@@ -65,7 +66,47 @@ def test_gdf_acceleration_defaults_have_explicit_reference_routes():
     assert mf_grad.gdf_response_mode == 'auto'
     assert mf_grad.gdf_adjoint_backend == 'auto'
     assert mf_grad.gdf_derivative_precision == 'fp64'
-    assert mf_grad.terminal_response_reuse is False
+    assert mf_grad.terminal_response_reuse is True
+
+
+def test_terminal_response_reuse_preserves_r2scan_force():
+    '''The final audited Z action must replace, not approximate, Pulay fvind.'''
+    mf = RHFDFT(
+        make_water_cell(), xc='R2SCAN').density_fit(auxbasis='gth-szv')
+    mf = mf.multigrid_numint(with_j=False)
+    with pytest.warns(GDFBuildPrecisionWarning):
+        mf.set_gdf_precision_profile('fp32_build')
+    mf.conv_tol = 1.e-8
+    mf.conv_tol_grad = 1.e-5
+    mf.max_cycle = 60
+    assert np.isfinite(mf.kernel())
+
+    gradients = {}
+    timings = {}
+    drivers = {}
+    for reuse in (False, True):
+        mf_grad = mf.nuc_grad_method()
+        mf_grad.terminal_response_reuse = reuse
+        mf_grad.cphf_conv_tol = 1.e-8
+        mf_grad.cphf_residual_tol = 1.e-6
+        started = time.perf_counter()
+        gradients[reuse] = cp.asnumpy(mf_grad.kernel())
+        timings[reuse] = time.perf_counter() - started
+        drivers[reuse] = mf_grad
+
+    difference = gradients[True] - gradients[False]
+    print({
+        'reuse_false_seconds': timings[False],
+        'reuse_true_seconds': timings[True],
+        'gradient_rms_ha_per_bohr': float(np.sqrt(np.mean(difference**2))),
+        'gradient_max_ha_per_bohr': float(np.max(np.abs(difference))),
+    })
+    np.testing.assert_allclose(
+        gradients[True], gradients[False], atol=1.e-9, rtol=0.)
+    assert drivers[False].terminal_response_reuse_used is False
+    assert drivers[True].terminal_response_reuse_used is True
+    assert drivers[True].terminal_response_reuse_metadata['matched'] is True
+    assert drivers[True].z_residual_max_abs <= 1.e-6
 
 
 def test_source_metric_factor_keeps_only_retained_subspace():

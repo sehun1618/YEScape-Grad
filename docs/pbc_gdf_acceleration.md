@@ -81,10 +81,11 @@ precision-profile claims must not be extrapolated to sampled k-points.
   resolver and is the production default.
 - Native build/transfer/gradient profilers synchronize CUDA and are diagnostic
   controls, not timing defaults.
-- `mf_grad.terminal_response_reuse` can retain the final audited Z action for
-  the following Pulay contraction.  It remains `False` because the retained
-  object increases lifecycle coupling and was not promoted during this
-  narrowed migration.
+- `mf_grad.terminal_response_reuse=True` retains the final audited Z action's
+  occupied projection for the following Pulay contraction.  It is the Gamma
+  GDF default after direct `False`/`True` force parity validation; setting it
+  to `False` retains the redundant-action numerical-reference route.  Exact
+  response-amplitude identity is required and any mismatch falls back safely.
 - `two_channel.py` is an adapter for an optional external multi-observable
   library.  No such binary is bundled, so production uses the stable fused
   one-channel implementation.
