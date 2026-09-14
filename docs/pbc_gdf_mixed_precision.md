@@ -47,6 +47,46 @@ three-center integrals and auxiliary metric remain FP64.  The additional
 approximation appears when the metric factor and the large SR/LR
 transformations are lowered before the final CDERI is formed.
 
+## Source SCF precision promotion budgets
+
+The two intermediate source-SCF precision tiers each have a **20-cycle maximum
+by default**. Existing density-change and AO-commutator gates can promote sooner;
+reaching the budget also promotes, even if those residual gates are not met.
+This prevents indefinite residence at a low-precision plateau, but does not
+guarantee faster SCF or convergence for difficult electronic structures.
+
+```python
+mf.set_gdf_precision_profile('mixed')  # Also applies to 'fp32_build'.
+mf.source_precision_coarse_max_cycle = 20  # First tier; customize independently.
+mf.source_precision_fine_max_cycle = 20    # Second tier, not global cycle 20.
+# None disables the budget for that tier (original residual-only promotion).
+```
+
+The source-only `mf.source_mixed_precision(...)` route uses the same budgets.
+Native `fp64` source SCF is unchanged. Direct `run_mixed_source_scf` callers can
+set `thresholds={'coarse': {'max_cycle': 12}, 'fine': {'max_cycle': 25}}`;
+omitted gates inherit defaults. Limits must be positive integers or `None`.
+
+Counts follow completed SCF callbacks within each tier, survive native SCF
+kernel restarts inside the same controller, and reset only on promotion. A new
+controller starts fresh. The pre-existing `minimum_cycle` gates still use native
+SCF cycle numbering; they do not override a maximum residence budget. Promotion
+clears DIIS and requests a full, non-incremental Fock rebuild on the next action.
+With both default budgets, at most 40 intermediate-tier callbacks occur before
+the final tier; this is **not** a promise of convergence in 40 SCF iterations.
+
+The final tier has no additional residence cap: ordinary SCF iteration limits,
+convergence tolerances and final physical audits still apply. For persistent
+FP32 profiles this tier is FP64 **arithmetic over FP32 CDERI**, not reconstruction
+of the discarded FP64 factor. Source logs record promotion reason and tier
+cycle; `source_precision_report['schedule']` preserves `thresholds`, per-cycle
+`tier_cycle`, and transition `reason` (`stationarity` or `max_cycle`).
+
+한국어 요약: 1·2단계에서 각각 최대 20회 계산 후 다음 정밀도로 승격합니다.
+잔차 조건을 먼저 만족하면 더 일찍 승격합니다. 마지막 단계의 수렴 기준은
+완화하지 않으며, FP32 저장 과정에서 잃은 정보를 복원하는 기능도 아닙니다.
+위 두 옵션으로 횟수를 각각 지정하고, `None`으로 횟수 제한을 끌 수 있습니다.
+
 ## Information precision versus arithmetic precision
 
 Two separate questions must always be answered.

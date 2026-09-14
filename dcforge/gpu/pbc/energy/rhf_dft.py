@@ -196,9 +196,11 @@ class RHFDFT(rks.RKS):
         'source_precision_energy_normalization',
         'source_precision_adaptive_norm_fraction',
         'source_precision_coarse_minimum_cycle',
+        'source_precision_coarse_max_cycle',
         'source_precision_coarse_density_change_norm',
         'source_precision_coarse_ao_commutator_norm',
         'source_precision_fine_minimum_cycle',
+        'source_precision_fine_max_cycle',
         'source_precision_fine_density_change_norm',
         'source_precision_fine_ao_commutator_norm',
         'source_precision_final_energy_tol_per_unit',
@@ -257,9 +259,11 @@ class RHFDFT(rks.RKS):
         self.source_precision_energy_normalization = 1
         self.source_precision_adaptive_norm_fraction = .9
         self.source_precision_coarse_minimum_cycle = 2
+        self.source_precision_coarse_max_cycle = 20
         self.source_precision_coarse_density_change_norm = 1.e-1
         self.source_precision_coarse_ao_commutator_norm = 1.e-1
         self.source_precision_fine_minimum_cycle = 4
+        self.source_precision_fine_max_cycle = 20
         self.source_precision_fine_density_change_norm = 1.e-3
         self.source_precision_fine_ao_commutator_norm = 1.e-3
         self.source_precision_final_energy_tol_per_unit = 1.e-7
@@ -297,6 +301,9 @@ class RHFDFT(rks.RKS):
                     self.source_precision_policy)
         logger.info(self, 'source_precision_policy_effective = %s',
                     self.source_precision_policy_effective)
+        logger.info(self, 'source precision max cycles (coarse, fine) = %s, %s',
+                    self.source_precision_coarse_max_cycle,
+                    self.source_precision_fine_max_cycle)
         logger.info(self, 'source_dm_warm_start = %s',
                     self.source_dm_warm_start)
         logger.info(self, 'source_dm_warm_start_min_subspace_overlap = %.3f',
@@ -804,10 +811,14 @@ class RHFDFT(rks.RKS):
         the arithmetic operator advances to a more accurate tier.  The raw
         matrix norms are not claimed to be strictly size invariant; an RMS or
         relative-residual normalization requires a separate validated change.
+        The independent max_cycle budgets count time spent in each precision
+        tier, not total SCF cycles. None disables that tier's budget. They do
+        not relax the final SCF tolerance or reconstruct FP64 CDERI data.
         '''
         return {
             'coarse': {
                 'minimum_cycle': self.source_precision_coarse_minimum_cycle,
+                'max_cycle': self.source_precision_coarse_max_cycle,
                 'density_change_norm': (
                     self.source_precision_coarse_density_change_norm),
                 'ao_commutator_norm': (
@@ -815,6 +826,7 @@ class RHFDFT(rks.RKS):
             },
             'fine': {
                 'minimum_cycle': self.source_precision_fine_minimum_cycle,
+                'max_cycle': self.source_precision_fine_max_cycle,
                 'density_change_norm': (
                     self.source_precision_fine_density_change_norm),
                 'ao_commutator_norm': (

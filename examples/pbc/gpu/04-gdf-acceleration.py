@@ -46,4 +46,9 @@ print('CDERI build memory plan:', mf.with_df.native_build_memory_plan)
 # cannot recover discarded bits.
 # mf.set_gdf_precision_profile('mixed')
 # mf.set_gdf_precision_profile('fp32_build')
+# Set these BEFORE mf.run() when using a mixed source profile:
+# mf.source_precision_coarse_max_cycle = 20  # First-tier residence budget.
+# mf.source_precision_fine_max_cycle = 20    # Second-tier residence budget.
+# Residual gates may promote earlier; None disables an individual budget.
+# The final FP64-arithmetic tier still has to meet the SCF/audit tolerances.
 # They require independent energy/force validation on representative data.

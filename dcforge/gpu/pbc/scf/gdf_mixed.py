@@ -8,6 +8,10 @@ The legacy guarded operator changes monotonically
 
 ``FP32 block J/K -> adaptive FP64 K outer product -> native FP64 GDF``.
 
+Each intermediate tier advances when its stationarity gates pass OR its
+20-cycle residence budget is exhausted. Budgets are independently configurable;
+None disables a budget. They never replace final SCF/physical acceptance.
+
 Every transition clears DIIS and forces the following Fock build to use the
 full density.  A final native-FP64 Fock audit is mandatory.  If the mixed route
 does not reach and iterate with the native operator, or the physical residual
@@ -32,12 +36,14 @@ cannot be mislabeled as a native-FP64 source calculation.
 '''
 
 import time
+from numbers import Integral
 
 import cupy as cp
 import numpy as np
 from gpu4pyscf.lib.cupy_helper import contract
 from gpu4pyscf.pbc.df.fft_jk import _ewald_exxdiv_for_G0
 from pyscf import lib
+from pyscf.lib import logger
 
 from dcforge.gpu.pbc.df.cderi import copy_gamma_cderi_fp32
 
@@ -50,15 +56,34 @@ NATIVE_FP64 = 'native_fp64'
 DEFAULT_THRESHOLDS = {
     'coarse': {
         'minimum_cycle': 2,
+        'max_cycle': 20,
         'density_change_norm': 1.e-1,
         'ao_commutator_norm': 1.e-1,
     },
     'fine': {
         'minimum_cycle': 4,
+        'max_cycle': 20,
         'density_change_norm': 1.e-3,
         'ao_commutator_norm': 1.e-3,
     },
 }
+
+
+def _normalize_thresholds(thresholds):
+    '''Fill missing gates; max_cycle is a per-tier budget, None disables it.'''
+    thresholds = {} if thresholds is None else thresholds
+    result = {}
+    for name, defaults in DEFAULT_THRESHOLDS.items():
+        gate = dict(defaults, **thresholds.get(name, {}))
+        limit = gate['max_cycle']
+        if limit is not None:
+            if (isinstance(limit, bool) or not isinstance(limit, Integral)
+                    or limit < 1):
+                raise ValueError(
+                    f'{name}.max_cycle must be a positive integer or None')
+            gate['max_cycle'] = int(limit)
+        result[name] = gate
+    return result
 
 
 def _scalar(value):
@@ -343,7 +368,7 @@ class SourcePrecisionController:
         self.mf_hf = mf_hf
         self.provider = mf_hf.with_df
         self.storage = storage
-        self.thresholds = thresholds
+        self.thresholds = _normalize_thresholds(thresholds)
         self.persistent = bool(persistent)
         self.sequence = (
             (FP32_BLOCK, FP32_RHOK, FP32_STORAGE_FP64)
@@ -356,6 +381,7 @@ class SourcePrecisionController:
             for policy in self.sequence if policy != NATIVE_FP64}
         self.current_policy = self.sequence[0]
         self.tier = 0
+        self.tier_cycles = 0
         self.original_get_jk = self.original_get_veff = None
         self.original_callback = None
         self.pending_full_rebuild = False
@@ -428,14 +454,23 @@ class SourcePrecisionController:
         recorded for diagnosis but deliberately excluded: its extensive scale
         and occasional nonmonotonic DIIS behavior make it a poor portable
         trigger across different chemical systems.
+
+        A tier-local max_cycle (default 20) is an independent escape from a
+        low-precision plateau, not an SCF convergence criterion.  Count actual
+        callbacks across native kernel restarts; envs['cycle'] restarts at zero
+        during level-shift rescue.  Promotion takes effect on the next action,
+        clears DIIS and invalidates incremental Fock state.  The final tier has
+        no promotion budget and still requires the usual SCF/physical audit.
         '''
         cycle = int(envs['cycle']) + 1
+        self.tier_cycles += 1
         energy = _scalar(envs['e_tot'])
         previous = _scalar(envs.get('last_hf_e'))
         energy_change = (
             float('inf') if previous is None else abs(energy - previous))
         record = {
             'cycle': cycle,
+            'tier_cycle': self.tier_cycles,
             'policy_used': self.current_policy,
             'energy_ha': energy,
             'energy_change_ha': energy_change,
@@ -447,14 +482,19 @@ class SourcePrecisionController:
         gate = (
             self.thresholds['coarse'] if self.tier == 0 else
             self.thresholds['fine'] if self.tier == 1 else None)
-        if gate is not None and (
+        stationarity_ready = gate is not None and (
                 cycle >= int(gate['minimum_cycle'])
                 and record['density_change_norm']
                 <= float(gate['density_change_norm'])
                 and record['ao_commutator_norm']
-                <= float(gate['ao_commutator_norm'])):
+                <= float(gate['ao_commutator_norm']))
+        budget_reached = (gate is not None and gate['max_cycle'] is not None
+                          and self.tier_cycles >= gate['max_cycle'])
+        if stationarity_ready or budget_reached:
             old = self.current_policy
+            reason = 'stationarity' if stationarity_ready else 'max_cycle'
             self.tier += 1
+            self.tier_cycles = 0
             self.current_policy = self.sequence[self.tier]
             cleared = _clear_diis(envs.get('mf_diis'))
             self.pending_full_rebuild = True
@@ -463,11 +503,15 @@ class SourcePrecisionController:
                 'after_call': len(self.calls),
                 'from': old,
                 'to': self.current_policy,
+                'reason': reason,
                 'trigger': record,
                 'gate': gate,
                 'diis_history_cleared': cleared,
                 'next_fock_full_rebuild_required': True,
             })
+            logger.info(self.mf_hf, 'Source precision %s -> %s: %s '
+                        '(tier cycles %d, SCF cycle %d)', old,
+                        self.current_policy, reason, record['tier_cycle'], cycle)
         if callable(self.original_callback):
             self.original_callback(envs)
 
@@ -489,7 +533,8 @@ class SourcePrecisionController:
             'required_final_policy': final_policy,
             'transition_criteria': (
                 'minimum_cycle', 'density_change_norm',
-                'ao_commutator_norm'),
+                'ao_commutator_norm', 'max_cycle'),
+            'thresholds': self.thresholds,
             'energy_change_used_for_transition': False,
             'calls': self.calls,
             'cycles': self.cycles,
@@ -509,6 +554,7 @@ class SourcePrecisionController:
             return False
         old = self.current_policy
         self.tier = len(self.sequence) - 1
+        self.tier_cycles = 0
         self.current_policy = final_policy
         self.pending_full_rebuild = True
         self.transitions.append({
@@ -561,6 +607,13 @@ def run_mixed_source_scf(
     uses the provider-owned FP32 factor through all tiers and ends with FP64
     arithmetic over FP32 storage; no FP64-CDERI reference exists without a fresh
     rebuild.  A provider build occurs inside this call when needed.
+
+    Kwargs:
+        thresholds : dict or None
+            Coarse/fine stationarity gates and per-tier ``max_cycle`` budgets.
+            Missing fields use DEFAULT_THRESHOLDS. A positive integer sets a
+            residence budget; None disables it. Budgets apply across native
+            SCF restarts within this call and do not relax final acceptance.
     '''
     provider = mf_hf.with_df
     if provider.__class__.__name__ != 'GDF' or not getattr(
@@ -569,7 +622,7 @@ def run_mixed_source_scf(
             'source mixed precision currently supports real-Gamma GDF RHF')
     if float(final_energy_tol_per_unit) <= 0. or float(final_residual_tol) <= 0.:
         raise ValueError('final FP64 audit tolerances must be positive')
-    thresholds = DEFAULT_THRESHOLDS if thresholds is None else thresholds
+    thresholds = _normalize_thresholds(thresholds)
     kernel_kwargs = {} if kernel_kwargs is None else dict(kernel_kwargs)
     started = time.perf_counter()
     report = {
