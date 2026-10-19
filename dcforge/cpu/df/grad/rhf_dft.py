@@ -3,6 +3,7 @@
 from pyscf.df.grad import rks as df_rks_grad
 from pyscf.lib import logger
 
+from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad import rhf_dft
 
 
@@ -40,6 +41,9 @@ class Gradients(rhf_dft.Gradients, df_rks_grad.Gradients):
         rhf_dft.Gradients.__init__(self, mf)
         self.auxbasis_response = True
         self.fock_deriv_method = 'direct'
+
+    def get_veff(self, mol=None, dm=None):
+        return grid_response.get_veff(self, df_rks_grad.get_veff, mol, dm)
 
     def dump_flags(self, verbose=None):
         '''Log the DC-DFT, grid-response and auxiliary-response controls.'''

@@ -6,6 +6,7 @@ from pyscf.lib import logger
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
+from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad.rhf_nv import (
     grad_fock_direct,
     grad_fock_make_h1,
@@ -155,12 +156,17 @@ class Gradients(rks_grad.Gradients):
     electronic assembly that is nonvariational with respect to the target
     functional.  Public options retain the PySCF names ``cphf_conv_tol``,
     ``cphf_max_cycle``, ``grid_response`` and ``atmlst``.
+
+    grid_response_backend : str
+        'pyscf_default' (default) or 'becke_omp'. The latter changes only
+        moving-grid partition evaluation, not grids or response equations.
     '''
 
     _keys = rks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
-        'de_d2c', 'd2c_result',
+        'de_d2c', 'd2c_result', 'grid_response_backend',
+        'grid_response_backend_used',
     }
 
     def __init__(self, mf):
@@ -169,6 +175,8 @@ class Gradients(rks_grad.Gradients):
             raise TypeError('Gradients requires a dcforge.cpu.energy.RHFDFT object')
         rks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
+        self.grid_response_backend = 'pyscf_default'
+        self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
         self.cphf_residual_warn_tol = 1e-8
@@ -176,6 +184,9 @@ class Gradients(rks_grad.Gradients):
         self.fock_deriv_method = 'direct'
         self.de_d2c = None
         self.d2c_result = None
+
+    def get_veff(self, mol=None, dm=None):
+        return grid_response.get_veff(self, rks_grad.get_veff, mol, dm)
 
     def dump_flags(self, verbose=None):
         '''Log inherited RKS flags and the source-HF CPHF controls.'''

@@ -6,6 +6,7 @@ from pyscf.lib import logger
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
+from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad.skeleton import skeleton_gradient_uhf
 from dcforge.cpu.grad.uhf_nv import (
     grad_fock_direct,
@@ -147,12 +148,17 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
 
 class Gradients(uks_grad.Gradients):
-    '''Unrestricted target-DFT-on-UHF analytic nuclear gradient driver.'''
+    '''Unrestricted target-DFT-on-UHF analytic nuclear gradient driver.
+
+    grid_response_backend : str
+        'pyscf_default' (default) or 'becke_omp'; same semantics as RHF.
+    '''
 
     _keys = uks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
-        'de_d2c', 'd2c_result',
+        'de_d2c', 'd2c_result', 'grid_response_backend',
+        'grid_response_backend_used',
     }
 
     def __init__(self, mf):
@@ -161,6 +167,8 @@ class Gradients(uks_grad.Gradients):
             raise TypeError('Gradients requires a dcforge.cpu.energy.UHFDFT object')
         uks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
+        self.grid_response_backend = 'pyscf_default'
+        self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
         self.cphf_residual_warn_tol = 1e-8
@@ -168,6 +176,9 @@ class Gradients(uks_grad.Gradients):
         self.fock_deriv_method = 'direct'
         self.de_d2c = None
         self.d2c_result = None
+
+    def get_veff(self, mol=None, dm=None):
+        return grid_response.get_veff(self, uks_grad.get_veff, mol, dm)
 
     def dump_flags(self, verbose=None):
         '''Log inherited UKS flags and source-UHF UCPHF controls.'''
