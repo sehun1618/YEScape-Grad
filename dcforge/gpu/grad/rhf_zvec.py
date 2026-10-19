@@ -4,6 +4,7 @@ import cupy as cp
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import contract
 from gpu4pyscf.scf import cphf
+from dcforge.tools.cphf import solve as solve_cphf
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
@@ -120,7 +121,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
     mo_occ = cp.asarray(mo_occ)
     fvo = cp.asarray(fvo)
 
-    x, _ = cphf.solve(
+    x, _ = solve_cphf(cphf,
         vind, mo_energy, mo_occ, fvo, s1=None,
         max_cycle=max_cycle,
         tol=conv_tol,

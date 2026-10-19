@@ -4,6 +4,7 @@ import cupy as cp
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import contract
 from gpu4pyscf.scf import cphf, ucphf
+from dcforge.tools.cphf import solve as solve_cphf
 
 
 def gen_vind(Co, Cv, fvind):
@@ -131,7 +132,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
     nova, novb = fvoa.size, fvob.size
 
     if nova and novb:
-        zvec, _ = ucphf.solve(
+        zvec, _ = solve_cphf(ucphf,
             vind, mo_energy, mo_occ, fvo, s1=None,
             max_cycle=max_cycle, tol=conv_tol, verbose=log,
         )
@@ -145,7 +146,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
             packed[:, :nova] = x
             return vind(packed).reshape(-1, nova + novb)[:, :nova].reshape(shape)
 
-        za, _ = cphf.solve(
+        za, _ = solve_cphf(cphf,
             vind_a, ea, occa, fvoa, s1=None,
             max_cycle=max_cycle, tol=conv_tol, verbose=log,
         )
@@ -159,7 +160,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
             packed[:, nova:] = x
             return vind(packed).reshape(-1, nova + novb)[:, nova:].reshape(shape)
 
-        zb, _ = cphf.solve(
+        zb, _ = solve_cphf(cphf,
             vind_b, eb, occb, fvob, s1=None,
             max_cycle=max_cycle, tol=conv_tol, verbose=log,
         )

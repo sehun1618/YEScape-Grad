@@ -3,6 +3,7 @@
 import numpy as np
 from pyscf.lib import logger
 from pyscf.scf import cphf
+from dcforge.tools.cphf import solve as solve_cphf
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
@@ -129,7 +130,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     # Omitting s1 selects PySCF's fixed-metric VO CPHF equation.  Supplying
     # s1 is required instead for direct U^lambda response to a nuclear
     # displacement, as in pyscf.hessian.rhf.solve_mo1.
-    zvec, _ = cphf.solve(vind, mo_energy, mo_occ, fvo, s1=None,
+    zvec, _ = solve_cphf(cphf, vind, mo_energy, mo_occ, fvo, s1=None,
                          max_cycle=max_cycle, tol=conv_tol, verbose=log)
 
     # PySCF solves (A+B)^HF x = -F^KS_vo.  DC-Forge exposes the textbook
