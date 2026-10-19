@@ -6,6 +6,7 @@ import cupy as cp
 from gpu4pyscf.lib import logger
 from gpu4pyscf.pbc.grad import rhf as gpu_rhf_grad
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.pbc.kpts import IMAGINARY_RESIDUAL_TOL
 from dcforge.gpu.pbc.df.fft import FFTDF, grad_jk
 from dcforge.gpu.pbc.df.gdf import (
@@ -366,6 +367,7 @@ class Gradients(gpu_rhf_grad.GradientsBase):
             self.scientific_host_fallback)
         return self
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,
                atmlst=None):
         '''Evaluate sampled-k analytic ``dE/dR`` in Ha/Bohr.'''

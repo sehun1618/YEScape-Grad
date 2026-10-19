@@ -6,6 +6,7 @@ import numpy as np
 from pyscf.pbc.dft import gen_grid, krks, multigrid
 from pyscf.pbc.scf import khf
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.pbc.df.fft import FFTDF
 from dcforge.cpu.pbc.df.gdf import GDF
 from dcforge.cpu.pbc.kpts import (
@@ -240,6 +241,7 @@ class KRHFDFT(krks.KRKS):
             self.mf_hf.make_rdm1(), len(self.kpts), self.cell.nao_nr(),
             name='source KRHF density')
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         r'''Run KRHF and evaluate :math:`E_{\rm DFA}[P_{\rm KRHF}]`.'''
         _check_input(self)

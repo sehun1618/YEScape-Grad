@@ -4,6 +4,7 @@ from gpu4pyscf.df import df_jk
 from gpu4pyscf.dft import rks
 from gpu4pyscf.scf import hf
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import RHFDFT as CPU_RHFDFT
 from dcforge.cpu.energy.rhf_dft import (
@@ -142,6 +143,7 @@ class RHFDFT(rks.RKS):
         _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         '''Run source RHF, then evaluate fixed-density target XC on the GPU.
 

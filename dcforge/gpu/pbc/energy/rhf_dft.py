@@ -35,6 +35,7 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.pbc import gto
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.gpu.pbc import multigrid as dc_multigrid
 from dcforge.gpu.pbc.df.fft import FFTDF
 from dcforge.gpu.pbc.df.gdf import GDF
@@ -392,6 +393,7 @@ class RHFDFT(rks.RKS):
         assert_pbc_source_state(self)
         return self.mf_hf.make_rdm1()
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         '''Run RHF and evaluate ``E_DFA[P_HF]`` without target SCF.
 

@@ -7,6 +7,7 @@ from pyscf import scf
 from pyscf.df import df_jk
 from pyscf.dft import rks
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 
 
@@ -269,6 +270,7 @@ class RHFDFT(rks.RKS):
         _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         '''Run RHF, then evaluate the target functional at the RHF density.'''
         _check_xc(self)

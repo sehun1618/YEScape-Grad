@@ -22,7 +22,7 @@ Mole/Cell 생성 시 `output='calculation.log', verbose=4`를 설정하면 로�
 객체는 생성 시 base의 출력 설정을 상속하므로 설정 변경은 생성 전에 한다.
 
 - verbose 0: 결과 요약 없음.
-- verbose 3 (NOTE): 에너지, gradient 표, source 수렴, Z-vector residual (max abs),
+- verbose 3 (NOTE): energy/gradient workflow 경과시간, 에너지, gradient 표, source 수렴, Z-vector residual (max abs),
   잔차 판정, gradient 최대값/RMS/합.
 - verbose 4 (INFO): backend/provider, grid/auxiliary response, solver와 tolerance.
 
@@ -42,7 +42,41 @@ Selected-atom gradient sum으로 표시하며 병진 대칭성 판정에 사용�
 작은 병진합 자체가 작은 force 오차를 보장하지 않는다.
 
 요약은 기존 결과만 읽는다. 새로운 Fock/SCF/Z 계산, GPU 동기화/배열 복사,
-파일 저장, 시간 계측은 하지 않는다. 단계별 timing 통합은 이번 범위에 없다.
+파일 저장은 하지 않는다. 단계별 timing 통합은 이번 범위에 없다.
+
+## 계산 시간
+
+공개 energy 및 gradient kernel이 성공하면 verbose >= 3에서 다음 항목을 출력한다.
+
+```text
+Energy workflow wall time = ... s
+Gradient workflow wall time = ... s
+Total wall time = ... s
+```
+
+Energy 시간에는 해당 호출에서 수행한 source SCF와 target energy 평가가 포함된다.
+run_hf=False이면 source SCF를 다시 수행하지 않으므로 재사용 검증과 target 평가 등의
+경과시간이다. Gradient 시간에는 해당 kernel 안의 작업만 포함된다. 두 시간을
+SCF/CPHF 등 세부 단계의 순수 계산 시간으로 해석하지 않는다.
+
+Total은 같은 base 객체의 가장 최근 성공한 energy kernel **시작부터 이번 gradient
+kernel 종료까지 실제로 흐른 시간**이다. 단계별 시간의 합이 아니며, 두 호출 사이의
+대기시간도 포함한다. Gradient를 반복하면 같은 energy 시작 시점부터 새 종료 시점까지
+측정하므로 이전 gradient 호출과 그 사이의 시간도 포함된다. Energy를 gradient 내부에서
+실행하면 gradient 시작 시점부터 측정한다. Energy kernel 측정 기록이 없는
+checkpoint 복원/gradient-only 계산은 이번 gradient 호출의 경과시간을 표시한다.
+새 energy 호출이 실패하면 이전 energy 시간은 재사용하지 않는다.
+이 값에는 energy kernel 호출 전의 Python 시작·import·구조 생성 시간과 gradient 종료
+후의 파일 저장 시간은 포함하지 않는다. 프로그램 전체 실행시간이나 여러 구조의 누적시간은 아니다.
+
+단위는 초이며, monotonic perf_counter로 측정한 host 경과시간이다.
+기존 코드의 동기화는 유지하되 계측을 위한 GPU 동기화는 추가하지 않는다.
+따라서 GPU의 CUDA-event timing이나 개별 kernel 실행시간과는 다르다.
+verbose 0~2에서는 출력하지 않으며, 실패한 호출을 성공 시간처럼 출력하지 않는다.
+PySCF의 전역 TIMER_LEVEL 및 기존 상세 타이밍 출력은 변경하지 않는다.
+추가 검증: CPU/GPU 분자계와 PBC를 포함한 logger 테스트 30개 통과.
+반복 호출 시 시작 시간이 초기화되는지, verbose 0~2에서 출력이 없는지,
+실패 시 성공 타이밍을 남기지 않는지도 확인했다.
 
 ## 검증
 

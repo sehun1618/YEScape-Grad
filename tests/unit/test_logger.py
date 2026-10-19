@@ -9,6 +9,7 @@ from pyscf import gto, lib
 
 from dcforge.cpu.energy import RHFDFT, UHFDFT
 from dcforge.tools.logger import energy_summary, gradient_summary
+from dcforge.tools import logger as result_logger
 
 
 @pytest.mark.parametrize('workflow,atom,spin', [
@@ -32,6 +33,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     energy = mf.kernel()
     text = stream.getvalue()
     assert text.count('DC-Forge Energy') == 1
+    assert text.count('Energy workflow wall time =') == 1
     assert 'HF-PBE' in text
     assert ('Unrestricted' if unrestricted else 'Restricted') in text
     assert backend.upper() in text
@@ -40,10 +42,13 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     stream.truncate()
     assert mf.energy_tot() == pytest.approx(energy, abs=1e-10, rel=0)
     assert 'DC-Forge Energy' not in stream.getvalue()
+    assert 'Energy workflow wall time =' not in stream.getvalue()
     grad = mf.nuc_grad_method()
     values = grad.kernel()
     text = stream.getvalue()
     assert text.count('DC-Forge Gradient') == 1
+    assert text.count('Gradient workflow wall time =') == 1
+    assert text.count('Total wall time =') == 1
     assert 'gradients ---------------' not in text
     assert 'Z-vector residual (max abs)' in text
     assert 'Ha/Bohr' in text
@@ -54,6 +59,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     gradient_summary(grad, unrestricted=unrestricted)
     assert stream.getvalue() == ''
     np.testing.assert_allclose(grad.kernel(), values, atol=1e-10, rtol=0)
+    assert stream.getvalue() == ''
 
 
 @pytest.mark.parametrize('residual,limit,verdict', [
@@ -113,5 +119,85 @@ def test_periodic_output(backend, nk):
     text = mf.stdout.getvalue()
     assert text.count('DC-Forge Energy') == 1
     assert text.count('DC-Forge Gradient') == 1
+    assert text.count('Energy workflow wall time =') == 1
+    assert text.count('Gradient workflow wall time =') == 1
     assert 'Z-vector residual (max abs)' in text
     assert 'Gradient table unavailable' not in text
+
+
+@pytest.mark.parametrize('verbose', [0, 1, 2, 3, 4])
+def test_time_verbosity_and_repeated_calls(monkeypatch, verbose):
+    clock = iter([1., 1.125, 10., 10.5])
+    monkeypatch.setattr(result_logger, 'perf_counter', lambda: next(clock))
+    obj = SimpleNamespace(verbose=verbose, stdout=StringIO())
+    token = object()
+
+    @result_logger.log_kernel_time('Energy workflow')
+    def kernel(self, value):
+        return value
+
+    for _ in range(2):
+        assert kernel(obj, token) is token
+    text = obj.stdout.getvalue()
+    if verbose >= 3:
+        assert text.splitlines() == ['Energy workflow wall time = 0.125 s',
+                                    'Energy workflow wall time = 0.500 s']
+    else:
+        assert text == ''
+
+
+def test_failed_kernel_has_no_success_timing():
+    obj = SimpleNamespace(verbose=3, stdout=StringIO())
+
+    @result_logger.log_kernel_time('Gradient workflow')
+    def kernel(self):
+        raise RuntimeError('expected failure')
+
+    with pytest.raises(RuntimeError, match='expected failure'):
+        kernel(obj)
+    assert obj.stdout.getvalue() == ''
+
+
+def test_total_time_repeats_and_failure(monkeypatch):
+    clock = iter([0., 2., 100., 103., 200., 204., 300., 400., 405.])
+    monkeypatch.setattr(result_logger, 'perf_counter', lambda: next(clock))
+    mf = SimpleNamespace(verbose=3, stdout=StringIO())
+    grad = SimpleNamespace(base=mf, verbose=3, stdout=mf.stdout)
+
+    @result_logger.log_kernel_time('Energy workflow')
+    def energy(self, fail=False):
+        if fail:
+            raise RuntimeError('failed energy')
+
+    @result_logger.log_kernel_time('Gradient workflow')
+    def gradient(self):
+        pass
+
+    energy(mf)
+    gradient(grad)
+    gradient(grad)
+    with pytest.raises(RuntimeError, match='failed energy'):
+        energy(mf, fail=True)
+    gradient(grad)
+    totals = [s for s in mf.stdout.getvalue().splitlines() if s.startswith('Total')]
+    assert totals == ['Total wall time = 103.000 s',
+                      'Total wall time = 204.000 s',
+                      'Total wall time = 5.000 s']
+
+
+def test_nested_energy_time_is_not_counted_twice(monkeypatch):
+    clock = iter([0., 1., 3., 5.])
+    monkeypatch.setattr(result_logger, 'perf_counter', lambda: next(clock))
+    mf = SimpleNamespace(verbose=3, stdout=StringIO())
+    grad = SimpleNamespace(base=mf, verbose=3, stdout=mf.stdout)
+
+    @result_logger.log_kernel_time('Energy workflow')
+    def energy(self):
+        pass
+
+    @result_logger.log_kernel_time('Gradient workflow')
+    def gradient(self):
+        energy(self.base)
+
+    gradient(grad)
+    assert 'Total wall time = 5.000 s' in mf.stdout.getvalue()

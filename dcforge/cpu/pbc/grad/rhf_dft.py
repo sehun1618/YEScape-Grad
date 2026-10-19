@@ -7,6 +7,7 @@ from pyscf.lib import logger
 from pyscf.pbc.dft import multigrid
 from pyscf.pbc.grad import rks
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.pbc.df.fft import FFTDF
 from dcforge.cpu.pbc.df.gaussian.hcore import (
     contract_hcore_deriv as contract_gaussian_hcore_deriv,
@@ -319,6 +320,7 @@ class Gradients(rks.Gradients):
              else type(self.base.with_df).__name__))
         return self
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,
                atmlst=None):
         if not isinstance(self.base.with_df, (FFTDF, GDF)):

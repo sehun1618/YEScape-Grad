@@ -4,6 +4,7 @@ from gpu4pyscf.df import df_jk
 from gpu4pyscf.dft import uks
 from gpu4pyscf.scf import uhf
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import (
     _check_df_owner,
@@ -136,6 +137,7 @@ class UHFDFT(uks.UKS):
         _check_source_state(self)
         return self.mf_hf.make_rdm1()
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         '''Run source UHF, then evaluate fixed-density target XC on the GPU.
 

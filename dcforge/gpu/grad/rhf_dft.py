@@ -6,6 +6,7 @@ from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.grad import rks as rks_grad
 from gpu4pyscf.lib import logger
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
 from dcforge.gpu.grad.rhf_nv import (
@@ -214,6 +215,7 @@ class Gradients(rks_grad.Gradients):
         '''Return the conventional AO adjoint response in the OO block.'''
         return get_z_response_oo_ao(Co, Cv, zvec, fvind)
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate ``dE/dR`` with complete target-grid response.'''
         if self.base.mf_hf.converged:

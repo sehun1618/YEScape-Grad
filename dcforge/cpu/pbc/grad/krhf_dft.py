@@ -5,6 +5,7 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.pbc.grad import krks
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.pbc.df.fft import FFTDF
 from dcforge.cpu.pbc.df.gaussian.hcore import (
     get_hcore_deriv as get_gaussian_hcore_deriv,
@@ -278,6 +279,7 @@ class Gradients(krks.Gradients):
                     type(self.base.with_df).__name__)
         return self
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,
                atmlst=None):
         '''Evaluate sampled-k analytic ``dE/dR`` in Ha/Bohr.'''

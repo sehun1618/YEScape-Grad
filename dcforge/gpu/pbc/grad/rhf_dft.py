@@ -21,6 +21,7 @@ from pyscf import lib
 from pyscf.pbc import gto
 from pyscf.pbc.grad import krhf as cpu_krhf_grad
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.gpu.pbc.df.fft import FFTDF, grad_jk
 from dcforge.gpu.pbc.df.gaussian.hcore import (
     contract_hcore_pair as contract_gaussian_hcore_pair,
@@ -1295,6 +1296,7 @@ class Gradients(gpu_rhf_grad.GradientsBase):
         self.resolved_memory_policy = None
         return self
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None,
                atmlst=None):
         '''Return the complete nuclear energy derivative ``dE/dR`` in Ha/Bohr.'''

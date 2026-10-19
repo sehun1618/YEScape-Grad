@@ -3,11 +3,45 @@
 These helpers only read completed results. They never evaluate energy, Fock,
 response, or residuals. NOTE prints results; INFO adds implementation choices.
 No output file, verbosity switch, GPU timer or persistence format is introduced.
+Public kernels report host elapsed time at NOTE level, without GPU synchronization.
 '''
+
+from functools import wraps
+from time import perf_counter
 
 import numpy as np
 from pyscf.lib import logger
 from pyscf.grad.rhf import _write
+
+
+def log_kernel_time(label):
+    '''Log successful kernel elapsed time at verbose >= 3 (PySCF NOTE).
+
+    This is host wall time, not CPU process time or a CUDA-event profile.
+    Do not synchronize GPUs or change PySCF's process-wide TIMER_LEVEL.
+    A local start time prevents reuse of stale timings across repeated calls.
+    '''
+    def decorate(kernel):
+        @wraps(kernel)
+        def timed(self, *args, **kwargs):
+            start = perf_counter()
+            if label == 'Energy workflow':
+                self._last_energy_timing = None
+            result = kernel(self, *args, **kwargs)
+            end = perf_counter()
+            elapsed = end-start
+            logger.note(self, '%s wall time = %.3f s', label, elapsed)
+            if label == 'Energy workflow':
+                self._last_energy_timing = (start, elapsed)
+            elif label == 'Gradient workflow':
+                energy = getattr(self.base, '_last_energy_timing', None)
+                # Measure the actual interval, including time between calls.
+                # Nested energy must not exclude the start of the gradient.
+                total_start = min(start, energy[0]) if energy is not None else start
+                logger.note(self, 'Total wall time = %.3f s', end-total_start)
+            return result
+        return timed
+    return decorate
 
 
 def _header(obj, mf, title, unrestricted):

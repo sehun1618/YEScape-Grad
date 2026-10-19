@@ -4,6 +4,7 @@ import numpy as np
 from pyscf.grad import rks as rks_grad
 from pyscf.lib import logger
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
 from dcforge.cpu.grad import grid_response
@@ -214,6 +215,7 @@ class Gradients(rks_grad.Gradients):
             f'got {method!r}'
         )
 
+    @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate ``dE/dR`` and retain the term-resolved gradient ledger.'''
         if self.base.mf_hf.converged:

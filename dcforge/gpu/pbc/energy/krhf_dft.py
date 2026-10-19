@@ -10,6 +10,7 @@ from gpu4pyscf.pbc.gto import int1e
 from gpu4pyscf.pbc.scf import khf
 from pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 
+from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.pbc.kpts import (
     IMAGINARY_RESIDUAL_TOL,
     check_equal_weights,
@@ -335,6 +336,7 @@ class KRHFDFT(krks.KRKS):
             cp.asarray(self.mf_hf.make_rdm1()), len(self.kpts),
             self.cell.nao_nr(), name='source GPU KRHF density')
 
+    @log_kernel_time('Energy workflow')
     def kernel(self, dm0=None, run_hf=True, **kwargs):
         r'''Run GPU KRHF and evaluate :math:`E_{\rm DFA}[P_{\rm KRHF}]`.'''
         _check_input(self)
