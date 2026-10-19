@@ -10,12 +10,12 @@ mf = RHFDFT(mol, xc='r2SCAN').density_fit()
 mf.grids.level = 4
 mf.kernel()
 
-# Case 1: original PySCF grid-response implementation (default).
+# Case 1: explicitly select the original PySCF grid-response implementation.
 grad_default = mf.nuc_grad_method()
 grad_default.grid_response_backend = 'pyscf_default'
 reference = grad_default.kernel()
 
-# Case 2: same weights/derivatives, OpenMP atom-pair contraction.
+# Case 2: same weights/derivatives, OpenMP atom-pair contraction (default).
 # Build/install the optional extension first; see docs/cpu_grid_response.md.
 # The same option is supported by UHFDFT and by conventional (non-DF) drivers.
 grad_omp = mf.nuc_grad_method()

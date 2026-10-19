@@ -1316,7 +1316,12 @@ class Gradients(gpu_rhf_grad.GradientsBase):
                 self.de_hcore + self.de_veff + self.de_extra + self.de_ovlp
                 + self.de_nuc + self.de_fock + self.de_ovlp_energy
                 + self.de_ovlp_response)
+        self._finalize()
         return self.de
+
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self)
 
     grad_elec = grad_elec
     grad = kernel

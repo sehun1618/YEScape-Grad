@@ -366,6 +366,10 @@ class Gradients(rks.Gradients):
             self.gradient_timings_s = timings
         return de
 
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self)
+
     grad_elec = grad_elec
 
     def get_stress(self):

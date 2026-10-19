@@ -158,7 +158,7 @@ class Gradients(rks_grad.Gradients):
     ``cphf_max_cycle``, ``grid_response`` and ``atmlst``.
 
     grid_response_backend : str
-        'pyscf_default' (default) or 'becke_omp'. The latter changes only
+        'becke_omp' (default) or 'pyscf_default'. The former changes only
         moving-grid partition evaluation, not grids or response equations.
     '''
 
@@ -175,7 +175,7 @@ class Gradients(rks_grad.Gradients):
             raise TypeError('Gradients requires a dcforge.cpu.energy.RHFDFT object')
         rks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
-        self.grid_response_backend = 'pyscf_default'
+        self.grid_response_backend = 'becke_omp'
         self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
@@ -225,6 +225,10 @@ class Gradients(rks_grad.Gradients):
         self.de_nuc = self.grad_nuc(atmlst=self.atmlst)
         self.de_skel = self.de_skel_elec + self.de_nuc
         return de
+
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self)
 
     grad_elec = grad_elec
 

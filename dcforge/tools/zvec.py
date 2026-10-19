@@ -43,7 +43,7 @@ def warn_z_residual(log, info, warn_tol):
         # PySCF's Logger exposes ``warn`` rather than stdlib ``warning``.
         emit_warning = log.warn
         emit_warning(
-            'Z-vector physical residual %.3e exceeds warning threshold %.3e '
+            'Z-vector residual (max abs) %.3e exceeds warning threshold %.3e '
             '(RHS-relative residual %.3e). The gradient is returned unchanged; '
             'validate sensitive cases against finite differences.',
             residual, warn_tol, float(info['residual_relative']))

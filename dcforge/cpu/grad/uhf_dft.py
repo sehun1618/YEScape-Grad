@@ -151,7 +151,7 @@ class Gradients(uks_grad.Gradients):
     '''Unrestricted target-DFT-on-UHF analytic nuclear gradient driver.
 
     grid_response_backend : str
-        'pyscf_default' (default) or 'becke_omp'; same semantics as RHF.
+        'becke_omp' (default) or 'pyscf_default'; same semantics as RHF.
     '''
 
     _keys = uks_grad.Gradients._keys | {
@@ -167,7 +167,7 @@ class Gradients(uks_grad.Gradients):
             raise TypeError('Gradients requires a dcforge.cpu.energy.UHFDFT object')
         uks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
-        self.grid_response_backend = 'pyscf_default'
+        self.grid_response_backend = 'becke_omp'
         self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
@@ -217,6 +217,10 @@ class Gradients(uks_grad.Gradients):
         self.de_nuc = self.grad_nuc(atmlst=self.atmlst)
         self.de_skel = self.de_skel_elec + self.de_nuc
         return de
+
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self, unrestricted=True)
 
     grad_elec = grad_elec
 

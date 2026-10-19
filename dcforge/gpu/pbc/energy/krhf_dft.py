@@ -365,6 +365,8 @@ class KRHFDFT(krks.KRKS):
             'target GPU fixed-density energy')
         self.e_tot = self.e_dft
         self._sync_backend_metadata()
+        from dcforge.tools.logger import energy_summary
+        energy_summary(self)
         return self.e_dft
 
     def energy_tot(self, dm=None, h1e=None, vhf=None):

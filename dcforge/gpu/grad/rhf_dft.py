@@ -228,6 +228,10 @@ class Gradients(rks_grad.Gradients):
         self.de_skel = self.de_skel_elec + self.de_nuc
         return de
 
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self)
+
     grad_elec = grad_elec
 
     def as_scanner(self):

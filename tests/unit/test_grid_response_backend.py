@@ -59,7 +59,8 @@ def test_gradient(df, unrestricted, xc):
     original = (rks.get_veff, uks.get_veff, rks.grids_response_cc,
                 rks.get_vxc_full_response, uks.get_vxc_full_response)
     drivers = [mf.nuc_grad_method() for _ in range(2)]
-    drivers[1].grid_response_backend = 'becke_omp'
+    assert all(g.grid_response_backend == 'becke_omp' for g in drivers)
+    drivers[0].grid_response_backend = 'pyscf_default'
     values = [g.kernel() for g in drivers]
     error = np.max(np.abs(values[0]-values[1]))
     print(f'{xc} UHF={unrestricted} DF={df}: max gradient delta {error:.3e} Ha/Bohr')
@@ -150,6 +151,8 @@ def test_disabled_and_missing_native(monkeypatch):
         return 'native'
 
     monkeypatch.setattr(gr, 'native', unavailable)
+    assert g.grid_response_backend == 'becke_omp'
+    g.grid_response_backend = 'pyscf_default'
     assert gr.get_veff(g, provider) == 'native'
     g.grid_response_backend = 'becke_omp'
     with pytest.raises(RuntimeError, match='extension unavailable'):

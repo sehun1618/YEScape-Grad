@@ -328,6 +328,10 @@ class Gradients(krks.Gradients):
         self.target_fock_reused = True
         return self.de
 
+    def _finalize(self):
+        from dcforge.tools.logger import gradient_summary
+        gradient_summary(self)
+
     grad_elec = grad_elec
 
     def as_scanner(self):

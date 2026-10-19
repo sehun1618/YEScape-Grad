@@ -7,7 +7,7 @@ from pyscf import lib
 lib.num_threads(32)
 mf_grad = mf.nuc_grad_method()
 mf_grad.grid_response = True
-mf_grad.grid_response_backend = 'becke_omp'  # 기본값: 'pyscf_default'
+mf_grad.grid_response_backend = 'becke_omp'  # 기본값; 이 줄은 생략 가능
 gradient = mf_grad.kernel()
 ```
 
@@ -29,7 +29,9 @@ python examples/06-grid-response-backend.py
 ```
 
 C compiler와 OpenMP가 필요하다. 계산 중 컴파일하지 않는다.
-확장이 없어도 기본 backend는 동작하며, becke_omp를 명시하면 오류로 알려준다.
+기본 backend인 becke_omp는 확장이 필요하며, 확장이 없으면 오류로 알려준다.
+자동 fallback은 하지 않는다. 확장 없이 사용할 때는
+`mf_grad.grid_response_backend = 'pyscf_default'`를 명시한다.
 Linux/GCC 경로를 검증했으며 다른 compiler/platform은 별도 검증이 필요하다.
 thread 수는 `pyscf.lib.num_threads()`를 사용한다. CPU affinity는 변경하지 않는다.
 여러 OpenMP runtime이 로드된 환경의 binding은 성능을 제한할 수 있다.
@@ -88,4 +90,5 @@ DC-Forge CPHF 정책을 사용한다.
 - 실제 두 OpenMP runtime(Conda libgomp, PySCF wheel libgomp)이 함께 로드된다.
   정확성 검증은 OMP_PROC_BIND=FALSE에서 했다. 이 구성의 대규모 scaling은
   아직 재측정하지 않았다.
-- commit/push 및 기본값 변경은 하지 않았다.
+- 최초 승격 검증 시 기본값은 pyscf_default였다. 이후 사용자 요청으로
+  becke_omp를 기본값으로 변경했다. 위 두 backend 비교는 유지한다.

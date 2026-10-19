@@ -229,6 +229,8 @@ class RHFDFT(_DFJK, rks.RKS):
         self.e_dft = float(self.energy_tot(
             dm=self.dm_hf, h1e=h1e, vhf=vhf))
         self.e_tot = self.e_dft
+        from dcforge.tools.logger import energy_summary
+        energy_summary(self)
         return self.e_dft
 
     def energy_tot(self, dm=None, h1e=None, vhf=None):
