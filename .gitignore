@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+results/
+result/
+*.chk
+*.h5
+*.log
+
+# Local development notes, experiments, and intermediate artifacts.
+/dev/
+/structures/README.md

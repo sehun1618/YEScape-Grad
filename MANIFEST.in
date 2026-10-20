@@ -1,0 +1,8 @@
+include README.md
+recursive-include third_party *
+recursive-include examples *.py
+recursive-include structures *.xyz *.md
+recursive-include tests *.py
+include pytest.ini
+recursive-include environments *.yml *.md
+prune dev

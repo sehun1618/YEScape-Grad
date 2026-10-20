@@ -1,0 +1,16 @@
+# Installed dependency snapshot; not a fresh-environment GPU certification.
+# Requires a compatible NVIDIA driver. Toolkit/compiler installation is separate.
+name: dcforge-gpu-cu13
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.6
+  - pip
+  - pip:
+      - numpy==2.4.4
+      - scipy==1.17.1
+      - pyscf==2.14.0
+      - pytest==8.4.2
+      - cupy-cuda13x==14.0.1
+      - gpu4pyscf-cuda13x==1.8.1
+      - gpu4pyscf-libxc-cuda13x==0.8.1

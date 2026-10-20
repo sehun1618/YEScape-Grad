@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dc-forge"
+version = "0.0.1"
+description = "Molecular density-corrected DFT energies and analytic gradients with PySCF"
+readme = "README.md"
+license-files = ["third_party/pyscf/LICENSE", "third_party/pyscf/NOTICE", "third_party/gpu4pyscf/LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pyscf==2.14.0",
+    "scipy",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dcforge*"]

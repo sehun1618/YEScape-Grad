@@ -1,0 +1,13 @@
+# Dependency snapshot used for the molecular CPU hybrid/RSH FD checks.
+# These are tested versions, not minimum supported versions.
+name: dcforge-cpu
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.6
+  - pip
+  - pip:
+      - numpy==2.4.4
+      - scipy==1.17.1
+      - pyscf==2.14.0
+      - pytest==8.4.2
