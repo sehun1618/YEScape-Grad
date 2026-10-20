@@ -184,31 +184,6 @@ Both the returned energy and gradient include D2C dispersion.
 Parameters are selected for the target functional; unsupported functionals
 raise an error rather than falling back to ordinary D4.
 
-### Example files
-
-Run examples from the repository checkout:
-
-- `examples/01-rhf_dft.py`: restricted conventional/DF calculations.
-- `examples/02-uhf_dft.py`: unrestricted calculations.
-- `examples/03-xc.py`: target functional selection.
-- `examples/04-checkpoint.py`: conventional/DF RHF checkpoint restoration.
-- `examples/05-grid.py`: grid levels, explicit radial/angular grids
-  (shared or element-specific), and CPU grid-response backends.
-- `examples/06-d2c.py`: dispersion.
-- `examples/gpu/`: corresponding molecular GPU workflows.
-
-## Tests
-
-```bash
-OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python -m pytest tests/cpu tests/unit -m 'not gpu and not slow' --junitxml=tests/results/cpu-unit.xml
-python -m pytest tests/gpu
-```
-
-GPU tests require an available CUDA device. Finite-difference tests rerun HF
-at displaced geometries; they do not hold the source density fixed.
-Check SCF convergence and the reported Z-vector residual, not only whether a
-calculation returned a gradient.
-
 ## Attribution and distribution
 
 Developed by Sehun Kim <sehun1618@yonsei.ac.kr>,

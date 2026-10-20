@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from pyscf.data import nist
 
 from dcforge.cpu.energy import RHFDFT, UHFDFT
 from tests.common import (
@@ -19,11 +20,11 @@ def test_rhf_gradient_matches_relaxed_source_finite_difference(density_fit):
     mol = make_mol("water1.xyz", basis="def2-svp")
     mf, _ = run_workflow(RHFDFT, mol, density_fit=density_fit)
     analytic = mf.nuc_grad_method().kernel()
-    # One symmetry-breaking Cartesian component exercises source response,
-    # moving AO/grid centers, and (for DF) the auxiliary representation.
-    fd = finite_difference(
-        RHFDFT, mol, 1, 1, density_fit=density_fit)
-    assert abs(analytic[1, 1] - fd) < 2e-6
+    fd = finite_difference_gradient(RHFDFT, mol, density_fit=density_fit)
+    error = np.max(np.abs(analytic - fd))
+    print(f'CPU RHF DF={density_fit}: max |analytic-FD| = {error:.6e} '
+          f'Ha/Bohr = {error * nist.HARTREE2EV / nist.BOHR:.6e} eV/Angstrom')
+    np.testing.assert_allclose(analytic, fd, atol=2e-6, rtol=0)
 
 
 @pytest.mark.cpu
@@ -33,9 +34,11 @@ def test_uhf_gradient_matches_relaxed_source_finite_difference(density_fit):
     mol = make_mol("nh2_doublet.xyz", basis="def2-svp")
     mf, _ = run_workflow(UHFDFT, mol, density_fit=density_fit)
     analytic = mf.nuc_grad_method().kernel()
-    fd = finite_difference(
-        UHFDFT, mol, 1, 1, density_fit=density_fit)
-    assert abs(analytic[1, 1] - fd) < 3e-6
+    fd = finite_difference_gradient(UHFDFT, mol, density_fit=density_fit)
+    error = np.max(np.abs(analytic - fd))
+    print(f'CPU UHF DF={density_fit}: max |analytic-FD| = {error:.6e} '
+          f'Ha/Bohr = {error * nist.HARTREE2EV / nist.BOHR:.6e} eV/Angstrom')
+    np.testing.assert_allclose(analytic, fd, atol=3e-6, rtol=0)
 
 
 @pytest.mark.cpu
