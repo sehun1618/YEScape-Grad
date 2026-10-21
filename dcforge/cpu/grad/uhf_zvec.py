@@ -83,7 +83,7 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
         mo_occ : tuple of two ndarray
             Source-UHF occupations.
         fvo : tuple of two ndarray
-            Target-UKS ``F^KS,alpha_vo`` and ``F^KS,beta_vo`` blocks.
+            Target-UKS ``F^target,alpha_vo`` and ``F^target,beta_vo`` blocks.
         vind : callable
             Packed spin-coupled two-electron UHF Hessian action.
 
@@ -114,7 +114,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
 
     The canonical equation is
 
-    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^KS,alpha_vo,F^KS,beta_vo)``.
+    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^target,alpha_vo,F^target,beta_vo)``.
 
     PySCF UCPHF uses the negative-RHS convention. The returned amplitudes are
     sign-flipped once so that DC-Forge exposes the positive-RHS PDF convention.

@@ -117,9 +117,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     Cv = (Ca[:, sva], Cb[:, svb])
     dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
 
-    fock_ks = mf.get_fock(dm=dm0)
-    fock_mo_a = Ca.conj().T @ fock_ks[0] @ Ca
-    fock_mo_b = Cb.conj().T @ fock_ks[1] @ Cb
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
+    fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
     fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
     foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
 

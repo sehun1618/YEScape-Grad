@@ -138,14 +138,14 @@ def grad_ovlp(mol, s1, dme0, atmlst):
     .. math::
 
         g_{\mathrm{ovlp}}^\lambda
-        = -2\sum_{ij}F_{ij}^{\mathrm{KS}}S_{ij}^{\lambda}
+        = -2\sum_{ij}F_{ij}^{\mathrm{target}}S_{ij}^{\lambda}
         = -\operatorname{Tr}(W_{\mathrm{AO}}S^\lambda),
 
     with
 
     .. math::
 
-        W_{\mathrm{AO}}=2C_oF_{oo}^{\mathrm{KS}}C_o^\dagger.
+        W_{\mathrm{AO}}=2C_oF_{oo}^{\mathrm{target}}C_o^\dagger.
 
     It is the known occupied-occupied metric response in the complete
     HF-DFT gradient, distinct from the VO response represented by the
@@ -157,7 +157,7 @@ def grad_ovlp(mol, s1, dme0, atmlst):
         s1 : ndarray of shape (3, nao, nao)
             PySCF AO overlap derivative.
         dme0 : ndarray of shape (nao, nao)
-            Target energy-weighted density ``W = 2 C_o F^KS_oo C_o^dagger``.
+            Target energy-weighted density ``W = 2 C_o F^target_oo C_o^dagger``.
         atmlst : sequence of int
             Nuclear centers included in the gradient.
 
@@ -277,7 +277,7 @@ def skeleton_gradient(mf_grad, dm0, foo, Co, s1, atmlst=None):
           \left[(\mu\nu|\rho\sigma)^\lambda
           -\frac{c_x}{2}(\mu\rho|\sigma\nu)^\lambda\right]\\
         &+E_{\mathrm{xc}}^\lambda[P_{\mathrm{HF}}]
-          -2\sum_{ij}F_{ij}^{\mathrm{KS}}S_{ij}^{\lambda}.
+          -2\sum_{ij}F_{ij}^{\mathrm{target}}S_{ij}^{\lambda}.
         \end{aligned}
 
     The term ledger is
@@ -297,7 +297,7 @@ def skeleton_gradient(mf_grad, dm0, foo, Co, s1, atmlst=None):
         dm0 : ndarray of shape (nao, nao)
             Closed-shell source-HF density.
         foo : ndarray of shape (nocc, nocc)
-            Target-KS Fock occupied-occupied block ``F^KS_oo``.
+            Target-KS Fock occupied-occupied block ``F^target_oo``.
         Co : ndarray of shape (nao, nocc)
             Occupied source-RHF MO coefficients.
         s1 : ndarray of shape (3, nao, nao)
@@ -349,9 +349,9 @@ def skeleton_gradient_uhf(mf_grad, dm0, foo, Co, s1, atmlst=None):
     .. math::
 
         -\sum_{\sigma \in\{\alpha,\beta\}}\sum_{ij}
-         F^{\mathrm{KS},\sigma}_{ij}S^{\lambda,\sigma}_{ij},
+         F^{\mathrm{target},\sigma}_{ij}S^{\lambda,\sigma}_{ij},
 
-    represented by ``dme0 = sum_σ C_o^σ F^KS,σ_oo (C_o^σ)^dagger``.
+    represented by ``dme0 = sum_σ C_o^σ F^target,σ_oo (C_o^σ)^dagger``.
     Target grid and optional DF auxiliary responses enter through the same
     PySCF ``extra_force`` hook used by the restricted route.
 

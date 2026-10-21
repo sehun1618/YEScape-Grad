@@ -40,11 +40,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
           -\frac{c_x}{2}(\mu\rho|\sigma\nu)^\lambda\right]\\
         &+E_{\mathrm{xc}}^\lambda[P_{\mathrm{HF}}]
           +E_{\mathrm{NN}}^\lambda
-          -2\sum_{ij}F_{ij}^{\mathrm{KS}}S_{ij}^{\lambda}
+          -2\sum_{ij}F_{ij}^{\mathrm{target}}S_{ij}^{\lambda}
           +4\,\mathrm{Re}\sum_{ai}Z_{ai}^{*}V_{ai}^{\lambda}.
         \end{aligned}
 
-    P is the HF source density; c_x, E_xc and F^KS belong to the target.
+    P is the HF source density; c_x, E_xc and F^target belong to the target.
     For an RSH target, replace c_x times exchange by the weighted full-range
     and long-range exchange integrals. V^lambda uses the HF source Fock
     derivative and response operator, not the target response kernel.
@@ -62,7 +62,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     ``Gradients.kernel`` adds the inherited nuclear-repulsion derivative.
 
     Source orbitals, occupations and the response Hessian come from RHF.  The
-    energy, ``F^KS_vo``, ``F^KS_oo`` and explicit DFT grid derivatives come
+    energy, ``F^target_vo``, ``F^target_oo`` and explicit DFT grid derivatives come
     from the target RKS object evaluated at the fixed HF density.
 
     Args:
@@ -111,15 +111,17 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
 
     # The HF MO basis diagonalizes F^HF, not the target KS Fock.  Its VO block
-    # F^KS_vo is therefore the nonvariational Z-vector RHS, while F^KS_oo
+    # F^target_vo is therefore the nonvariational Z-vector RHS, while F^target_oo
     # builds the target energy-weighted density in the skeleton term.
-    fock_ks = mf.get_fock(dm=dm0)
-    fock_mo = mo_coeff.conj().T @ fock_ks @ mo_coeff
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    fock_mo = mo_coeff.conj().T @ fock_target @ mo_coeff
     fvo = fock_mo[sv][:, so]
     foo = fock_mo[so][:, so]
 
     # The left-hand side is always the source-HF orbital Hessian.  Target-XC
-    # kernels do not enter [(A+B)^HF]^T Z = F^KS_vo.
+    # kernels do not enter [(A+B)^HF]^T Z = F^target_vo.
     fvind = mf_hf.gen_response(mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
     zvec, z_info = solve_z_vector(
         mo_energy, mo_occ, Co, Cv, fvo, fvind,

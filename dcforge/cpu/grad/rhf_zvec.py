@@ -16,11 +16,11 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^HF]^T Z = F^target_vo``.
 
     For the real closed-shell RHF reference used here, the orbital Hessian is
     symmetric.  The implemented residual is therefore
-    ``(A+B)^HF Z - F^KS_vo``.
+    ``(A+B)^HF Z - F^target_vo``.
 
     Args:
         zvec : ndarray of shape (nvir, nocc)
@@ -31,14 +31,14 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
             Restricted occupations. Occupied and virtual orbitals are selected
             by ``mo_occ > 0`` and ``mo_occ == 0``, respectively.
         fvo : ndarray of shape (nvir, nocc)
-            Target-KS Fock block ``F^KS_vo`` evaluated on the HF density.
+            Target-KS Fock block ``F^target_vo`` evaluated on the HF density.
         vind : callable
             Induced HF potential action in the virtual-occupied space.  It
             returns the two-electron part of ``(A+B)^HF zvec``.
 
     Returns:
         ndarray of shape (nvir, nocc)
-            Elementwise residual ``[(A+B)^HF Z - F^KS_vo]_ai``.
+            Elementwise residual ``[(A+B)^HF Z - F^target_vo]_ai``.
     '''
     e_a = mo_energy[mo_occ == 0]
     e_i = mo_energy[mo_occ > 0]
@@ -46,7 +46,7 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 
 def _relative_residual(abs_residual, rhs_norm):
-    '''Return the max-absolute residual relative to ``max|F^KS_vo|``.'''
+    '''Return the max-absolute residual relative to ``max|F^target_vo|``.'''
     if rhs_norm > 0:
         return abs_residual / rhs_norm
     if abs_residual == 0:
@@ -60,11 +60,11 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^HF]^T Z = F^target_vo``.
 
     The molecular real-RHF Hessian is symmetric, so the transpose is implicit
     in the matrix-vector action below.  PySCF's ``cphf.solve`` uses the
-    convention ``(A+B)^HF x = -h1``.  Passing ``h1=F^KS_vo`` therefore returns
+    convention ``(A+B)^HF x = -h1``.  Passing ``h1=F^target_vo`` therefore returns
     ``x=-Z``; the sign is changed once before exposing the DC-Forge Z-vector.
 
     Args:
@@ -77,7 +77,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
         Cv : ndarray of shape (nao, nvir)
             Virtual source-RHF MO coefficients ``C_v``.
         fvo : ndarray of shape (nvir, nocc)
-            Target-KS Fock block ``F^KS_vo`` evaluated on the HF density.
+            Target-KS Fock block ``F^target_vo`` evaluated on the HF density.
         fvind : callable
             AO source-HF response returned by ``mf_hf.gen_response``.
 
@@ -138,8 +138,8 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     zvec, _ = solve_cphf(cphf, vind, mo_energy, mo_occ, fvo, s1=None,
                          max_cycle=max_cycle, tol=conv_tol, verbose=log)
 
-    # PySCF solves (A+B)^HF x = -F^KS_vo.  DC-Forge exposes the textbook
-    # positive-RHS vector Z satisfying [(A+B)^HF]^T Z = F^KS_vo.
+    # PySCF solves (A+B)^HF x = -F^target_vo.  DC-Forge exposes the textbook
+    # positive-RHS vector Z satisfying [(A+B)^HF]^T Z = F^target_vo.
     zvec = -np.asarray(zvec)
 
     # PySCF's second return value is not a convergence flag in the s1=None

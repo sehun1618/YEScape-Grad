@@ -36,13 +36,18 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         \sum_{\sigma \mu\nu}P^{\sigma}_{\mu\nu}h^\lambda_{\mu\nu}
         +E_{\mathrm{Hxc}}^\lambda[P^\alpha,P^\beta]
         +E_{\mathrm{NN}}^\lambda\\
-        &-\sum_{\sigma ij}F^{\mathrm{KS},\sigma}_{ij}S^{\lambda,\sigma}_{ij}
+        &-\sum_{\sigma ij}F^{\mathrm{target},\sigma}_{ij}S^{\lambda,\sigma}_{ij}
         +2\,\mathrm{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*V^{\lambda,\sigma}_{ai}.
         \end{aligned}
 
     Here σ runs over α and β. E_Hxc is the explicit target Hartree/XC
     derivative, including target exact exchange if present. V^lambda uses
     the source UHF derivative and response kernel.
+    P^σ is the source density. F^target,σ is the target Fock
+    evaluated at both source spin densities, in the source MO basis.
+    E_Hxc belongs to the target; V^lambda uses the source Fock derivative
+    and source response kernel. Here σ denotes alpha or beta spin.
+
     Each spin orbital has occupation one, so the nonvariational prefactor is
     2 rather than the restricted spatial-orbital prefactor 4.
 
@@ -99,9 +104,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     # Compute the target Fock only once, then retain both VO and OO blocks.
     # AO-to-MO projection is split into two matrix products per spin; this is
     # faster and more predictable than a four-index einsum on CPU and GPU.
-    fock_ks = mf.get_fock(dm=dm0)
-    fock_mo_a = Ca.conj().T @ fock_ks[0] @ Ca
-    fock_mo_b = Cb.conj().T @ fock_ks[1] @ Cb
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
+    fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
     fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
     foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
 

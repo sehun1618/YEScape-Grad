@@ -13,7 +13,7 @@ from dcforge.tools.cphf import solve as solve_cphf
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
-    '''Evaluate ``[(A+B)^HF Z - F^KS_vo]`` on the GPU.
+    '''Evaluate ``[(A+B)^HF Z - F^target_vo]`` on the GPU.
 
     Args:
         zvec : cupy.ndarray of shape (nvir, nocc)
@@ -83,10 +83,10 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^HF]^T Z = F^target_vo``.
 
     GPU4PySCF CPHF follows the PySCF convention
-    ``(A+B)^HF x = -h1``.  With ``h1=F^KS_vo`` it returns ``x=-Z``;
+    ``(A+B)^HF x = -h1``.  With ``h1=F^target_vo`` it returns ``x=-Z``;
     this function changes the sign exactly once before returning ``zvec``.
 
     Args:
@@ -95,7 +95,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
         mo_occ : cupy.ndarray of shape (nmo,)
             Restricted source occupations.
         fvo : cupy.ndarray of shape (nvir, nocc)
-            Target-KS Fock ``F^KS_vo`` at the fixed HF density.
+            Target-KS Fock ``F^target_vo`` at the fixed HF density.
         vind : callable
             Conventional AO or density-fitted MO-direct source-HF
             orbital-Hessian action in the VO space.

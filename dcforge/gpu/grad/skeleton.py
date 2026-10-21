@@ -17,9 +17,9 @@ def grad_ovlp_correction(foo, e_occ, s1oo):
 
     The upstream skeleton uses the orbital energies passed to it, here
     ``diag(epsilon_i^HF)``. HF-DFT instead requires the full target block
-    ``F^KS_oo``. The difference is
+    ``F^target_oo``. The difference is
 
-    ``-2 Tr[(F^KS_oo - diag(epsilon_i^HF)) S^lambda_oo]``.
+    ``-2 Tr[(F^target_oo - diag(epsilon_i^HF)) S^lambda_oo]``.
 
     Args:
         foo : cupy.ndarray of shape (nocc, nocc)

@@ -91,7 +91,7 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
 
     The canonical equation is
 
-    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^KS,alpha_vo,F^KS,beta_vo)``.
+    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^target,alpha_vo,F^target,beta_vo)``.
 
     GPU4PySCF UCPHF uses the negative-RHS convention. The returned amplitudes
     are sign-flipped once so DC-Forge exposes the positive-RHS PDF notation.
