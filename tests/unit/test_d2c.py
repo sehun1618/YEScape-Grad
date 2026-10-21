@@ -38,6 +38,7 @@ def test_unknown_d2c_functional_is_not_replaced_by_standard_d4():
 
 @pytest.mark.fd
 def test_d2c_analytic_gradient_matches_energy_finite_difference():
+    pytest.importorskip('dftd4')
     mol = make_mol("water_dimer_shared_proton.xyz", basis="sto-3g")
     result = evaluate_d2c(mol, "r2SCAN", gradient=True)
     step = 1e-4

@@ -10,7 +10,7 @@ from dcforge.cpu.energy import RHFDFT
 ROOT = Path(__file__).resolve().parents[1]
 
 mol = gto.M(
-    atom=str(ROOT / 'structures' / 'water1.xyz'),
+    atom=str(ROOT / 'tests' / 'structures' / 'water1.xyz'),
     unit='Angstrom',
     basis='aug-cc-pvtz',
     verbose=0,
@@ -24,23 +24,23 @@ mf_hf = scf.RHF(mol).set(
 # Reuse one HF density; set grid options before kernel().
 
 # Case 1: PySCF level presets (element-dependent radial/angular grid sizes)
-print('\nPBE grid-level convergence on the same RHF density')
+print('\nr2SCAN grid-level convergence on the same RHF density')
 for level in (2, 4, 6):
-    mf = RHFDFT(mol, xc='PBE', mf_hf=mf_hf)
+    mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
     mf.grids.level = level
     energy = mf.kernel(run_hf=False)
     print(f'level {level}: {mf.grids.coords.shape[0]} points, '
           f'E = {energy:.15f} Ha')
 
 # Case 2: one explicit (radial points, angular points) pair for all atoms
-mf = RHFDFT(mol, xc='PBE', mf_hf=mf_hf)
+mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
 mf.grids.atom_grid = (99, 590)
 energy = mf.kernel(run_hf=False)
 print(f'\nUniform atomic sizes: {mf.grids.coords.shape[0]} points, '
       f'E = {energy:.15f} Ha')
 
 # Case 3: different atomic grid sizes for each element
-mf = RHFDFT(mol, xc='PBE', mf_hf=mf_hf)
+mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
 mf.grids.atom_grid = {'H': (75, 302), 'O': (99, 590)}
 energy = mf.kernel(run_hf=False)
 print(f'\nElement-specific sizes: {mf.grids.coords.shape[0]} points, '
@@ -53,7 +53,6 @@ print(f'\nElement-specific sizes: {mf.grids.coords.shape[0]} points, '
 grad_default = mf.nuc_grad_method().set(
     grid_response=True,
     grid_response_backend='pyscf_default',
-    cphf_conv_tol=1e-7,
     cphf_max_cycle=200,
 )
 reference = grad_default.kernel()
@@ -62,7 +61,6 @@ reference = grad_default.kernel()
 grad_omp = mf.nuc_grad_method().set(
     grid_response=True,
     grid_response_backend='becke_omp',
-    cphf_conv_tol=1e-7,
     cphf_max_cycle=200,
 )
 optimized = grad_omp.kernel()

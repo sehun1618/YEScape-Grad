@@ -2,6 +2,8 @@
 
 Run the commands below from the repository root, with DC-Forge and the test
 dependencies installed.
+Tests that calculate D2C dispersion are skipped when DFT-D4 is not installed;
+parameter lookup and validation tests still run.
 
 ## Analytic gradients versus finite differences
 
@@ -32,3 +34,14 @@ GPU tests require an available CUDA device. Finite-difference tests rerun HF
 at displaced geometries; they do not hold the source density fixed.
 Check SCF convergence and the reported Z-vector residual, not only whether a
 calculation returned a gradient.
+
+## Scanners
+
+`tests/unit/test_scanner.py` checks CPU/GPU RHF/UHF conventional/DF scanner
+parity, default density reuse, explicit/fresh guesses, geometry resets, and
+failure recovery. It also checks D2C updates and geomeTRIC optimization when
+the optional packages are installed.
+
+```bash
+python -m pytest tests/unit/test_scanner.py -v
+```

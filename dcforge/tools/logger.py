@@ -193,12 +193,12 @@ def gradient_summary(grad, unrestricted=False):
         verdict = 'PASS' if np.isfinite(residual) and residual <= limit else 'WARNING'
     logger.note(log, '%-28s %s', 'Residual check', verdict)
     if de.size:
-        logger.info(log, '%-28s %.6e Ha/Bohr', 'Max |gradient component|',
+        logger.info(log, '%-28s %.6e Ha/Bohr', 'Max |force component|',
                     np.max(np.abs(de)))
-        logger.info(log, '%-28s %.6e Ha/Bohr', 'RMS gradient component',
+        logger.info(log, '%-28s %.6e Ha/Bohr', 'RMS force component',
                     np.sqrt(np.mean(de**2)))
     full = atoms is None or sorted(atoms) == list(range(grad.mol.natm))
-    label = 'Sum of gradients' if full else 'Selected-atom gradient sum'
+    label = 'Sum of forces' if full else 'Selected-atom force sum'
     logger.info(log, '%s [X Y Z] = % .6e % .6e % .6e Ha/Bohr',
-                label, *np.sum(de, axis=0))
+                label, *(-np.sum(de, axis=0)))
     logger.note(log, '=================================================')

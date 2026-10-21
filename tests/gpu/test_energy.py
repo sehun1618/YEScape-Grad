@@ -36,6 +36,7 @@ def test_gpu_energy_matches_cpu(cpu_workflow, gpu_workflow, name, density_fit):
 
 
 def test_gpu_d2c_energy_is_added_by_the_shared_molecular_provider():
+    pytest.importorskip('dftd4')
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf, energy = run_workflow(
         GPU_RHFDFT, mol, xc="r2SCAN", dispersion="d2c")

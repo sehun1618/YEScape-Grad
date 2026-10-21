@@ -14,7 +14,7 @@ from dcforge.cpu.energy import RHFDFT
 ROOT = Path(__file__).resolve().parents[1]
 
 mol = gto.M(
-    atom=str(ROOT / 'structures' / 'water1.xyz'),
+    atom=str(ROOT / 'tests' / 'structures' / 'water1.xyz'),
     unit='Angstrom',
     basis='aug-cc-pvtz',
     verbose=0,
@@ -29,7 +29,7 @@ mf_hf = scf.RHF(mol).set(
 # Case 1: change the target functional while keeping one source RHF density
 print(f'Source RHF energy = {mf_hf.e_tot:.15f} Ha')
 print('\nTarget functional families at grids.level = 4')
-for xc in ('LDA,VWN', 'PBE', 'TPSS', 'B3LYP', 'CAM-B3LYP'):
+for xc in ('LDA,VWN', 'r2SCAN', 'TPSS', 'B3LYP', 'CAM-B3LYP'):
     mf = RHFDFT(mol, xc=xc, mf_hf=mf_hf)
     mf.grids.level = 4
     energy = mf.kernel(run_hf=False)

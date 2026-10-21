@@ -8,10 +8,6 @@ and, optionally, GPU4PySCF.
 Requires Python 3.11+. Use a separate environment.
 Run the commands below from the repository root.
 
-For pinned dependency examples, see [environments](environments/README.md).
-`pyproject.toml` defines installation requirements; the environment files
-record tested or installed versions, not unverified minimum versions.
-
 ### CPU
 
 ```bash
@@ -30,7 +26,7 @@ If it cannot be built, set
 ### GPU
 
 Install **GPU4PySCF 1.8.1** separately for your CUDA environment, then install
-DC-Forge. Follow the [upstream installation guide](https://github.com/pyscf/gpu4pyscf#installation).
+DC-Forge. Follow the [GPU4PySCF installation guide](https://github.com/pyscf/gpu4pyscf#installation).
 
 | CUDA family | GPU4PySCF package | Optional cuTENSOR package |
 |---|---|---|
@@ -58,7 +54,7 @@ python -m pip check
 **D2C:** install DFT-D4 separately. It is unnecessary without dispersion.
 
 ```bash
-python -m pip install 'dftd4>=4.2'
+python -m pip install 'dftd4'
 ```
 
 **cuTENSOR:** optional GPU acceleration. Install a compatible version separately
@@ -69,16 +65,20 @@ Neither library is installed by DC-Forge. Both retain their own licenses.
 
 ## Features
 
-- Restricted and unrestricted HF source orbitals (RHF/UHF).
-- Conventional and density-fitted molecular calculations on CPU/GPU.
-- Fixed-HF-density DFT energies and analytic gradients, including orbital
-  response, moving-grid response and DF auxiliary-basis response.
-- Optional D2C dispersion corrections for supported functional parameters.
-- Restoring converged HF orbitals from checkpoints.
+- Molecular HF-DFT energies and analytic nuclear gradients.
+- Restricted and unrestricted Hartree–Fock references.
+- Conventional and density-fitted calculations.
+- CPU and GPU implementations based on PySCF and GPU4PySCF.
+- Semilocal, global-hybrid, and range-separated-hybrid target functionals.
+- Optional D2C dispersion corrections for supported functionals.
+- Molecular energy/gradient scanners for geometry optimization.
 
-PBC, stress, ROHF, and experimental DFA-source gradients are not included.
-This is a molecular extraction, not a claim of new numerical validation for
-every functional or hardware platform.
+Nonlocal correlation functionals, including VV10, are not supported.
+
+Geometry optimization uses PySCF's optimizer interface. Install `geometric`
+separately if needed. Scanners reuse the previous HF density as the initial
+guess and reconverge HF at every geometry; use `scanner(mol, dm0=None)` for a
+fresh guess. Scanner views share source/DF state with their original object.
 
 
 ## Examples
@@ -92,7 +92,6 @@ from dcforge.cpu.energy import RHFDFT
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp')
 mf = RHFDFT(mol, xc='PBE').density_fit()
-mf.grids.level = 4
 energy = mf.kernel()
 gradient = mf.nuc_grad_method().kernel()  # Ha/Bohr
 force = -gradient
@@ -135,7 +134,6 @@ from dcforge.cpu.energy import UHFDFT
 
 mol = gto.M(atom='O 0 0 0; H 0 0 .97', basis='def2-svp', spin=1)
 mf = UHFDFT(mol, xc='PBE').density_fit()
-mf.grids.level = 4
 energy = mf.kernel()
 gradient = mf.nuc_grad_method().kernel()
 force = -gradient
@@ -153,13 +151,27 @@ from dcforge.gpu.energy import RHFDFT
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp')
 mf = RHFDFT(mol, xc='PBE').density_fit()
-mf.grids.level = 4
 energy = mf.kernel()
 gradient = mf.nuc_grad_method().kernel()
 force = -gradient
 ```
 
 Install the GPU dependencies described above before using this example.
+
+### Geometry optimization
+
+With the optional `geometric` package installed:
+
+```python
+from pyscf.geomopt.geometric_solver import optimize
+
+scanner = mf.nuc_grad_method().as_scanner()
+optimized_mol = optimize(scanner)
+# Independent fresh-guess evaluation, if needed:
+energy, gradient = scanner(optimized_mol, dm0=None)
+```
+
+The same interface works for CPU/GPU and conventional/DF calculations.
 
 ### D2C dispersion
 
@@ -170,7 +182,6 @@ from dcforge.cpu.energy import RHFDFT
 
 # Use the water molecule defined above.
 mf = RHFDFT(mol, xc='PBE').density_fit().set_dispersion('d2c')
-mf.grids.level = 4
 energy = mf.kernel()
 gradient = mf.nuc_grad_method().kernel()
 force = -gradient

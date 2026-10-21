@@ -7,7 +7,7 @@ from pyscf import gto
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STRUCTURES = ROOT / "structures"
+STRUCTURES = ROOT / "tests" / "structures"
 
 STRUCTURE_STATES = {
     "water1.xyz": (0, 0),

@@ -46,8 +46,10 @@ third-party GPU packages may have their own dependency rules.
   `4.2.0`; this snapshot's hybrid/RSH checks did not include dispersion.
 - cuTENSOR: install a version compatible with the selected GPU4PySCF/CuPy
   combination. The local installed version is `cutensor-cu13==2.6.0`.
-  Installation alone does not ensure activation: the inspected environment
-  reported a CuPy contraction fallback on a plain GPU4PySCF import.
+  With `conda activate gpu`, native cuTENSOR loading and a small contraction
+  were verified. Calling that environment's Python executable directly without
+  activation missed its library-path setup and fell back to CuPy. Other
+  environments need their own compatible library setup and activation check.
 
 After installation, run `python -m pip check` and the relevant tests described
-in the main README. Environment creation is not numerical validation.
+in [tests/README.md](../tests/README.md). Environment creation is not numerical validation.

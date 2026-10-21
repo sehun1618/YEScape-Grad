@@ -322,7 +322,8 @@ class RHFDFT(rks.RKS):
         return Gradients(self)
 
     def as_scanner(self):
-        raise NotImplementedError('HF-DFT scanner support is not implemented')
+        from dcforge.tools.scanner import energy_scanner
+        return energy_scanner(self)
 
     def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):
         '''Apply the same PySCF density-fitting provider to source and target.

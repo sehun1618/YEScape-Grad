@@ -13,4 +13,5 @@ result/
 
 # Local development notes, experiments, and intermediate artifacts.
 /dev/
-/structures/README.md
+/examples/dev/
+/tests/structures/README.md

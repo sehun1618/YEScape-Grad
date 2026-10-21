@@ -192,7 +192,8 @@ class UHFDFT(uks.UKS):
         return Gradients(self)
 
     def as_scanner(self):
-        raise NotImplementedError('UHF-DFT scanner support is not implemented')
+        from dcforge.tools.scanner import energy_scanner
+        return energy_scanner(self)
 
     def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):
         '''Apply one PySCF molecular DF provider to source and target.

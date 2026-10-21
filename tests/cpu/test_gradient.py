@@ -112,6 +112,7 @@ def test_df_partial_representation_response_is_rejected(option):
 
 @pytest.mark.cpu
 def test_d2c_is_an_explicit_additive_gradient_term():
+    pytest.importorskip('dftd4')
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf, _ = run_workflow(RHFDFT, mol, xc="r2SCAN", dispersion="d2c")
     mf_grad = mf.nuc_grad_method()

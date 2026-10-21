@@ -45,6 +45,7 @@ def test_uhf_gradient_matches_relaxed_source_finite_difference(density_fit):
 @pytest.mark.fd
 @pytest.mark.slow
 def test_rhf_d2c_total_gradient_matches_total_energy_finite_difference():
+    pytest.importorskip('dftd4')
     mol = make_mol("water1_asymmetric_stretch.xyz", basis="sto-3g")
     mf, _ = run_workflow(RHFDFT, mol, xc="r2SCAN", dispersion="d2c")
     analytic = mf.nuc_grad_method().kernel()

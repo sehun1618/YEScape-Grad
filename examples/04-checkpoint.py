@@ -30,15 +30,14 @@ mf_hf.mo_occ = state['mo_occ']
 # Assumes a converged checkpoint; this flag does not verify convergence.
 mf_hf.converged = True
 
-mf = RHFDFT(mol, xc='PBE', mf_hf=mf_hf)
+mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
 mf.grids.level = 4
 energy = mf.kernel(run_hf=False)
-mf_grad = mf.nuc_grad_method().set(cphf_conv_tol=1e-7,
-                                   cphf_max_cycle=200)
+mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200)
 gradient = mf_grad.kernel()
 
 print('\n[RHF checkpoint]')
-print(f'HF-PBE energy [Ha]: {energy:.15f}')
+print(f'HF-r2SCAN energy [Ha]: {energy:.15f}')
 print('Gradient [Ha/Bohr]:\n', gradient)
 print('Force [Ha/Bohr]:\n', -gradient)
 
@@ -58,7 +57,7 @@ mf_hf.kernel()
 
 mol, state = chkfile.load_scf('rhf_df.chk')
 # Recreate the same DF settings; they are not stored in the SCF checkpoint.
-mf = RHFDFT(mol, xc='PBE').density_fit(auxbasis='def2-svp-jkfit')
+mf = RHFDFT(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit')
 mf_hf = mf.mf_hf
 mf_hf.e_tot = state['e_tot']
 mf_hf.mo_coeff = state['mo_coeff']
@@ -68,13 +67,12 @@ mf_hf.converged = True
 
 mf.grids.level = 4
 energy = mf.kernel(run_hf=False)
-mf_grad = mf.nuc_grad_method().set(cphf_conv_tol=1e-7,
-                                   cphf_max_cycle=200,
+mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200,
                                    auxbasis_response=True)
 gradient = mf_grad.kernel()
 
 print('\n[DF-RHF checkpoint]')
-print(f'HF-PBE energy [Ha]: {energy:.15f}')
+print(f'HF-r2SCAN energy [Ha]: {energy:.15f}')
 print('Gradient [Ha/Bohr]:\n', gradient)
 print('Force [Ha/Bohr]:\n', -gradient)
 

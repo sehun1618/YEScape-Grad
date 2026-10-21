@@ -232,7 +232,8 @@ class Gradients(uks_grad.Gradients):
     grad_elec = grad_elec
 
     def as_scanner(self):
-        raise NotImplementedError('UHF-DFT gradient scanner is not implemented')
+        from dcforge.tools.scanner import gradient_scanner
+        return gradient_scanner(self)
 
 
 Grad = Gradients

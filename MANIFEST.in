@@ -1,8 +1,10 @@
 include README.md
 recursive-include third_party *
 recursive-include examples *.py
-recursive-include structures *.xyz *.md
+recursive-include tests/structures *.xyz
 recursive-include tests *.py *.md
+exclude tests/structures/README.md
 include pytest.ini
 recursive-include environments *.yml *.md
 prune dev
+prune examples/dev

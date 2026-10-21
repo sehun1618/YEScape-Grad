@@ -254,7 +254,8 @@ class UHFDFT(uks.UKS):
         raise NotImplementedError('GPU UHF-DFT Hessians are not implemented')
 
     def as_scanner(self):
-        raise NotImplementedError('GPU UHF-DFT scanner support is not implemented')
+        from dcforge.tools.scanner import energy_scanner
+        return energy_scanner(self)
 
     def to_cpu(self):
         raise NotImplementedError(

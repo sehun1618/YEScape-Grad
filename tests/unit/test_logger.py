@@ -100,7 +100,10 @@ def test_diagnostics(residual, limit, verdict):
     gradient_summary(grad)
     text = grad.stdout.getvalue()
     assert 'HF-r2SCAN' in text and 'D2C' in text
-    assert 'Selected-atom gradient sum' in text
+    assert 'Selected-atom force sum' in text
+    force_sum = text.split('Selected-atom force sum [X Y Z] = ')[1].splitlines()[0]
+    np.testing.assert_allclose([float(x) for x in force_sum.split()[:3]], [-1., -1., -1.])
+    assert 'Max |force component|' in text and 'RMS force component' in text
     assert text.split('Residual check ')[-1].lstrip().startswith(verdict)
 
 
