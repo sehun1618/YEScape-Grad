@@ -6,7 +6,7 @@ from dcforge.gpu.energy import RHFDFT
 
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=3)
-mf = RHFDFT(mol, xc='r2SCAN').density_fit().set_dispersion('d2c')
+mf = RHFDFT(mol, xc='r2SCAN').density_fit()
 mf.conv_tol = 1e-8
 mf.conv_tol_grad = 1e-6
 mf.grids.level = 4
