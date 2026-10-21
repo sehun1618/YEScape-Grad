@@ -17,9 +17,9 @@ def gen_vind(Co, Cv, fvind):
 
     Args:
         Co : tuple of two ndarray
-            Alpha/beta occupied MO coefficients, each ``(nao, nocc_s)``.
+            Alpha/beta occupied MO coefficients, each ``(nao, nocc_σ)``.
         Cv : tuple of two ndarray
-            Alpha/beta virtual MO coefficients, each ``(nao, nvir_s)``.
+            Alpha/beta virtual MO coefficients, each ``(nao, nvir_σ)``.
         fvind : callable
             AO UHF response returned by ``mf_hf.gen_response``.
 
@@ -77,7 +77,7 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
     Args:
         zvec : tuple of two ndarray
-            Positive-RHS alpha/beta Z-vectors ``Z^s_ai``.
+            Positive-RHS alpha/beta Z-vectors ``Z^σ_ai``.
         mo_energy : tuple of two ndarray
             Canonical source-UHF orbital energies.
         mo_occ : tuple of two ndarray

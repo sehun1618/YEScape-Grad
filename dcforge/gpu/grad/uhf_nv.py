@@ -36,7 +36,7 @@ def make_s1_oo_and_grad_ovlp_energy(
     the same reason as the RHF helper: production retains only both ``s1oo``
     tensors, whereas a reference caller may need the actual ``s1vo`` arrays.
     Making this distinction explicit prevents an accidental
-    ``(2,3N,nvir_s,nocc_s)`` production allocation.
+    ``(2,3N,nvir_σ,nocc_σ)`` production allocation.
 
     Args:
         mol : pyscf.gto.Mole
@@ -75,7 +75,7 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
     '''Return the GPU UHF source-Fock term through ``Hessian.make_h1``.
 
     GPU4PySCF returns one MO/occupied-column tensor per spin with shape
-    ``(N_atom,3,nmo,nocc_s)``. This reference route materializes both tensors,
+    ``(N_atom,3,nmo,nocc_σ)``. This reference route materializes both tensors,
     selects their VO rows, and contracts them with the two Z-vectors.
 
     Args:
@@ -94,7 +94,7 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
 
     Returns:
         cupy.ndarray of shape (len(atmlst), 3)
-            ``-2 sum_s Z^s F^UHF,s,lambda_vo`` in Ha/Bohr.
+            ``-2 sum_σ Z^σ F^UHF,σ,lambda_vo`` in Ha/Bohr.
     '''
     mf_hess = mf_grad.base.mf_hf.Hessian()
     if hasattr(mf_hess, 'auxbasis_response'):
@@ -125,7 +125,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
     Args:
         mf_grad : dcforge.gpu.grad.uhf_dft.Gradients
-            Active density-fitted GPU unrestricted gradient object.
+            Active conventional GPU unrestricted gradient object.
         Co, Cv : tuple of two cupy.ndarray
             Alpha/beta occupied and virtual source-UHF MO coefficients.
         zvec : tuple of two cupy.ndarray
@@ -198,7 +198,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
         verbose=mf_grad.verbose,
     )
 
-    # The cross kernel returns +D_Z:J[P] - sum_s D_Z^s:K[P^s].
+    # The cross kernel returns +D_Z:J[P] - sum_σ D_Z^σ:K[P^σ].
     de_jk = -cp.asarray(de_jk)
     mf_grad.de_fock_hcore = cp.asnumpy(de_hcore)
     mf_grad.de_fock_jk = cp.asnumpy(de_jk)
@@ -210,7 +210,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
 
 def grad_ovlp_energy(s1vo, e_occ, zvec):
-    '''Return ``+2 sum_s Z^s S^lambda,vo_s epsilon^s_o`` on the GPU.'''
+    '''Return ``+2 sum_σ Z^σ S^lambda,vo_σ epsilon^σ_o`` on the GPU.'''
     de = cp.zeros(s1vo[0].shape[:2])
     for s1vo_s, e_s, z_s in zip(s1vo, e_occ, zvec):
         se_vo = s1vo_s * e_s[None, None, None, :]
@@ -244,7 +244,7 @@ def grad_ovlp_response_full(Co, Cv, zvec, s1oo, fvind):
 
 
 def get_z_response_oo(Co, Cv, zvec, fvind):
-    '''Return spin ``C_o^dagger G^UHF[D_Z] C_o`` blocks through AO response.
+    '''Return ``(C_o^σ)^dagger G^UHF[D_Z]^σ C_o^σ`` for each spin σ.
 
     Unlike :func:`grad_ovlp_response_full`, this production provider applies
     the coupled UHF response to one alpha/beta Z-density pair rather than all
@@ -281,7 +281,7 @@ def grad_ovlp_response(s1oo, vzoo):
 def nonvariational_correction(
     mf_grad, s1oo, de_fock, de_ovlp_energy, de_ovlp_response,
 ):
-    '''Assemble the explicit GPU ``2 sum_s Z^s V^lambda_s`` terms.
+    '''Assemble the explicit GPU ``2 sum_σ Z^σ V^lambda_σ`` terms.
 
     Args:
         mf_grad : dcforge.gpu.grad.uhf_dft.Gradients

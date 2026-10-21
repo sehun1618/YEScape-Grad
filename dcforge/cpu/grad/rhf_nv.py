@@ -293,10 +293,11 @@ def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
     The full perturbation route contracts one source-HF response for every
     nuclear coordinate.  For the real molecular RHF response operator,
 
-    ``4 Z^dagger G^HF[P^lambda_oo]_vo``
+    ``-4 Z^dagger G^HF[P^lambda_oo]_vo``
     ``= 4 S^lambda_oo : C_o^dagger G^HF[D_Z] C_o``,
 
-    where ``D_Z = C_v Z C_o^dagger + h.c.``.  The right-hand side needs one
+    where ``P^lambda_oo = -2 C_o S^lambda_oo C_o^dagger`` and
+    ``D_Z = C_v Z C_o^dagger + h.c.``. The right-hand side needs one
     AO response density regardless of ``3N``.
 
     Args:

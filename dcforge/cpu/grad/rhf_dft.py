@@ -27,7 +27,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
     r'''Evaluate the electronic restricted target-DFT-on-HF gradient.
 
-    The implementation follows the complete Z-vector equation from the PDF,
+    For a global-hybrid target without optional dispersion, the equation is
 
     .. math::
 
@@ -43,6 +43,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
           -2\sum_{ij}F_{ij}^{\mathrm{KS}}S_{ij}^{\lambda}
           +4\,\mathrm{Re}\sum_{ai}Z_{ai}^{*}V_{ai}^{\lambda}.
         \end{aligned}
+
+    P is the HF source density; c_x, E_xc and F^KS belong to the target.
+    For an RSH target, replace c_x times exchange by the weighted full-range
+    and long-range exchange integrals. V^lambda uses the HF source Fock
+    derivative and response operator, not the target response kernel.
 
     In code attributes, the same equation is
 

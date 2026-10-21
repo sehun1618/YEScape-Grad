@@ -43,7 +43,7 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
 
     Returns:
         ndarray of shape (len(atmlst), 3)
-            The ``-2 sum_s Z^s F^UHF,s,lambda_vo`` contribution in Ha/Bohr.
+            The ``-2 sum_σ Z^σ F^UHF,σ,lambda_vo`` contribution in Ha/Bohr.
     '''
     mf_hess = mf_grad.base.mf_hf.Hessian()
     if hasattr(mf_hess, 'auxbasis_response'):
@@ -86,12 +86,12 @@ def grad_fock_make_h1(mf_grad, Co, Cv, zvec, mo_coeff, mo_occ,
 def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     r'''Contract the spin-resolved source-Fock term without ``make_h1``.
 
-    Define one Hermitian transition density for each spin,
+    Define one Hermitian transition density for each spin σ in {α, β},
 
     .. math::
 
-        D_Z^s = C_v^s Z^s (C_o^s)^\dagger
-              + C_o^s (Z^s)^\dagger (C_v^s)^\dagger.
+        D_Z^{\sigma} = C_v^{\sigma} Z^{\sigma} (C_o^{\sigma})^\dagger
+              + C_o^{\sigma} (Z^{\sigma})^\dagger (C_v^{\sigma})^\dagger.
 
     With ``P = P^alpha + P^beta`` and
     ``D_Z = D_Z^alpha + D_Z^beta``, the required contraction is
@@ -100,7 +100,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
         -\operatorname{Tr}[D_Z h^\lambda]
         -\operatorname{Tr}[D_Z J^\lambda[P]]
-        +\sum_s\operatorname{Tr}[D_Z^s K^\lambda[P^s]].
+        +\sum_{\sigma}\operatorname{Tr}[D_Z^{\sigma} K^\lambda[P^{\sigma}]].
 
     A single gradient J/K call evaluates the Coulomb cross pair
     ``(P,D_Z)`` and the two same-spin exchange cross pairs.  The primary-AO
@@ -188,11 +188,11 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
 
 def grad_ovlp_energy(s1vo, e_occ, zvec):
-    '''Return ``+2 sum_s Z^s S^lambda,vo_s epsilon^s_o``.
+    '''Return ``+2 sum_σ Z^σ S^lambda,vo_σ epsilon^σ_o``.
 
     Args:
         s1vo : tuple of two ndarray
-            Spin-resolved overlap VO blocks, each ``(nset,3,nvir_s,nocc_s)``.
+            Spin-resolved overlap VO blocks, each ``(nset,3,nvir_σ,nocc_σ)``.
         e_occ : tuple of two ndarray
             Occupied source-UHF orbital energies.
         zvec : tuple of two ndarray
@@ -216,10 +216,11 @@ def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
     The direct legacy order builds ``3*natm`` spin-density perturbations from
     ``S^lambda_oo`` and applies ``G^UHF`` to all of them. Self-adjointness gives
 
-    ``sum_s Z^s : G^UHF[P^lambda_oo]^s_vo``
-    `` = sum_s S^lambda,oo_s : (C_o^s)^dagger G^UHF[D_Z]^s C_o^s``,
+    ``-2 sum_σ Z^σ : G^UHF[P^lambda_oo]^σ_vo``
+    `` = sum_σ S^lambda,oo_σ : (C_o^σ)^dagger G^UHF[D_Z]^σ C_o^σ``,
 
-    where ``D_Z^s = C_v^s Z^s (C_o^s)^dagger + h.c.``. The implemented order
+    where ``P^lambda,σ_oo = -C_o^σ S^lambda,σ_oo (C_o^σ)^dagger`` and
+    ``D_Z^σ = C_v^σ Z^σ (C_o^σ)^dagger + h.c.``. The implemented order
     calls the expensive response provider once, independent of atom count.
 
     Args:
@@ -257,7 +258,7 @@ def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
 
 def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
                               de_fock, fvind, atmlst=None):
-    '''Assemble the spin-resolved ``2 sum_s Z^s V^lambda_s`` correction.
+    '''Assemble the spin-resolved ``2 sum_σ Z^σ V^lambda_σ`` correction.
 
     Args:
         mf_grad : dcforge.cpu.grad.uhf_dft.Gradients

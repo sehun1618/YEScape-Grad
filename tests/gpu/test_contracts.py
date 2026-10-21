@@ -65,7 +65,7 @@ def test_gpu_energy_rechecks_df_owner_after_direct_provider_mutation():
 
 
 @pytest.mark.parametrize("workflow", [RHFDFT, UHFDFT])
-def test_gpu_source_state_rejects_in_place_geometry_change(workflow):
+def test_gpu_geometry_change_without_orbitals_is_rejected(workflow):
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf = workflow(mol, xc="PBE")
     mf.mf_hf.converged = True
@@ -74,31 +74,30 @@ def test_gpu_source_state_rejects_in_place_geometry_change(workflow):
     coords[0, 0] += 0.1
     mol.set_geom_(coords, unit="Bohr")
 
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
+    with pytest.raises(RuntimeError, match="no canonical orbital state"):
         mf.kernel(run_hf=False)
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
+    with pytest.raises(RuntimeError, match="no canonical orbital state"):
         mf.nuc_grad_method().kernel()
 
 
 @pytest.mark.parametrize("workflow", [RHFDFT, UHFDFT])
-def test_gpu_density_fit_requires_source_reconvergence(workflow):
+def test_gpu_density_fit_without_orbitals_is_rejected(workflow):
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf = workflow(mol, xc="PBE")
     mf.mf_hf.converged = True
 
     mf_df = mf.density_fit()
     assert mf_df.e_dft is None
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
+    with pytest.raises(RuntimeError, match="no canonical orbital state"):
         mf_df.kernel(run_hf=False)
 
 
 @pytest.mark.parametrize("workflow", [RHFDFT, UHFDFT])
-def test_gpu_source_state_rejects_canonical_orbital_mutation(workflow):
+def test_gpu_explicit_reuse_accepts_canonical_orbital_changes(workflow):
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf = workflow(mol, xc="PBE")
     mf.kernel()
     coefficient = mf.mf_hf.mo_coeff
     coefficient[(0,) * coefficient.ndim] += 1e-6
 
-    with pytest.raises(RuntimeError, match="canonical orbitals changed"):
-        mf.kernel(run_hf=False)
+    assert mf.kernel(run_hf=False) == pytest.approx(mf.e_tot)

@@ -29,7 +29,8 @@ def grad_hcore(hcore_deriv, dm0, atmlst):
             PySCF atom-resolved core-Hamiltonian derivative generator. Calling
             ``hcore_deriv(ia)`` returns an array of shape ``(3, nao, nao)``.
         dm0 : ndarray of shape (nao, nao)
-            Closed-shell HF density ``P^HF = 2 C_o C_o^dagger``.
+            Total HF density: restricted ``P=2 C_o C_o^dagger`` or the sum
+            of the two unrestricted spin densities.
         atmlst : sequence of int
             Nuclear centers included in the gradient.
 
@@ -95,13 +96,16 @@ def grad_veff_uhf(mol, vhf, dm0, atmlst):
 
     .. math::
 
-        g_{\mathrm{veff}}^\lambda
-        = \sum_{s\in\{\alpha,\beta\}}
-          \sum_{\mu\nu}P^s_{\mu\nu}
-          V^{s,\lambda}_{\mu\nu}.
+        g_{\mathrm{veff}}^{I x}
+        = 2\sum_{\sigma \in\{\alpha,\beta\}}
+          \sum_{\mu\in I,\nu}P^{\sigma}_{\mu\nu}
+          (\mathrm{vhf}^{\sigma}_{x})_{\mu\nu}.
 
     PySCF UKS supplies ``vhf`` with shape ``(2,3,nao,nao)``. The factor 2
     completes the bra/ket AO-center derivative, not spin occupancy.
+    ``vhf`` is the upstream one-center energy-derivative intermediate, not
+    the full nuclear derivative of the Fock matrix. Contracting the latter
+    with P would double-count the quadratic Hartree/exchange energy.
 
     Args:
         mol : pyscf.gto.Mole
@@ -344,10 +348,10 @@ def skeleton_gradient_uhf(mf_grad, dm0, foo, Co, s1, atmlst=None):
 
     .. math::
 
-        -\sum_{s\in\{\alpha,\beta\}}\sum_{ij}
-         F^{\mathrm{KS},s}_{ij}S^{\lambda,s}_{ij},
+        -\sum_{\sigma \in\{\alpha,\beta\}}\sum_{ij}
+         F^{\mathrm{KS},\sigma}_{ij}S^{\lambda,\sigma}_{ij},
 
-    represented by ``dme0 = sum_s C_o^s F^KS,s_oo (C_o^s)^dagger``.
+    represented by ``dme0 = sum_σ C_o^σ F^KS,σ_oo (C_o^σ)^dagger``.
     Target grid and optional DF auxiliary responses enter through the same
     PySCF ``extra_force`` hook used by the restricted route.
 

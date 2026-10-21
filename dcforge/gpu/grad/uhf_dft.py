@@ -34,15 +34,20 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
     r'''Evaluate the unrestricted target-DFT-on-UHF GPU gradient.
 
-    The implemented equation is
+    Without optional dispersion, the implemented electronic equation is
 
     .. math::
 
-        \frac{dE}{d\lambda}
-        =g_{\mathrm{skel}}^\lambda
-        -2\sum_s Z^sF^{\mathrm{UHF},s,\lambda}_{vo}
-        +2\sum_s Z^sS^{s,\lambda}_{vo}\epsilon_o^s
+        \frac{dE_{\mathrm{elec}}}{d\lambda}
+        =g_{\mathrm{skel,elec}}^\lambda
+        -2\operatorname{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*
+          F^{\mathrm{UHF},\sigma,\lambda}_{ai}
+        +2\operatorname{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*
+          S^{\sigma,\lambda}_{ai}\epsilon_i^{\sigma}
         +g_{\mathrm{ovlp-response}}^\lambda.
+
+    Here σ runs over α and β; a and i are virtual and occupied MO indices.
+    The inherited kernel adds nuclear repulsion to this electronic gradient.
 
     GPU4PySCF owns the target UKS grid and provider-specific explicit
     derivative. DC-Forge adds the noncanonical target ``F_oo`` correction and

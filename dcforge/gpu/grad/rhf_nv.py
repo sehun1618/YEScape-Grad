@@ -313,9 +313,10 @@ def grad_ovlp_response(s1oo, vzoo):
     With ``D_Z = C_v Z C_o^dagger + h.c.`` and the self-adjoint real-RHF
     response operator ``G^HF``, the ``3N`` perturbation contractions satisfy
 
-    ``4 Z:G^HF[P^lambda_oo]_vo``
+    ``-4 Z:G^HF[P^lambda_oo]_vo``
     ``= 4 S^lambda_oo : C_o^dagger G^HF[D_Z] C_o``.
 
+    Here ``P^lambda_oo = -2 C_o S^lambda_oo C_o^dagger``.
     The provider has already applied the source-HF response to the single
     Z-transition density.  This function owns only the mathematical
     ``S^lambda_oo:V_Z,oo`` term, independent of whether ``vzoo`` came from a

@@ -15,9 +15,9 @@ from gpu4pyscf.lib.cupy_helper import contract
 def grad_ovlp_correction(foo, e_occ, s1oo):
     '''Replace the standard diagonal energy-weighted overlap by target F_oo.
 
-    GPU4PySCF's ordinary RKS skeleton uses ``diag(epsilon_i^HF)`` because a
-    variational KS reference diagonalizes its target Fock. Target-DFT@HF
-    instead requires the full target block ``F^KS_oo``. The difference is
+    The upstream skeleton uses the orbital energies passed to it, here
+    ``diag(epsilon_i^HF)``. HF-DFT instead requires the full target block
+    ``F^KS_oo``. The difference is
 
     ``-2 Tr[(F^KS_oo - diag(epsilon_i^HF)) S^lambda_oo]``.
 

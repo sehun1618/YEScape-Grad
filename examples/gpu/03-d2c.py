@@ -1,4 +1,10 @@
-'''Add published D2C dispersion energy and gradient to GPU molecular HF-r2SCAN.'''
+'''GPU molecular D2C-r2SCAN energy and gradient with separate dispersion contributions.'''
+
+# Ref.
+# M. Lee et al., "Correcting Dispersion Corrections with Density-Corrected
+# DFT", J. Chem. Theory Comput. 20, 7155-7167 (2024).
+# https://doi.org/10.1021/acs.jctc.4c00689
+# D2C damping parameters: Supporting Information, Table S1 (D2C-DFT column).
 
 from pathlib import Path
 
@@ -35,12 +41,12 @@ print('Published D2C parameters')
 print(get_d2c_parameters(mf.xc))
 print(f'HF-r2SCAN energy       = {mf.e_dft:.15f} Ha')
 print(f'D2C dispersion energy        = {mf.e_d2c:.15f} Ha')
-print(f'HF-r2SCAN+D2C energy   = {energy:.15f} Ha')
+print(f'D2C-r2SCAN energy     = {energy:.15f} Ha')
 print('HF-r2SCAN gradient [Ha/Bohr]')
 print(mf_grad.de - mf_grad.de_d2c)
 print('D2C dispersion gradient [Ha/Bohr]')
 print(mf_grad.de_d2c)
-print('HF-r2SCAN+D2C gradient [Ha/Bohr]')
+print('D2C-r2SCAN gradient [Ha/Bohr]')
 print(mf_grad.de)
 
 

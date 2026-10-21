@@ -44,7 +44,6 @@ class UHFDFT(uks.UKS):
     _keys = uks.UKS._keys | {
         'mf_hf', 'e_uhf', 'e_dft', 'e_d2c', 'dm_hf',
         'dispersion', 'd2c_result', '_source_signature',
-        '_source_state_signature',
     }
     _hf_options = RHFDFT._hf_options
 
@@ -68,7 +67,6 @@ class UHFDFT(uks.UKS):
         self.dispersion = None
         self.d2c_result = None
         self._source_signature = _make_source_signature(self)
-        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select D2C dispersion parameters matching the current target ``xc``.'''

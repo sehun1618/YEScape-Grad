@@ -113,7 +113,7 @@ def test_energy_rechecks_df_owner_after_direct_provider_mutation():
     "workflow,name",
     [(RHFDFT, "water1.xyz"), (UHFDFT, "o2_triplet.xyz")],
 )
-def test_source_state_rejects_in_place_geometry_change(workflow, name):
+def test_explicit_reuse_allows_in_place_geometry_change(workflow, name):
     mol = make_mol(name, basis="sto-3g")
     mf, _ = run_workflow(workflow, mol, xc="PBE")
 
@@ -121,10 +121,8 @@ def test_source_state_rejects_in_place_geometry_change(workflow, name):
     coords[0, 0] += 0.1
     mol.set_geom_(coords, unit="Bohr")
 
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
-        mf.kernel(run_hf=False)
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
-        mf.nuc_grad_method().kernel()
+    assert np.all(np.isfinite(mf.kernel(run_hf=False)))
+    assert np.all(np.isfinite(mf.nuc_grad_method().kernel()))
 
 
 @pytest.mark.cpu
@@ -132,20 +130,18 @@ def test_source_state_rejects_in_place_geometry_change(workflow, name):
     "workflow,name",
     [(RHFDFT, "water1.xyz"), (UHFDFT, "o2_triplet.xyz")],
 )
-def test_density_fit_and_undo_df_require_source_reconvergence(workflow, name):
+def test_density_fit_and_undo_df_allow_explicit_source_reuse(workflow, name):
     mol = make_mol(name, basis="sto-3g")
     mf, _ = run_workflow(workflow, mol, xc="PBE")
 
     mf_df = mf.density_fit()
     assert mf_df.e_dft is None
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
-        mf_df.kernel(run_hf=False)
+    assert np.all(np.isfinite(mf_df.kernel(run_hf=False)))
 
     mf_df.kernel()
     mf_conventional = mf_df.undo_df()
     assert mf_conventional.e_dft is None
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
-        mf_conventional.kernel(run_hf=False)
+    assert np.all(np.isfinite(mf_conventional.kernel(run_hf=False)))
 
 
 @pytest.mark.cpu
@@ -183,7 +179,7 @@ def test_initial_df_workflow_accepts_independently_validated_source_state():
     [(RHFDFT, "water1.xyz"), (UHFDFT, "o2_triplet.xyz")],
 )
 @pytest.mark.parametrize("attribute", ["mo_energy", "mo_coeff", "mo_occ"])
-def test_source_state_rejects_canonical_array_mutation(
+def test_explicit_reuse_accepts_canonical_array_changes(
         workflow, name, attribute):
     mol = make_mol(name, basis="sto-3g")
     mf, _ = run_workflow(workflow, mol, xc="PBE")
@@ -192,8 +188,7 @@ def test_source_state_rejects_canonical_array_mutation(
     array = value[0] if isinstance(value, (tuple, list)) else value
     array[(0,) * array.ndim] += 1e-6
 
-    with pytest.raises(RuntimeError, match="canonical orbitals changed"):
-        mf.kernel(run_hf=False)
+    assert np.isfinite(mf.kernel(run_hf=False))
 
 
 @pytest.mark.cpu
@@ -201,7 +196,7 @@ def test_source_state_rejects_canonical_array_mutation(
     "workflow,name",
     [(RHFDFT, "water1.xyz"), (UHFDFT, "o2_triplet.xyz")],
 )
-def test_default_energy_rejects_stale_source_but_supplied_density_remains_valid(
+def test_default_energy_accepts_reused_source_density(
         workflow, name):
     mol = make_mol(name, basis="sto-3g")
     mf, _ = run_workflow(workflow, mol, xc="PBE")
@@ -211,17 +206,16 @@ def test_default_energy_rejects_stale_source_but_supplied_density_remains_valid(
     coords[0, 0] += 0.1
     mol.set_geom_(coords, unit="Bohr")
 
-    with pytest.raises(RuntimeError, match="current molecule or DF representation"):
-        mf.energy_tot()
+    assert np.all(np.isfinite(mf.energy_tot()))
     assert np.isfinite(mf.energy_tot(dm=dm))
 
 
 @pytest.mark.cpu
-def test_workflow_orbitals_cannot_diverge_from_the_source_state():
+def test_reuse_synchronizes_workflow_orbitals_from_source():
     mol = make_mol("water1.xyz", basis="sto-3g")
     mf, _ = run_workflow(RHFDFT, mol, xc="PBE")
     mf.mo_coeff = mf.mo_coeff.copy()
     mf.mo_coeff[0, 0] += 1e-6
 
-    with pytest.raises(RuntimeError, match="do not match the source HF state"):
-        mf.kernel(run_hf=False)
+    assert np.isfinite(mf.kernel(run_hf=False))
+    assert mf.mo_coeff is mf.mf_hf.mo_coeff

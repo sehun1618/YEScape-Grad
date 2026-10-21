@@ -71,7 +71,6 @@ class RHFDFT(rks.RKS):
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'e_d2c', 'dm_hf',
         'dispersion', 'd2c_result', '_source_signature',
-        '_source_state_signature',
     }
     _hf_options = CPU_RHFDFT._hf_options
 
@@ -97,7 +96,6 @@ class RHFDFT(rks.RKS):
         self.dispersion = None
         self.d2c_result = None
         self._source_signature = _make_source_signature(self)
-        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select D2C dispersion parameters matching the current target ``xc``.'''
@@ -156,7 +154,8 @@ class RHFDFT(rks.RKS):
             dm0 : cupy.ndarray or None
                 Initial source-RHF density.  Valid only with ``run_hf=True``.
             run_hf : bool
-                Reuse an already converged source when false.
+                Reuse supplied source orbitals when false; an unconverged
+                flag warns but does not block explicit reuse.
             **kwargs
                 Additional keyword arguments passed only to source GPU RHF.
 

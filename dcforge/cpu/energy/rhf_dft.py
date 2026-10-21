@@ -5,10 +5,8 @@
 
 '''Restricted HF-DFT energy workflow built on PySCF RKS.'''
 
-import hashlib
-
-import numpy as np
 from pyscf import scf
+from pyscf.lib import logger
 from pyscf.df import df_jk
 from pyscf.dft import rks
 
@@ -92,79 +90,41 @@ def _make_source_signature(mf):
     )
 
 
-def _array_digest(value):
-    '''Return a byte-sensitive digest without importing a GPU dependency.
-
-    CuPy arrays expose an explicit ``get`` method.  Calling it here keeps this
-    common molecular-state check usable by the GPU facade without making the
-    CPU package import CuPy or GPU4PySCF.  Molecular canonical arrays are
-    transferred only at source-state validation boundaries, not inside an SCF
-    or CPHF iteration.
-    '''
-    if isinstance(value, (tuple, list)):
-        return tuple(_array_digest(item) for item in value)
-    getter = getattr(value, 'get', None)
-    if callable(getter):
-        value = getter()
-    value = np.ascontiguousarray(value)
-    digest = hashlib.sha256()
-    digest.update(value.dtype.str.encode('ascii'))
-    digest.update(np.asarray(value.shape, dtype=np.int64).tobytes())
-    digest.update(value.tobytes())
-    return digest.hexdigest()
-
-
-def _make_source_state_signature(mf):
-    '''Fingerprint the canonical source arrays required by the Z-vector.'''
-    values = tuple(
-        getattr(mf.mf_hf, name, None)
-        for name in ('mo_energy', 'mo_coeff', 'mo_occ')
-    )
-    if any(value is None for value in values):
-        return None
-    return tuple(_array_digest(value) for value in values)
-
-
 def _record_source_signature(mf):
-    '''Record the Hamiltonian and canonical state assigned to the source HF.'''
+    '''Record source settings for provenance, not as a reuse permission check.'''
     mf._source_signature = _make_source_signature(mf)
-    mf._source_state_signature = _make_source_state_signature(mf)
 
 
 def _check_source_state(mf):
-    '''Require source orbitals stationary for the current molecular problem.'''
-    _check_df_owner(mf)
-    if not mf.mf_hf.converged:
-        raise RuntimeError('source HF calculation must be converged')
-    if mf._source_signature != _make_source_signature(mf):
-        raise RuntimeError(
-            'source HF state does not match the current molecule or DF '
-            'representation; run mf.kernel() again')
-    state_signature = _make_source_state_signature(mf)
-    if state_signature is None:
-        raise RuntimeError('source HF calculation has no canonical orbital state')
-    if mf._source_state_signature is None:
-        # A standard PySCF checkpoint has no DC-Forge receipt.  The caller may
-        # attach a separately validated canonical state and set ``converged``;
-        # seal it on its first DC-Forge use so later in-place mutation is still
-        # detected.
-        mf._source_state_signature = state_signature
-    elif mf._source_state_signature != state_signature:
-        raise RuntimeError(
-            'source HF canonical orbitals changed after validation; '
-            'run mf.kernel() again')
+    '''Check usable orbital dimensions, without requiring identical old arrays.
 
-    facade_values = tuple(
-        getattr(mf, name, None)
-        for name in ('mo_energy', 'mo_coeff', 'mo_occ')
-    )
-    if (any(value is not None for value in facade_values)
-            and (any(value is None for value in facade_values)
-                 or tuple(_array_digest(value) for value in facade_values)
-                 != state_signature)):
-        raise RuntimeError(
-            'HF-DFT canonical orbitals do not match the source HF state; '
-            'run mf.kernel() again')
+    Explicit source reuse is the caller's choice. Neither this check nor a
+    stored converged flag proves stationarity in the current Hamiltonian.
+    Nonstationary orbitals need not give an analytic gradient consistent with
+    a reoptimized-source finite difference.
+    '''
+    _check_df_owner(mf)
+    source = mf.mf_hf
+    energy, coeff, occ = (getattr(source, name, None)
+                          for name in ('mo_energy', 'mo_coeff', 'mo_occ'))
+    if any(value is None for value in (energy, coeff, occ)):
+        raise RuntimeError('source SCF calculation has no canonical orbital state')
+    if getattr(coeff, 'ndim', None) == 2:
+        blocks = [(energy, coeff, occ)]
+    elif isinstance(coeff, (tuple, list)) or getattr(coeff, 'ndim', None) == 3:
+        if len(coeff) != 2 or len(energy) != 2 or len(occ) != 2:
+            raise ValueError('source orbitals require one restricted or two spin blocks')
+        blocks = zip(energy, coeff, occ)
+    else:
+        raise ValueError('source orbital shapes require a matrix or two spin matrices')
+    for e, c, o in blocks:
+        if (getattr(c, 'ndim', None) != 2 or c.shape[0] != mf.mol.nao_nr()
+                or getattr(e, 'shape', None) != (c.shape[1],)
+                or getattr(o, 'shape', None) != (c.shape[1],)):
+            raise ValueError('source orbital shapes do not match the active AO space')
+    if not source.converged:
+        logger.warn(mf, 'Reusing source orbitals marked unconverged; source '
+                    'stationarity and analytic-gradient/FD agreement are not guaranteed.')
 
 
 def _clear_target_state(mf):
@@ -201,7 +161,6 @@ class RHFDFT(rks.RKS):
     _keys = rks.RKS._keys | {
         'mf_hf', 'e_hf', 'e_dft', 'e_d2c', 'dm_hf',
         'dispersion', 'd2c_result', '_source_signature',
-        '_source_state_signature',
     }
     _hf_options = (
         'max_memory', 'verbose', 'stdout', 'chkfile',
@@ -232,7 +191,6 @@ class RHFDFT(rks.RKS):
         self.dispersion = None
         self.d2c_result = None
         self._source_signature = _make_source_signature(self)
-        self._source_state_signature = None
 
     def set_dispersion(self, correction=None):
         '''Select an additive geometry-only dispersion correction.
@@ -422,7 +380,7 @@ def energy_tot(mf_hf, mf_dft):
             ``mf_dft.energy_tot(dm=mf_hf.make_rdm1())`` and never target SCF.
     '''
     if not mf_hf.converged:
-        raise RuntimeError('source HF calculation must be converged')
+        logger.warn(mf_dft, 'Evaluating a supplied density from an unconverged source.')
     if mf_hf.mol is not mf_dft.mol:
         raise ValueError('mf_hf and mf_dft must reference the same Mole object')
 

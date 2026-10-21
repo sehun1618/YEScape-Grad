@@ -27,19 +27,22 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
     r'''Evaluate the electronic unrestricted target-DFT-on-UHF gradient.
 
-    The unrestricted extension of the molecular PDF equation is
+    Without optional dispersion, the unrestricted gradient equation is
 
     .. math::
 
         \begin{aligned}
         \frac{dE}{d\lambda}={}&
-        \sum_{s\mu\nu}P^s_{\mu\nu}h^\lambda_{\mu\nu}
+        \sum_{\sigma \mu\nu}P^{\sigma}_{\mu\nu}h^\lambda_{\mu\nu}
         +E_{\mathrm{Hxc}}^\lambda[P^\alpha,P^\beta]
         +E_{\mathrm{NN}}^\lambda\\
-        &-\sum_{sij}F^{\mathrm{KS},s}_{ij}S^{\lambda,s}_{ij}
-        +2\,\mathrm{Re}\sum_{sai}(Z^s_{ai})^*V^{\lambda,s}_{ai}.
+        &-\sum_{\sigma ij}F^{\mathrm{KS},\sigma}_{ij}S^{\lambda,\sigma}_{ij}
+        +2\,\mathrm{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*V^{\lambda,\sigma}_{ai}.
         \end{aligned}
 
+    Here σ runs over α and β. E_Hxc is the explicit target Hartree/XC
+    derivative, including target exact exchange if present. V^lambda uses
+    the source UHF derivative and response kernel.
     Each spin orbital has occupation one, so the nonvariational prefactor is
     2 rather than the restricted spatial-orbital prefactor 4.
 

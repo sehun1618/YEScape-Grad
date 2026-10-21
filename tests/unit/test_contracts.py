@@ -22,9 +22,9 @@ def test_source_and_target_must_share_one_molecule():
         RHFDFT(mol_b, mf_hf=scf.RHF(mol_a))
 
 
-def test_run_hf_false_requires_converged_source():
+def test_run_hf_false_requires_source_orbitals():
     mf = RHFDFT(make_mol("water1.xyz", basis="sto-3g"), xc="PBE")
-    with pytest.raises(RuntimeError, match="source HF calculation must be converged"):
+    with pytest.raises(RuntimeError, match="no canonical orbital state"):
         mf.kernel(run_hf=False)
 
 

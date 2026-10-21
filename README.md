@@ -107,6 +107,14 @@ result summaries and wall times; level 4 adds calculation settings and detailed
 diagnostics. PySCF internal logs follow the same `verbose` setting.
 The printed forces are `-gradient`; the gradient API still returns `dE/dR`.
 
+Use `kernel(run_hf=False)` to evaluate a supplied HF state without rerunning
+SCF. Array hashes and past calculation settings do not restrict this explicit
+reuse. Missing/malformed orbitals and incompatible DF ownership remain errors;
+an unconverged source flag emits a warning. The caller is responsible for source
+stationarity: nonstationary orbitals need not yield gradients consistent with
+reoptimized-HF finite differences. Normal SCF and scanner calls still require
+convergence.
+
 ### Conventional and density-fitted calculations
 
 Using the `mol` above, choose one of the following:
