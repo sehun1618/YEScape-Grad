@@ -4,7 +4,7 @@ import numpy as np
 from pyscf import gto, scf
 from pyscf.scf import chkfile
 
-from dcforge.cpu.energy import RHFDFT
+from dcforge.cpu.energy import RNSC
 
 np.set_printoptions(precision=12, suppress=True)
 
@@ -13,26 +13,26 @@ np.set_printoptions(precision=12, suppress=True)
 # Case 1: conventional RHF water
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=0)
-mf_hf = scf.RHF(mol)
-mf_hf.chkfile = 'rhf.chk'
-mf_hf.conv_tol = 1e-8
-mf_hf.conv_tol_grad = 1e-6
-mf_hf.max_cycle = 100
-mf_hf.kernel()
+mf_source = scf.RHF(mol)
+mf_source.chkfile = 'rhf.chk'
+mf_source.conv_tol = 1e-8
+mf_source.conv_tol_grad = 1e-6
+mf_source.max_cycle = 100
+mf_source.kernel()
 
 # Restore the saved HF orbitals, without running HF again.
 mol, state = chkfile.load_scf('rhf.chk')
-mf_hf = scf.RHF(mol)
-mf_hf.e_tot = state['e_tot']
-mf_hf.mo_coeff = state['mo_coeff']
-mf_hf.mo_energy = state['mo_energy']
-mf_hf.mo_occ = state['mo_occ']
+mf_source = scf.RHF(mol)
+mf_source.e_tot = state['e_tot']
+mf_source.mo_coeff = state['mo_coeff']
+mf_source.mo_energy = state['mo_energy']
+mf_source.mo_occ = state['mo_occ']
 # Assumes a converged checkpoint; this flag does not verify convergence.
-mf_hf.converged = True
+mf_source.converged = True
 
-mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
+mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
 mf.grids.level = 4
-energy = mf.kernel(run_hf=False)
+energy = mf.kernel(run_source=False)
 mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200)
 gradient = mf_grad.kernel()
 
@@ -48,25 +48,25 @@ print('Force [Ha/Bohr]:\n', -gradient)
 # Case 2: density-fitted RHF water
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=0)
-mf_hf = scf.RHF(mol).density_fit(auxbasis='def2-svp-jkfit')
-mf_hf.chkfile = 'rhf_df.chk'
-mf_hf.conv_tol = 1e-8
-mf_hf.conv_tol_grad = 1e-6
-mf_hf.max_cycle = 100
-mf_hf.kernel()
+mf_source = scf.RHF(mol).density_fit(auxbasis='def2-svp-jkfit')
+mf_source.chkfile = 'rhf_df.chk'
+mf_source.conv_tol = 1e-8
+mf_source.conv_tol_grad = 1e-6
+mf_source.max_cycle = 100
+mf_source.kernel()
 
 mol, state = chkfile.load_scf('rhf_df.chk')
 # Recreate the same DF settings; they are not stored in the SCF checkpoint.
-mf = RHFDFT(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit')
-mf_hf = mf.mf_hf
-mf_hf.e_tot = state['e_tot']
-mf_hf.mo_coeff = state['mo_coeff']
-mf_hf.mo_energy = state['mo_energy']
-mf_hf.mo_occ = state['mo_occ']
-mf_hf.converged = True
+mf = RNSC(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit')
+mf_source = mf.mf_source
+mf_source.e_tot = state['e_tot']
+mf_source.mo_coeff = state['mo_coeff']
+mf_source.mo_energy = state['mo_energy']
+mf_source.mo_occ = state['mo_occ']
+mf_source.converged = True
 
 mf.grids.level = 4
-energy = mf.kernel(run_hf=False)
+energy = mf.kernel(run_source=False)
 mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200,
                                    auxbasis_response=True)
 gradient = mf_grad.kernel()

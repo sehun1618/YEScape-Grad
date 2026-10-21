@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from pyscf import gto, scf
 
-from dcforge.cpu.energy import RHFDFT
+from dcforge.cpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,7 +15,7 @@ mol = gto.M(
     basis='aug-cc-pvtz',
     verbose=0,
 )
-mf_hf = scf.RHF(mol).set(
+mf_source = scf.RHF(mol).set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,
@@ -26,23 +26,23 @@ mf_hf = scf.RHF(mol).set(
 # Case 1: PySCF level presets (element-dependent radial/angular grid sizes)
 print('\nr2SCAN grid-level convergence on the same RHF density')
 for level in (2, 4, 6):
-    mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
+    mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
     mf.grids.level = level
-    energy = mf.kernel(run_hf=False)
+    energy = mf.kernel(run_source=False)
     print(f'level {level}: {mf.grids.coords.shape[0]} points, '
           f'E = {energy:.15f} Ha')
 
 # Case 2: one explicit (radial points, angular points) pair for all atoms
-mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
+mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
 mf.grids.atom_grid = (99, 590)
-energy = mf.kernel(run_hf=False)
+energy = mf.kernel(run_source=False)
 print(f'\nUniform atomic sizes: {mf.grids.coords.shape[0]} points, '
       f'E = {energy:.15f} Ha')
 
 # Case 3: different atomic grid sizes for each element
-mf = RHFDFT(mol, xc='r2SCAN', mf_hf=mf_hf)
+mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
 mf.grids.atom_grid = {'H': (75, 302), 'O': (99, 590)}
-energy = mf.kernel(run_hf=False)
+energy = mf.kernel(run_source=False)
 print(f'\nElement-specific sizes: {mf.grids.coords.shape[0]} points, '
       f'E = {energy:.15f} Ha')
 

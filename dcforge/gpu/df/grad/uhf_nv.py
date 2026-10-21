@@ -29,7 +29,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     without materializing spin-resolved first-order Fock tensors.
 
     Args:
-        mf_grad : dcforge.gpu.df.grad.uhf_dft.Gradients
+        mf_grad : dcforge.gpu.df.grad.unsc.Gradients
             Active density-fitted GPU unrestricted gradient object.
         Co, Cv : tuple of two cupy.ndarray
             Alpha/beta occupied and virtual source-UHF coefficients.
@@ -46,10 +46,10 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
             Directly contracted DF-UHF source-Fock term in Ha/Bohr.
     """
     mol = mf_grad.mol
-    mf_hf = mf_grad.base.mf_hf
+    mf_source = mf_grad.base.mf_source
     if dm0.shape != (2, mol.nao, mol.nao):
         raise ValueError("dm0 must contain alpha and beta AO density matrices")
-    if not hasattr(mf_hf, "with_df"):
+    if not hasattr(mf_source, "with_df"):
         raise TypeError("GPU DF-UHF direct contraction requires a DF source")
     if list(atmlst) != list(range(mol.natm)):
         raise NotImplementedError(
@@ -58,12 +58,12 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
 
     de_hcore = cp.zeros((mol.natm, 3))
     hcore_bytes = 0
-    source_grad_factory = getattr(mf_hf, "nuc_grad_method", None)
+    source_grad_factory = getattr(mf_source, "nuc_grad_method", None)
     source_grad = source_grad_factory() if callable(source_grad_factory) else None
     if source_grad is NotImplemented or source_grad is None:
         # GPU ROHF has no native gradient class in GPU4PySCF 1.8.1.  This is
         # still a GPU hcore derivative provider, not a CPU gradient fallback.
-        source_grad = rhf_grad.Gradients(mf_hf)
+        source_grad = rhf_grad.Gradients(mf_source)
     for z_s, Co_s, Cv_s in zip(zvec, Co, Cv):
         coeff_s = cp.concatenate((Co_s, Cv_s), axis=1)
         occ_s = cp.zeros(coeff_s.shape[1])
@@ -96,9 +96,9 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     dz = _make_factorized_dm(z_left, Co_total, symmetrize=1)
     dm = _make_factorized_dm(Co_total, Co_total, symmetrize=0)
 
-    auxmol = mf_hf.with_df.auxmol
+    auxmol = mf_source.with_df.auxmol
     if auxmol is None:
-        auxmol = df.addons.make_auxmol(mol, auxbasis=mf_hf.with_df.auxbasis)
+        auxmol = df.addons.make_auxmol(mol, auxbasis=mf_source.with_df.auxbasis)
     int3c2e_opt = df_tdrhf_grad.Int3c2eOpt(mol, auxmol).build()
     de_jk = jk_energies_per_atom_bounded(
         mf_grad,

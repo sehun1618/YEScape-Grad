@@ -1,7 +1,29 @@
 # DC-Forge
 
-Molecular HF-DFT energies and analytic nuclear gradients built on PySCF
+Molecular non-self-consistent energies and analytic nuclear gradients built on PySCF
 and, optionally, GPU4PySCF.
+
+This development branch extends HF sources to restricted/unrestricted KS
+sources: LDA, GGA, tau-dependent meta-GGA, global hybrids and RSH. Target SCF
+is never performed. A density alone is insufficient: its stationary source
+SCF, orbital energies and response kernel define the gradient.
+
+```python
+from pyscf import gto
+from dcforge.cpu.energy import RNSC  # GPU: dcforge.gpu.energy
+
+mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587', basis='def2-svp')
+mf = RNSC(mol, xc='r2SCAN', source_xc='PBE').density_fit()
+mf.mf_source.grids.level = 4  # source SCF and its response
+mf.grids.level = 4            # fixed-density target evaluation
+energy = mf.kernel()
+gradient = mf.nuc_grad_method().kernel()
+```
+
+Use `UNSC` for unrestricted sources. Energies are in Ha and gradients in
+Ha/Bohr; force is minus gradient. Source and target have independent grids.
+Explicit `kernel(run_source=False)` reuses supplied orbitals: the caller
+is responsible for stationarity, and an unconverged flag produces a warning.
 
 ## Installation
 
@@ -65,19 +87,19 @@ Neither library is installed by DC-Forge. Both retain their own licenses.
 
 ## Features
 
-- Molecular HF-DFT energies and analytic nuclear gradients.
-- Restricted and unrestricted Hartree–Fock references.
+- Molecular HF-DFT and DFA-source non-SCF energies and analytic gradients.
+- Restricted and unrestricted HF or Kohn–Sham references.
 - Conventional and density-fitted calculations.
 - CPU and GPU implementations based on PySCF and GPU4PySCF.
-- Semilocal, global-hybrid, and range-separated-hybrid target functionals.
+- LDA, GGA, tau-meta-GGA, hybrid and RSH source and target functionals.
 - Optional D2C dispersion corrections for supported functionals.
 - Molecular energy/gradient scanners for geometry optimization.
 
 Nonlocal correlation functionals, including VV10, are not supported.
 
 Geometry optimization uses PySCF's optimizer interface. Install `geometric`
-separately if needed. Scanners reuse the previous HF density as the initial
-guess and reconverge HF at every geometry; use `scanner(mol, dm0=None)` for a
+separately if needed. Scanners reuse the previous source density as the initial
+guess and reconverge source SCF at every geometry; use `scanner(mol, dm0=None)` for a
 fresh guess. Scanner views share source/DF state with their original object.
 
 
@@ -194,6 +216,67 @@ print('Total energy [Ha]:', energy)
 Both the returned energy and gradient include D2C dispersion.
 Parameters are selected for the target functional; unsupported functionals
 raise an error rather than falling back to ordinary D4.
+
+## Developer notes
+
+`UNSC` is the unrestricted counterpart. Both are actual source-neutral
+classes; `RHFDFT`/`UHFDFT` remain compatibility aliases, with HF as the default
+source. Pass `mf_source=` to attach a native
+conventional HF/KS object; use `.density_fit()` on the workflow afterward.
+`kernel(run_source=False)` explicitly reuses supplied orbitals; the caller
+is responsible for source stationarity. An unconverged flag emits a warning,
+not a rejection. See [theory and code flow](THEORY.md). Legacy
+`mf_hf`, `run_hf`, `e_hf`/`e_uhf` names are retained for old callers; use
+`mf_source`, `e_source` and `dm_source` for source-neutral code.
+Only the source-neutral attributes store state; old attribute names are
+property views of the same state. Use `kernel_source()`, `run_source()` and
+`make_source_rdm1()` for explicit source operations. The old HF method names
+forward to these methods and do not run a separate calculation path.
+
+General energy/gradient drivers live in `rnsc.py` and `unsc.py`;
+common nonvariational and Z-vector routines use `r_nv.py`/`u_nv.py` and
+`r_zvec.py`/`u_zvec.py`. Direct imports of the former module paths must be
+updated; the public `RHFDFT`/`UHFDFT` class imports remain available.
+The GPU DF `rhf_nv.py`/`uhf_nv.py` and `rhf_zvec.py`/`uhf_zvec.py`
+retain their names because these optimized kernels are HF-specific.
+
+Each CPU/GPU backend has a flat `source/` package:
+
+```text
+source/
+  rhf.py   # restricted HF Fock nuclear derivative
+  uhf.py   # unrestricted HF Fock nuclear derivative
+  rks.py   # restricted KS Fock nuclear derivative
+  uks.py   # unrestricted KS Fock nuclear derivative
+```
+
+RKS and UKS own their occupation factors, density pairs and Fock contractions;
+UKS does not dispatch through RKS. Each backend's `source/xc.py` implements
+the same XC derivative, including tau and moving-grid response, using explicit
+NumPy/CPU or CuPy/GPU arrays. GPU use does not invoke CPU SCF. The old
+`grad/source_fock.py` and `grad/source_xc.py` paths have been removed.
+Common overlap/Pulay assembly and Z solvers stay in `grad/`. Source SCF and
+its AO response operator still come from PySCF/GPU4PySCF; no duplicate SCF
+engine is introduced. GPU DF HF-only MO-direct kernels remain in `df/grad/`.
+
+Source grids must use native atom-centered quadrature without density pruning
+(`small_rho_cutoff=0`, set automatically for newly constructed KS sources).
+Source/target grid settings are independent. Explicit `kernel(run_source=False)`
+reuses supplied source orbitals without comparing array hashes or past settings.
+The caller is responsible for their suitability; an unconverged flag emits a
+warning. Nonstationary sources need not yield gradients consistent with
+reoptimized-source finite differences. Missing/malformed orbitals and incompatible
+DF ownership remain errors. Normal SCF and scanner calls still require convergence.
+No NLC/VV10, Laplacian
+MGGA, fractional occupations, complex orbitals, ROHF, PBC or solvent wrappers.
+Published D2C parameters are allowed only with an HF source.
+
+DFA-source gradients use `fock_deriv_method='direct'`; native Hessian
+`make_h1` does not contain the complete moving-grid derivative. GPU DFA
+sources use `response_backend='ao'`, including source fxc. HF's MO-direct
+acceleration remains unchanged. The source-XC derivative is a streamed,
+atom-resolved reference contraction, not yet a large-molecule optimization.
+
 
 ## Attribution and distribution
 

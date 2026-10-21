@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Unrestricted molecular HF-DFT gradients built on GPU4PySCF UKS.'''
+'''Unrestricted molecular non-SCF gradients built on GPU4PySCF UKS.'''
 
 import cupy as cp
 import numpy as np
@@ -13,52 +13,56 @@ from gpu4pyscf.lib import logger
 
 from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
+from dcforge.cpu.energy.rnsc import _check_source_state, _check_xc
 from dcforge.gpu.grad.skeleton import skeleton_gradient_uhf
-from dcforge.gpu.grad.uhf_nv import (
+from dcforge.gpu.grad.u_nv import (
     get_z_response_oo as get_z_response_oo_ao,
 )
-from dcforge.gpu.grad.uhf_nv import (
-    grad_fock_direct,
-    grad_fock_make_h1,
+from dcforge.gpu.source.uhf import grad_fock_direct, grad_fock_make_h1
+from dcforge.gpu.grad.u_nv import (
     grad_ovlp_response,
     make_s1_oo_and_grad_ovlp_energy,
     nonvariational_correction,
 )
-from dcforge.gpu.grad.uhf_zvec import gen_vind as gen_vind_ao
-from dcforge.gpu.grad.uhf_zvec import solve_z_vector
+from dcforge.gpu.grad.u_zvec import gen_vind as gen_vind_ao
+from dcforge.gpu.grad.u_zvec import solve_z_vector
 from dcforge.tools.zvec import warn_z_residual
 
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
-    r'''Evaluate the unrestricted target-DFT-on-UHF GPU gradient.
+    r'''Evaluate the unrestricted target-on-source GPU gradient.
 
-    The implemented equation is
+    Without optional dispersion, the implemented electronic equation is
 
     .. math::
 
-        \frac{dE}{d\lambda}
-        =g_{\mathrm{skel}}^\lambda
-        -2\sum_s Z^sF^{\mathrm{UHF},s,\lambda}_{vo}
-        +2\sum_s Z^sS^{s,\lambda}_{vo}\epsilon_o^s
+        \frac{dE_{\mathrm{elec}}}{d\lambda}
+        =g_{\mathrm{skel,elec}}^\lambda
+        -2\operatorname{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*
+          F^{\mathrm{source},\sigma,\lambda}_{ai}
+        +2\operatorname{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*
+          S^{\sigma,\lambda}_{ai}\epsilon_i^{\sigma}
         +g_{\mathrm{ovlp-response}}^\lambda.
+
+    Here σ runs over α and β; a and i are virtual and occupied MO indices.
+    The inherited kernel adds nuclear repulsion to this electronic gradient.
 
     GPU4PySCF owns the target UKS grid and provider-specific explicit
     derivative. DC-Forge adds the noncanonical target ``F_oo`` correction and
-    the source-UHF adjoint terms.
+    the unrestricted source-SCF adjoint terms.
 
     Args:
-        mf_grad : dcforge.gpu.grad.uhf_dft.Gradients
+        mf_grad : dcforge.gpu.grad.unsc.Gradients
             Active GPU unrestricted gradient object.
 
     Kwargs:
         mo_energy : cupy.ndarray of shape (2, nmo) or None
-            Source-UHF orbital energies.
+            Unrestricted source-SCF orbital energies.
         mo_coeff : cupy.ndarray of shape (2, nao, nmo) or None
-            Source-UHF MO coefficients.
+            Unrestricted source-SCF MO coefficients.
         mo_occ : cupy.ndarray of shape (2, nmo) or None
-            Exact source-UHF occupations.
+            Exact unrestricted source-SCF occupations.
         atmlst : sequence of int or None
             Nuclear centers included in the gradient. The current GPU
             capability requires all atoms.
@@ -69,14 +73,14 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             the inherited GPU gradient kernel.
     '''
     mf = mf_grad.base
-    mf_hf = mf.mf_hf
+    mf_source = mf.mf_source
     mol = mf_grad.mol
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
 
-    if mf_hf.converged:
+    if mf_source.converged:
         _check_source_state(mf)
     if mf.e_dft is None:
-        mf.kernel(run_hf=not mf_hf.converged)
+        mf.kernel(run_source=not mf_source.converged)
     _check_source_state(mf)
     _check_xc(mf)
     if mo_energy is None:
@@ -89,36 +93,38 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         atmlst = range(mol.natm)
     atmlst = list(atmlst)
     if atmlst != list(range(mol.natm)):
-        raise NotImplementedError('GPU UHF-DFT gradients currently require all atoms')
+        raise NotImplementedError('GPU unrestricted non-SCF gradients currently require all atoms')
 
     mo_energy = cp.asarray(mo_energy)
     mo_coeff = cp.asarray(mo_coeff)
     mo_occ = cp.asarray(mo_occ)
     if cp.iscomplexobj(mo_coeff):
-        raise NotImplementedError('complex molecular GPU UHF gradients are not supported')
+        raise NotImplementedError('complex molecular GPU unrestricted gradients are not supported')
 
     Ca, Cb = mo_coeff
     occa, occb = mo_occ
     for occ in (occa, occb):
         if not bool(cp.all((occ == 1) | (occ == 0))):
-            raise ValueError('GPU UHF-DFT gradients require exact 1/0 occupations')
+            raise ValueError('GPU unrestricted non-SCF gradients require exact 1/0 occupations')
         nocc = int(cp.count_nonzero(occ > 0).get())
         if not bool(cp.all(occ[:nocc] == 1)) or not bool(cp.all(occ[nocc:] == 0)):
-            raise ValueError('occupied GPU UHF orbitals must precede virtual orbitals')
+            raise ValueError('occupied GPU source orbitals must precede virtual orbitals')
 
     soa, sob = occa > 0, occb > 0
     sva, svb = occa == 0, occb == 0
     Co = (Ca[:, soa], Cb[:, sob])
     Cv = (Ca[:, sva], Cb[:, svb])
-    dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
+    dm0 = mf_source.make_rdm1(mo_coeff, mo_occ)
 
-    fock_ks = mf.get_fock(dm=dm0)
-    fock_mo_a = Ca.conj().T @ fock_ks[0] @ Ca
-    fock_mo_b = Cb.conj().T @ fock_ks[1] @ Cb
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
+    fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
     fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
     foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
 
-    fvind = mf_hf.gen_response(
+    fvind = mf_source.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
     vind = mf_grad.gen_vind(Co, Cv, fvind)
     zvec, z_info = solve_z_vector(
@@ -189,24 +195,25 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
 
 class Gradients(uks_grad.Gradients):
-    '''Unrestricted target-DFT-on-UHF analytic GPU gradient driver.'''
+    '''Unrestricted unrestricted target-on-source analytic GPU gradient driver.'''
 
     _keys = uks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
         'response_backend', 'z_response_oo_schedule_used',
-        'de_d2c', 'd2c_result',
+        'de_d2c', 'd2c_result', 'source_grid_response',
     }
 
     def __init__(self, mf):
-        from dcforge.gpu.energy.uhf_dft import UHFDFT
+        from dcforge.gpu.energy.unsc import UNSC
 
-        if not isinstance(mf, UHFDFT):
+        if not isinstance(mf, UNSC):
             raise TypeError(
-                'GPU UHF Gradients requires a dcforge.gpu.energy.UHFDFT object'
+                'GPU unrestricted Gradients requires a dcforge.gpu.energy.UNSC object'
             )
         uks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
+        self.source_grid_response = True
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
         self.cphf_residual_warn_tol = 1e-8
@@ -218,7 +225,7 @@ class Gradients(uks_grad.Gradients):
         self.d2c_result = None
 
     def dump_flags(self, verbose=None):
-        '''Log GPU grid and source-UHF response controls.'''
+        '''Log GPU grid and unrestricted source-SCF response controls.'''
         uks_grad.Gradients.dump_flags(self, verbose)
         logger.info(self, 'grid_response = %s', self.grid_response)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
@@ -232,7 +239,10 @@ class Gradients(uks_grad.Gradients):
         return self
 
     def grad_fock(self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst):
-        '''Return the source-UHF Fock term for the active GPU provider.'''
+        '''Return the unrestricted source-SCF Fock term for the active GPU provider.'''
+        if hasattr(self.base.mf_source, 'xc'):
+            from dcforge.gpu.source.uks import grad_fock
+            return grad_fock(self, Co, Cv, zvec, dm0, atmlst)
         method = self.fock_deriv_method
         self.fock_deriv_method_used = method
         if method == 'make_h1':
@@ -261,12 +271,12 @@ class Gradients(uks_grad.Gradients):
     @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate all-atom ``dE/dR`` with complete target-grid response.'''
-        if self.base.mf_hf.converged:
+        if self.base.mf_source.converged:
             _check_source_state(self.base)
         if not self.grid_response:
-            raise NotImplementedError('GPU UHF gradient requires grid_response=True')
+            raise NotImplementedError('GPU unrestricted gradient requires grid_response=True')
         if atmlst is not None and list(atmlst) != list(range(self.mol.natm)):
-            raise NotImplementedError('GPU UHF-DFT gradients currently require all atoms')
+            raise NotImplementedError('GPU unrestricted non-SCF gradients currently require all atoms')
         de = rhf_grad.GradientsBase.kernel(
             self, mo_energy, mo_coeff, mo_occ, atmlst)
         self.de_nuc = np.asarray(self.grad_nuc())
@@ -284,7 +294,7 @@ class Gradients(uks_grad.Gradients):
         return gradient_scanner(self)
 
     def to_cpu(self):
-        raise NotImplementedError('GPU UHF gradient state conversion is not implemented')
+        raise NotImplementedError('GPU unrestricted gradient state conversion is not implemented')
 
 
 Grad = Gradients

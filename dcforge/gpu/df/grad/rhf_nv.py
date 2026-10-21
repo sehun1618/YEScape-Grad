@@ -24,7 +24,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     dense-density SVD factorization.
 
     Args:
-        mf_grad : dcforge.gpu.df.grad.rhf_dft.Gradients
+        mf_grad : dcforge.gpu.df.grad.rnsc.Gradients
             Active density-fitted GPU restricted gradient object.
         Co : cupy.ndarray of shape (nao, nocc)
             Occupied source-RHF MO coefficients.
@@ -43,10 +43,10 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
             Directly contracted DF source-Fock term in Ha/Bohr.
     """
     mol = mf_grad.mol
-    mf_hf = mf_grad.base.mf_hf
+    mf_source = mf_grad.base.mf_source
     if dm0.shape != (mol.nao, mol.nao):
         raise ValueError("dm0 must be one closed-shell AO density matrix")
-    if not hasattr(mf_hf, "with_df"):
+    if not hasattr(mf_source, "with_df"):
         raise TypeError("GPU DF direct contraction requires a DF source")
     if list(atmlst) != list(range(mol.natm)):
         raise NotImplementedError(
@@ -57,7 +57,7 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     mo_occ = cp.zeros(mo_coeff.shape[1])
     mo_occ[: Co.shape[1]] = 2
     hcore1 = rhf_grad.get_grad_hcore(
-        mf_hf.nuc_grad_method(), mo_coeff=mo_coeff, mo_occ=mo_occ
+        mf_source.nuc_grad_method(), mo_coeff=mo_coeff, mo_occ=mo_occ
     )
     de_hcore = (
         -4 * contract("ai,kxai->kx", zvec.conj(), hcore1[:, :, Co.shape[1] :, :]).real
@@ -66,9 +66,9 @@ def grad_fock_direct(mf_grad, Co, Cv, zvec, dm0, atmlst):
     z_left = Cv @ zvec
     dz = _make_factorized_dm(z_left, Co, symmetrize=1)
     dm0_factor = _make_factorized_dm(Co * 2.0, Co, symmetrize=0)
-    auxmol = mf_hf.with_df.auxmol
+    auxmol = mf_source.with_df.auxmol
     if auxmol is None:
-        auxmol = df.addons.make_auxmol(mol, auxbasis=mf_hf.with_df.auxbasis)
+        auxmol = df.addons.make_auxmol(mol, auxbasis=mf_source.with_df.auxbasis)
     int3c2e_opt = df_tdrhf_grad.Int3c2eOpt(mol, auxmol).build()
     de_jk = jk_energies_per_atom_bounded(
         mf_grad,

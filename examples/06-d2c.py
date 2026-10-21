@@ -1,4 +1,10 @@
-'''Add published D2C dispersion energy and gradient to molecular HF-r2SCAN.'''
+'''Molecular D2C-r2SCAN energy and gradient with separate dispersion contributions.'''
+
+# Ref.
+# M. Lee et al., "Correcting Dispersion Corrections with Density-Corrected
+# DFT", J. Chem. Theory Comput. 20, 7155-7167 (2024).
+# https://doi.org/10.1021/acs.jctc.4c00689
+# D2C damping parameters: Supporting Information, Table S1 (D2C-DFT column).
 
 from pathlib import Path
 
@@ -6,7 +12,7 @@ import numpy as np
 from pyscf import gto
 
 from dcforge.cpu.disp.d2c import evaluate_d2c, get_d2c_parameters
-from dcforge.cpu.energy import RHFDFT
+from dcforge.cpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +26,7 @@ np.set_printoptions(precision=12, suppress=True)
 
 
 # D2C uses published target-functional parameters; unsupported XC raises an error.
-mf = RHFDFT(mol, xc='r2SCAN').set_dispersion('d2c').set(
+mf = RNSC(mol, xc='r2SCAN').set_dispersion('d2c').set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
 )
@@ -35,12 +41,12 @@ print('Published D2C parameters')
 print(get_d2c_parameters(mf.xc))
 print(f'HF-r2SCAN energy       = {mf.e_dft:.15f} Ha')
 print(f'D2C dispersion energy        = {mf.e_d2c:.15f} Ha')
-print(f'HF-r2SCAN+D2C energy   = {energy:.15f} Ha')
+print(f'D2C-r2SCAN energy     = {energy:.15f} Ha')
 print('HF-r2SCAN gradient [Ha/Bohr]')
 print(mf_grad.de - mf_grad.de_d2c)
 print('D2C dispersion gradient [Ha/Bohr]')
 print(mf_grad.de_d2c)
-print('HF-r2SCAN+D2C gradient [Ha/Bohr]')
+print('D2C-r2SCAN gradient [Ha/Bohr]')
 print(mf_grad.de)
 
 

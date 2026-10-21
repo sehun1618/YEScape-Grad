@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Unrestricted molecular HF-DFT gradients built on PySCF UKS gradients.'''
+'''Unrestricted molecular non-SCF gradients built on PySCF UKS gradients.'''
 
 import numpy as np
 from pyscf.grad import uks as uks_grad
@@ -11,49 +11,53 @@ from pyscf.lib import logger
 
 from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
+from dcforge.cpu.energy.rnsc import _check_source_state, _check_xc
 from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad.skeleton import skeleton_gradient_uhf
-from dcforge.cpu.grad.uhf_nv import (
-    grad_fock_direct,
-    grad_fock_make_h1,
+from dcforge.cpu.source.uhf import grad_fock_direct, grad_fock_make_h1
+from dcforge.cpu.grad.u_nv import (
     nonvariational_correction,
 )
-from dcforge.cpu.grad.uhf_zvec import solve_z_vector
+from dcforge.cpu.grad.u_zvec import solve_z_vector
 from dcforge.tools.zvec import warn_z_residual
 
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
-    r'''Evaluate the electronic unrestricted target-DFT-on-UHF gradient.
+    r'''Evaluate the electronic unrestricted target-on-source gradient.
 
-    The unrestricted extension of the molecular PDF equation is
+    Without optional dispersion, the unrestricted gradient equation is
 
     .. math::
 
         \begin{aligned}
         \frac{dE}{d\lambda}={}&
-        \sum_{s\mu\nu}P^s_{\mu\nu}h^\lambda_{\mu\nu}
+        \sum_{\sigma \mu\nu}P^{\sigma}_{\mu\nu}h^\lambda_{\mu\nu}
         +E_{\mathrm{Hxc}}^\lambda[P^\alpha,P^\beta]
         +E_{\mathrm{NN}}^\lambda\\
-        &-\sum_{sij}F^{\mathrm{KS},s}_{ij}S^{\lambda,s}_{ij}
-        +2\,\mathrm{Re}\sum_{sai}(Z^s_{ai})^*V^{\lambda,s}_{ai}.
+        &-\sum_{\sigma ij}F^{\mathrm{target},\sigma}_{ij}S^{\lambda,\sigma}_{ij}
+        +2\,\mathrm{Re}\sum_{\sigma ai}(Z^{\sigma}_{ai})^*V^{\lambda,\sigma}_{ai}.
         \end{aligned}
+
+    P^σ is the source density. F^target,σ is the target Fock
+    evaluated at both source spin densities, in the source MO basis.
+    E_Hxc belongs to the target; V^lambda uses the source Fock derivative
+    and source response kernel. Here σ denotes alpha or beta spin.
 
     Each spin orbital has occupation one, so the nonvariational prefactor is
     2 rather than the restricted spatial-orbital prefactor 4.
 
     Args:
-        mf_grad : dcforge.cpu.grad.uhf_dft.Gradients
-            Active UHF-DFT gradient object.
+        mf_grad : dcforge.cpu.grad.unsc.Gradients
+            Active unrestricted non-SCF gradient object.
 
     Kwargs:
         mo_energy : tuple of two ndarray or None
-            Source-UHF alpha/beta orbital energies.
+            Unrestricted source-SCF alpha/beta orbital energies.
         mo_coeff : tuple of two ndarray or None
-            Source-UHF alpha/beta MO coefficients.
+            Unrestricted source-SCF alpha/beta MO coefficients.
         mo_occ : tuple of two ndarray or None
-            Source-UHF alpha/beta occupations.
+            Unrestricted source-SCF alpha/beta occupations.
         atmlst : sequence of int or None
             Nuclear centers included in the gradient.
 
@@ -62,14 +66,14 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
             Electronic ``dE/dR`` in Ha/Bohr. PySCF adds nuclear repulsion.
     '''
     mf = mf_grad.base
-    mf_hf = mf.mf_hf
+    mf_source = mf.mf_source
     mol = mf_grad.mol
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
 
-    if mf_hf.converged:
+    if mf_source.converged:
         _check_source_state(mf)
     if mf.e_dft is None:
-        mf.kernel(run_hf=not mf_hf.converged)
+        mf.kernel(run_source=not mf_source.converged)
     _check_source_state(mf)
     _check_xc(mf)
     if mo_energy is None: mo_energy = mf.mo_energy
@@ -79,30 +83,34 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     atmlst = list(atmlst)
 
     Ca, Cb = mo_coeff
+    if hasattr(mf.mf_source, 'xc') and np.iscomplexobj(mo_coeff):
+        raise NotImplementedError('DFA-source gradients require real orbitals')
     occa, occb = mo_occ
     for occ in (occa, occb):
         if not np.all((occ == 1) | (occ == 0)):
-            raise ValueError('UHF-DFT gradients require exact 1/0 occupations')
+            raise ValueError('unrestricted non-SCF gradients require exact 1/0 occupations')
         nocc = np.count_nonzero(occ > 0)
         if not np.all(occ[:nocc] == 1) or not np.all(occ[nocc:] == 0):
-            raise ValueError('occupied UHF orbitals must precede virtual orbitals')
+            raise ValueError('occupied source orbitals must precede virtual orbitals')
 
     soa, sob = occa > 0, occb > 0
     sva, svb = occa == 0, occb == 0
     Co = (Ca[:, soa], Cb[:, sob])
     Cv = (Ca[:, sva], Cb[:, svb])
-    dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
+    dm0 = mf_source.make_rdm1(mo_coeff, mo_occ)
 
     # Compute the target Fock only once, then retain both VO and OO blocks.
     # AO-to-MO projection is split into two matrix products per spin; this is
     # faster and more predictable than a four-index einsum on CPU and GPU.
-    fock_ks = mf.get_fock(dm=dm0)
-    fock_mo_a = Ca.conj().T @ fock_ks[0] @ Ca
-    fock_mo_b = Cb.conj().T @ fock_ks[1] @ Cb
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
+    fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
     fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
     foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
 
-    fvind = mf_hf.gen_response(
+    fvind = mf_source.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
     zvec, z_info = solve_z_vector(
         mo_energy, mo_occ, Co, Cv, fvo, fvind,
@@ -154,7 +162,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
 
 class Gradients(uks_grad.Gradients):
-    '''Unrestricted target-DFT-on-UHF analytic nuclear gradient driver.
+    '''Unrestricted unrestricted target-on-source analytic nuclear gradient driver.
 
     grid_response_backend : str
         'becke_omp' (default) or 'pyscf_default'; same semantics as RHF.
@@ -163,16 +171,17 @@ class Gradients(uks_grad.Gradients):
     _keys = uks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
-        'de_d2c', 'd2c_result', 'grid_response_backend',
+        'de_d2c', 'd2c_result', 'source_grid_response', 'grid_response_backend',
         'grid_response_backend_used',
     }
 
     def __init__(self, mf):
-        from dcforge.cpu.energy.uhf_dft import UHFDFT
-        if not isinstance(mf, UHFDFT):
-            raise TypeError('Gradients requires a dcforge.cpu.energy.UHFDFT object')
+        from dcforge.cpu.energy.unsc import UNSC
+        if not isinstance(mf, UNSC):
+            raise TypeError('Gradients requires a dcforge.cpu.energy.UNSC object')
         uks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
+        self.source_grid_response = True
         self.grid_response_backend = 'becke_omp'
         self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
@@ -187,7 +196,7 @@ class Gradients(uks_grad.Gradients):
         return grid_response.get_veff(self, uks_grad.get_veff, mol, dm)
 
     def dump_flags(self, verbose=None):
-        '''Log inherited UKS flags and source-UHF UCPHF controls.'''
+        '''Log inherited UKS flags and unrestricted source-SCF UCPHF controls.'''
         uks_grad.Gradients.dump_flags(self, verbose)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
         logger.info(self, 'cphf_max_cycle = %d', self.cphf_max_cycle)
@@ -200,6 +209,9 @@ class Gradients(uks_grad.Gradients):
 
     def grad_fock(self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst):
         '''Return the spin-resolved source-Fock term by the selected route.'''
+        if hasattr(self.base.mf_source, 'xc'):
+            from dcforge.cpu.source.uks import grad_fock
+            return grad_fock(self, Co, Cv, zvec, dm0, atmlst)
         method = self.fock_deriv_method
         self.fock_deriv_method_used = method
         if method == 'make_h1':
@@ -215,7 +227,7 @@ class Gradients(uks_grad.Gradients):
     @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate ``dE/dR`` and retain the unrestricted term ledger.'''
-        if self.base.mf_hf.converged:
+        if self.base.mf_source.converged:
             _check_source_state(self.base)
         if atmlst is not None:
             atmlst = np.asarray(atmlst, dtype=int)

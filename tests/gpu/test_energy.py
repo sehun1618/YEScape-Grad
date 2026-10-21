@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from dcforge.cpu.energy import RHFDFT as CPU_RHFDFT
-from dcforge.cpu.energy import UHFDFT as CPU_UHFDFT
-from dcforge.gpu.energy import RHFDFT as GPU_RHFDFT
-from dcforge.gpu.energy import UHFDFT as GPU_UHFDFT
+from dcforge.cpu.energy import RNSC as CPU_RHFDFT
+from dcforge.cpu.energy import UNSC as CPU_UHFDFT
+from dcforge.gpu.energy import RNSC as GPU_RHFDFT
+from dcforge.gpu.energy import UNSC as GPU_UHFDFT
 from tests.common import make_mol, run_workflow
 
 
@@ -32,7 +32,7 @@ def test_gpu_energy_matches_cpu(cpu_workflow, gpu_workflow, name, density_fit):
     assert abs(energy_gpu - energy_cpu) < 2e-8
     assert mf_gpu.device == "gpu"
     if density_fit:
-        assert mf_gpu.with_df is mf_gpu.mf_hf.with_df
+        assert mf_gpu.with_df is mf_gpu.mf_source.with_df
 
 
 def test_gpu_d2c_energy_is_added_by_the_shared_molecular_provider():

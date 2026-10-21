@@ -22,7 +22,7 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
         if not cp.cuda.runtime.getDeviceCount():
             pytest.skip('CUDA device required')
     module = importlib.import_module(f'dcforge.{backend}.energy')
-    workflow = module.UHFDFT if unrestricted else module.RHFDFT
+    workflow = module.UNSC if unrestricted else module.RNSC
     mol = make_mol('nh2_doublet.xyz' if unrestricted else 'water1.xyz')
 
     def make(mol):
@@ -37,23 +37,23 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
     assert scanner.as_scanner() is scanner
     assert scanner.base.as_scanner() is scanner.base
     passed_guesses = []
-    original = scanner.base.mf_hf.kernel
+    original = scanner.base.mf_source.kernel
 
     def capture(dm0=None, **kwargs):
         passed_guesses.append(None if dm0 is None else as_numpy(dm0).copy())
         return original(dm0=dm0, **kwargs)
 
-    monkeypatch.setattr(scanner.base.mf_hf, 'kernel', capture)
+    monkeypatch.setattr(scanner.base.mf_source, 'kernel', capture)
     scanner(mol)
     assert passed_guesses[-1] is None
-    previous_dm = as_numpy(scanner.base.mf_hf.make_rdm1()).copy()
+    previous_dm = as_numpy(scanner.base.mf_source.make_rdm1()).copy()
     moved = displaced_mol(mol, 1, 2, .02)
     energy, gradient = scanner(moved)
     np.testing.assert_allclose(passed_guesses[-1], previous_dm, atol=1e-13)
     assert scanner.converged
-    assert scanner.base.mol is scanner.base.mf_hf.mol is moved
+    assert scanner.base.mol is scanner.base.mf_source.mol is moved
     if df:
-        assert scanner.base.with_df is scanner.base.mf_hf.with_df
+        assert scanner.base.with_df is scanner.base.mf_source.with_df
         assert scanner.base.with_df.mol is moved
     reference = make(moved)
     np.testing.assert_allclose(energy, reference.kernel(), atol=1e-9, rtol=0)
@@ -67,19 +67,19 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
     np.testing.assert_allclose(as_numpy(gradient),
         as_numpy(reference.nuc_grad_method().kernel()), atol=1e-7, rtol=0)
     # Explicit guesses and raw geometry input also pass through correctly.
-    dm = scanner.base.mf_hf.make_rdm1()
+    dm = scanner.base.mf_source.make_rdm1()
     scanner(mol.atom_coords(unit=mol.unit), dm0=dm)
     np.testing.assert_allclose(passed_guesses[-1], as_numpy(dm), atol=1e-13)
 
     def fail(**kwargs):
         raise RuntimeError('deliberate source failure')
 
-    monkeypatch.setattr(scanner.base.mf_hf, 'kernel', fail)
+    monkeypatch.setattr(scanner.base.mf_source, 'kernel', fail)
     with pytest.raises(RuntimeError, match='deliberate source failure'):
         scanner(mol)
     assert not scanner.converged and scanner.de is None
     assert scanner.base.e_tot is None
-    monkeypatch.setattr(scanner.base.mf_hf, 'kernel', capture)
+    monkeypatch.setattr(scanner.base.mf_source, 'kernel', capture)
     scanner(mol)
     assert scanner.converged and passed_guesses[-1] is None
 
@@ -96,31 +96,31 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
 
 @pytest.mark.cpu
 def test_energy_scanner_incompatible_guess_and_frozen_source_rejected(monkeypatch):
-    from dcforge.cpu.energy import RHFDFT
-    scanner = configure_workflow(RHFDFT(make_mol('water1.xyz'), xc='PBE')).as_scanner()
+    from dcforge.cpu.energy import RNSC
+    scanner = configure_workflow(RNSC(make_mol('water1.xyz'), xc='PBE')).as_scanner()
     scanner(scanner.mol)
     changed = scanner.mol.copy()
     changed.basis = 'sto-3g'
     changed.build(False, False)
-    original = scanner.mf_hf.kernel
+    original = scanner.mf_source.kernel
     guesses = []
 
     def capture(dm0=None, **kwargs):
         guesses.append(dm0)
         return original(dm0=dm0, **kwargs)
 
-    monkeypatch.setattr(scanner.mf_hf, 'kernel', capture)
+    monkeypatch.setattr(scanner.mf_source, 'kernel', capture)
     scanner(changed)
     assert guesses[-1] is None and scanner.converged
     with pytest.raises(ValueError, match='reconverge'):
-        scanner(changed, run_hf=False)
+        scanner(changed, run_source=False)
 
 
 @pytest.mark.cpu
 def test_scanner_keyboard_interrupt_invalidates_gradient_state(monkeypatch):
-    from dcforge.cpu.energy import RHFDFT
+    from dcforge.cpu.energy import RNSC
     mol = make_mol('water1.xyz', basis='sto-3g')
-    scanner = configure_workflow(RHFDFT(mol, xc='PBE')).nuc_grad_method().as_scanner()
+    scanner = configure_workflow(RNSC(mol, xc='PBE')).nuc_grad_method().as_scanner()
     scanner(mol)
 
     def interrupt(**kwargs):
@@ -139,7 +139,7 @@ def test_scanner_d2c_geometry_update(backend):
         pytest.importorskip('cupy')
         pytest.importorskip('gpu4pyscf')
     from dcforge.cpu.disp.d2c import evaluate_d2c
-    cls = importlib.import_module(f'dcforge.{backend}.energy').RHFDFT
+    cls = importlib.import_module(f'dcforge.{backend}.energy').RNSC
     mol = make_mol('water1.xyz')
     mf = configure_workflow(cls(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit'))
     scanner = mf.set_dispersion('d2c').nuc_grad_method().as_scanner()
@@ -160,7 +160,7 @@ def test_scanner_geometry_optimization(backend):
     if backend == 'gpu':
         pytest.importorskip('gpu4pyscf')
     from pyscf.geomopt.geometric_solver import kernel
-    cls = importlib.import_module(f'dcforge.{backend}.energy').RHFDFT
+    cls = importlib.import_module(f'dcforge.{backend}.energy').RNSC
     mf = configure_workflow(cls(make_mol('water1.xyz'), xc='PBE').density_fit(
         auxbasis='def2-svp-jkfit'))
     converged, mol = kernel(mf, maxsteps=15)

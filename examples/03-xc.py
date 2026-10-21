@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pyscf import gto, scf
 
-from dcforge.cpu.energy import RHFDFT
+from dcforge.cpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,7 +19,7 @@ mol = gto.M(
     basis='aug-cc-pvtz',
     verbose=0,
 )
-mf_hf = scf.RHF(mol).set(
+mf_source = scf.RHF(mol).set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,
@@ -27,10 +27,10 @@ mf_hf = scf.RHF(mol).set(
 
 
 # Case 1: change the target functional while keeping one source RHF density
-print(f'Source RHF energy = {mf_hf.e_tot:.15f} Ha')
+print(f'Source RHF energy = {mf_source.e_tot:.15f} Ha')
 print('\nTarget functional families at grids.level = 4')
 for xc in ('LDA,VWN', 'r2SCAN', 'TPSS', 'B3LYP', 'CAM-B3LYP'):
-    mf = RHFDFT(mol, xc=xc, mf_hf=mf_hf)
+    mf = RNSC(mol, xc=xc, mf_source=mf_source)
     mf.grids.level = 4
-    energy = mf.kernel(run_hf=False)
+    energy = mf.kernel(run_source=False)
     print(f'{xc:12s}  E_HF-XC = {energy:.15f} Ha')

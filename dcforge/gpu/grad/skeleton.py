@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Skeleton terms of molecular GPU HF-DFT gradients.'''
+'''Skeleton terms of molecular GPU target-on-source gradients.'''
 
 import cupy as cp
 import numpy as np
@@ -15,17 +15,17 @@ from gpu4pyscf.lib.cupy_helper import contract
 def grad_ovlp_correction(foo, e_occ, s1oo):
     '''Replace the standard diagonal energy-weighted overlap by target F_oo.
 
-    GPU4PySCF's ordinary RKS skeleton uses ``diag(epsilon_i^HF)`` because a
-    variational KS reference diagonalizes its target Fock. Target-DFT@HF
-    instead requires the full target block ``F^KS_oo``. The difference is
+    The upstream skeleton uses the orbital energies passed to it, here
+    ``diag(epsilon_i^source)``. A target-on-source gradient instead requires
+    the full target block ``F^target_oo``. The difference is
 
-    ``-2 Tr[(F^KS_oo - diag(epsilon_i^HF)) S^lambda_oo]``.
+    ``-2 Tr[(F^target_oo - diag(epsilon_i^source)) S^lambda_oo]``.
 
     Args:
         foo : cupy.ndarray of shape (nocc, nocc)
             Target Fock occupied-occupied block.
         e_occ : cupy.ndarray of shape (nocc,)
-            Source-RHF occupied orbital energies.
+            Restricted source-SCF occupied orbital energies.
         s1oo : cupy.ndarray of shape (nset, 3, nocc, nocc)
             Full moving-basis occupied overlap blocks.
 
@@ -69,7 +69,7 @@ def grad_ovlp_correction_uhf(foo, e_occ, s1oo):
         foo : tuple of two cupy.ndarray
             Target alpha/beta occupied-occupied Fock blocks.
         e_occ : tuple of two cupy.ndarray
-            Source-UHF occupied orbital energies.
+            Unrestricted source-SCF occupied orbital energies.
         s1oo : tuple of two cupy.ndarray
             Spin-resolved moving-basis occupied overlap blocks.
 
@@ -78,7 +78,7 @@ def grad_ovlp_correction_uhf(foo, e_occ, s1oo):
             Unrestricted noncanonical overlap correction in Ha/Bohr.
 
     Notes:
-        Each UHF spin orbital has occupation one, so each spin contraction
+        Each occupied unrestricted spin orbital has occupation one, so each spin contraction
         carries factor ``-1`` rather than the restricted factor ``-2``.
     '''
     de = cp.zeros(s1oo[0].shape[:2])
@@ -90,7 +90,7 @@ def grad_ovlp_correction_uhf(foo, e_occ, s1oo):
 
 def skeleton_gradient_uhf(mf_grad, foo, e_occ, s1oo, mo_energy,
                           mo_coeff, mo_occ, atmlst):
-    '''Return the electronic GPU UHF skeleton before the Z correction.
+    '''Return the electronic GPU unrestricted skeleton before the Z correction.
 
     GPU4PySCF UHF owns the one-electron and ordinary energy-weighted overlap
     terms. Dynamic dispatch through ``mf_grad.energy_ee`` selects target UKS

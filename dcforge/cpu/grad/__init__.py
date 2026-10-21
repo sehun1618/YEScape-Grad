@@ -1,6 +1,6 @@
-'''CPU molecular HF-DFT analytic gradients.'''
+'''CPU molecular target-on-source analytic gradients.'''
 
-from dcforge.cpu.grad.rhf_dft import Grad, Gradients
-from dcforge.cpu.grad.uhf_dft import Gradients as UGradients
+from dcforge.cpu.grad.rnsc import Grad, Gradients
+from dcforge.cpu.grad.unsc import Gradients as UGradients
 
 __all__ = ['Grad', 'Gradients', 'UGradients']

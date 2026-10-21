@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pyscf import gto
 
-from dcforge.gpu.energy import RHFDFT
+from dcforge.gpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -16,7 +16,7 @@ mol = gto.M(
 )
 
 # Case 1: GPU conventional HF-r2SCAN
-mf = RHFDFT(mol, xc='r2SCAN').set(
+mf = RNSC(mol, xc='r2SCAN').set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,
@@ -31,7 +31,7 @@ mf_grad = mf.nuc_grad_method().set(
 force = -mf_grad.de
 
 # Case 2: GPU density-fitted HF-r2SCAN
-mf = RHFDFT(mol, xc='r2SCAN').density_fit().set(
+mf = RNSC(mol, xc='r2SCAN').density_fit().set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,

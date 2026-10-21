@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Restricted molecular HF-DFT gradients built on GPU4PySCF RKS.'''
+'''Restricted molecular non-SCF gradients built on GPU4PySCF RKS.'''
 
 import cupy as cp
 import numpy as np
@@ -13,41 +13,40 @@ from gpu4pyscf.lib import logger
 
 from dcforge.tools.logger import log_kernel_time
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
-from dcforge.cpu.energy.rhf_dft import _check_source_state, _check_xc
-from dcforge.gpu.grad.rhf_nv import (
+from dcforge.cpu.energy.rnsc import _check_source_state, _check_xc
+from dcforge.gpu.source.rhf import grad_fock_direct, grad_fock_make_h1
+from dcforge.gpu.grad.r_nv import (
     get_z_response_oo as get_z_response_oo_ao,
 )
-from dcforge.gpu.grad.rhf_nv import (
-    grad_fock_direct,
-    grad_fock_make_h1,
+from dcforge.gpu.grad.r_nv import (
     grad_ovlp_response,
     make_s1_oo_and_grad_ovlp_energy,
     nonvariational_correction,
 )
-from dcforge.gpu.grad.rhf_zvec import gen_vind as gen_vind_ao
-from dcforge.gpu.grad.rhf_zvec import solve_z_vector
+from dcforge.gpu.grad.r_zvec import gen_vind as gen_vind_ao
+from dcforge.gpu.grad.r_zvec import solve_z_vector
 from dcforge.gpu.grad.skeleton import skeleton_gradient
 from dcforge.tools.zvec import warn_z_residual
 
 
 def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
               atmlst=None):
-    '''Evaluate the electronic restricted target-DFT-on-HF GPU gradient.
+    '''Evaluate the electronic restricted target-on-source GPU gradient.
 
     The current GPU4PySCF API contracts XC, J/K and auxiliary-basis response
     per atom through ``energy_ee``.  The active conventional or DF gradient
     subclass selects that provider through inheritance.  This function adds
-    the noncanonical target-overlap and source-HF Z-vector corrections.
+    the noncanonical target-overlap and source-SCF Z-vector corrections.
     '''
     mf = mf_grad.base
-    mf_hf = mf.mf_hf
+    mf_source = mf.mf_source
     mol = mf_grad.mol
     log = logger.Logger(mf_grad.stdout, mf_grad.verbose)
 
-    if mf_hf.converged:
+    if mf_source.converged:
         _check_source_state(mf)
     if mf.e_dft is None:
-        mf.kernel(run_hf=not mf_hf.converged)
+        mf.kernel(run_source=not mf_source.converged)
     _check_source_state(mf)
     _check_xc(mf)
     if mo_energy is None:
@@ -60,29 +59,33 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
         atmlst = range(mol.natm)
     atmlst = list(atmlst)
     if atmlst != list(range(mol.natm)):
-        raise NotImplementedError('GPU HF-DFT gradients currently require all atoms')
+        raise NotImplementedError('GPU non-SCF gradients currently require all atoms')
 
     mo_energy = cp.asarray(mo_energy)
     mo_coeff = cp.asarray(mo_coeff)
     mo_occ = cp.asarray(mo_occ)
     so = mo_occ > 0
     sv = mo_occ == 0
+    if bool(cp.any(cp.diff(mo_occ) > 0)):
+        raise ValueError('occupied source orbitals must precede virtual orbitals')
     if not bool(cp.all((mo_occ == 2) | sv)):
         raise ValueError('restricted GPU gradients require exact 2/0 occupations')
     if cp.iscomplexobj(mo_coeff):
-        raise NotImplementedError('complex molecular GPU RHF gradients are not supported')
+        raise NotImplementedError('complex molecular GPU restricted gradients are not supported')
 
     Co = mo_coeff[:, so]
     Cv = mo_coeff[:, sv]
-    dm0 = mf_hf.make_rdm1(mo_coeff, mo_occ)
+    dm0 = mf_source.make_rdm1(mo_coeff, mo_occ)
 
-    fock_ks = mf.get_fock(dm=dm0)
-    tmp = mo_coeff.conj().T @ fock_ks
+    # F^target[P^source], projected below into the source MO basis.
+    # The source Fock/kernel instead determines the orbital response.
+    fock_target = mf.get_fock(dm=dm0)
+    tmp = mo_coeff.conj().T @ fock_target
     fock_mo = tmp @ mo_coeff
     fvo = fock_mo[sv][:, so]
     foo = fock_mo[so][:, so]
 
-    fvind = mf_hf.gen_response(
+    fvind = mf_source.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
     vind = mf_grad.gen_vind(Co, Cv, fvind)
     zvec, z_info = solve_z_vector(
@@ -151,24 +154,25 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
 
 class Gradients(rks_grad.Gradients):
-    '''Restricted target-DFT-on-HF analytic GPU gradient driver.'''
+    '''Restricted target-on-source analytic GPU gradient driver.'''
 
     _keys = rks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
         'response_backend', 'z_response_oo_schedule_used',
-        'de_d2c', 'd2c_result',
+        'de_d2c', 'd2c_result', 'source_grid_response',
     }
 
     def __init__(self, mf):
-        from dcforge.gpu.energy.rhf_dft import RHFDFT
+        from dcforge.gpu.energy.rnsc import RNSC
 
-        if not isinstance(mf, RHFDFT):
+        if not isinstance(mf, RNSC):
             raise TypeError(
-                'GPU Gradients requires a dcforge.gpu.energy.RHFDFT object'
+                'GPU Gradients requires a dcforge.gpu.energy.RNSC object'
             )
         rks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
+        self.source_grid_response = True
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
         self.cphf_residual_warn_tol = 1e-8
@@ -180,7 +184,7 @@ class Gradients(rks_grad.Gradients):
         self.d2c_result = None
 
     def dump_flags(self, verbose=None):
-        '''Log GPU grid and source-HF response controls.'''
+        '''Log GPU grid and source-SCF response controls.'''
         rks_grad.Gradients.dump_flags(self, verbose)
         logger.info(self, 'grid_response = %s', self.grid_response)
         logger.info(self, 'cphf_conv_tol = %g', self.cphf_conv_tol)
@@ -195,6 +199,9 @@ class Gradients(rks_grad.Gradients):
 
     def grad_fock(self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst):
         '''Return the source-Fock derivative term for this GPU provider.'''
+        if hasattr(self.base.mf_source, 'xc'):
+            from dcforge.gpu.source.rks import grad_fock
+            return grad_fock(self, Co, Cv, zvec, dm0, atmlst)
         method = self.fock_deriv_method
         self.fock_deriv_method_used = method
         if method == 'make_h1':
@@ -208,7 +215,7 @@ class Gradients(rks_grad.Gradients):
         )
 
     def gen_vind(self, Co, Cv, fvind):
-        '''Return the conventional AO source-HF VO response action.'''
+        '''Return the conventional AO source-SCF VO response action.'''
         if self.response_backend != 'ao':
             raise ValueError(
                 "conventional GPU response_backend must be 'ao'; "
@@ -223,12 +230,12 @@ class Gradients(rks_grad.Gradients):
     @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         '''Evaluate ``dE/dR`` with complete target-grid response.'''
-        if self.base.mf_hf.converged:
+        if self.base.mf_source.converged:
             _check_source_state(self.base)
         if not self.grid_response:
             raise NotImplementedError('GPU gradient requires grid_response=True')
         if atmlst is not None and list(atmlst) != list(range(self.mol.natm)):
-            raise NotImplementedError('GPU HF-DFT gradients currently require all atoms')
+            raise NotImplementedError('GPU non-SCF gradients currently require all atoms')
         de = rhf_grad.GradientsBase.kernel(
             self, mo_energy, mo_coeff, mo_occ, atmlst)
         self.de_nuc = np.asarray(self.grad_nuc())

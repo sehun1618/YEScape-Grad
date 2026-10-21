@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Unrestricted HF Z-vector solver for molecular HF-DFT gradients.'''
+'''Unrestricted source-SCF Z-vector solver for molecular non-SCF gradients.'''
 
 import numpy as np
 from pyscf import lib
@@ -13,15 +13,15 @@ from dcforge.tools.cphf import solve as solve_cphf
 
 
 def gen_vind(Co, Cv, fvind):
-    '''Build the spin-coupled UHF orbital-Hessian response action.
+    '''Build the spin-coupled unrestricted source-SCF orbital-Hessian response action.
 
     Args:
         Co : tuple of two ndarray
-            Alpha/beta occupied MO coefficients, each ``(nao, nocc_s)``.
+            Alpha/beta occupied MO coefficients, each ``(nao, nocc_σ)``.
         Cv : tuple of two ndarray
-            Alpha/beta virtual MO coefficients, each ``(nao, nvir_s)``.
+            Alpha/beta virtual MO coefficients, each ``(nao, nvir_σ)``.
         fvind : callable
-            AO UHF response returned by ``mf_hf.gen_response``.
+            AO unrestricted source-SCF response returned by ``mf_source.gen_response``.
 
     Returns:
         callable
@@ -73,19 +73,19 @@ def gen_vind(Co, Cv, fvind):
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
-    '''Evaluate both spin blocks of the positive-RHS UHF Z equation.
+    '''Evaluate both spin blocks of the positive-RHS unrestricted source-SCF Z equation.
 
     Args:
         zvec : tuple of two ndarray
-            Positive-RHS alpha/beta Z-vectors ``Z^s_ai``.
+            Positive-RHS alpha/beta Z-vectors ``Z^σ_ai``.
         mo_energy : tuple of two ndarray
-            Canonical source-UHF orbital energies.
+            Canonical unrestricted source-SCF orbital energies.
         mo_occ : tuple of two ndarray
-            Source-UHF occupations.
+            Unrestricted source-SCF occupations.
         fvo : tuple of two ndarray
-            Target-UKS ``F^KS,alpha_vo`` and ``F^KS,beta_vo`` blocks.
+            Target-UKS ``F^target,alpha_vo`` and ``F^target,beta_vo`` blocks.
         vind : callable
-            Packed spin-coupled two-electron UHF Hessian action.
+            Packed spin-coupled density-response (J/K and XC kernel) source-SCF Hessian action.
 
     Returns:
         tuple of two ndarray
@@ -110,20 +110,20 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
                    conv_tol=1e-9, max_cycle=200, log=None):
-    '''Solve the spin-coupled molecular UHF Z-vector equation.
+    '''Solve the spin-coupled molecular unrestricted source-SCF Z-vector equation.
 
     The canonical equation is
 
-    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^KS,alpha_vo,F^KS,beta_vo)``.
+    ``[(A+B)^source]^T (Z^alpha,Z^beta) = (F^target,alpha_vo,F^target,beta_vo)``.
 
     PySCF UCPHF uses the negative-RHS convention. The returned amplitudes are
-    sign-flipped once so that DC-Forge exposes the positive-RHS PDF convention.
+    sign-flipped once so that DC-Forge exposes the positive-RHS convention.
 
     Args:
         mo_energy : tuple of two ndarray
-            Canonical source-UHF orbital energies.
+            Canonical unrestricted source-SCF orbital energies.
         mo_occ : tuple of two ndarray
-            Exact ``1/0`` source-UHF occupations.
+            Exact ``1/0`` unrestricted source-SCF occupations.
         Co : tuple of two ndarray
             Alpha/beta occupied MO coefficients.
         Cv : tuple of two ndarray
@@ -131,7 +131,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
         fvo : tuple of two ndarray
             Target-UKS virtual-occupied Fock blocks.
         fvind : callable
-            AO source-UHF response action.
+            AO unrestricted source-SCF response action.
 
     Kwargs:
         conv_tol : float

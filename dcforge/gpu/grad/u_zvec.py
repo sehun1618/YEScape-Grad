@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Unrestricted HF Z-vector solver using GPU4PySCF UCPHF.'''
+'''Unrestricted source-SCF Z-vector solver using GPU4PySCF UCPHF.'''
 
 import cupy as cp
 from gpu4pyscf.lib import logger
@@ -13,13 +13,13 @@ from dcforge.tools.cphf import solve as solve_cphf
 
 
 def gen_vind(Co, Cv, fvind):
-    '''Build the spin-coupled GPU UHF orbital-Hessian action.
+    '''Build the spin-coupled GPU unrestricted source-SCF orbital-Hessian action.
 
     Args:
         Co, Cv : tuple of two cupy.ndarray
             Alpha/beta occupied and virtual MO coefficients.
         fvind : callable
-            AO UHF response returned by ``mf_hf.gen_response``.
+            AO unrestricted source-SCF response returned by ``mf_source.gen_response``.
 
     Returns:
         callable
@@ -34,7 +34,7 @@ def gen_vind(Co, Cv, fvind):
     nao = Coa.shape[0]
 
     def vind(x):
-        '''Apply the two-electron part of ``(A+B)^UHF`` in packed VO space.'''
+        '''Apply the density-response part (J/K and source fxc) of ``(A+B)^source`` in packed VO space.'''
         shape = cp.asarray(x).shape
         x = cp.asarray(x).reshape(-1, nova + novb)
         nset = x.shape[0]
@@ -67,7 +67,7 @@ def gen_vind(Co, Cv, fvind):
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
-    '''Evaluate both spin blocks of the positive-RHS GPU UHF Z equation.'''
+    '''Evaluate both spin blocks of the positive-RHS GPU unrestricted source-SCF Z equation.'''
     za, zb = zvec
     occa, occb = mo_occ
     ea, eb = mo_energy
@@ -87,20 +87,20 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 def solve_z_vector(mo_energy, mo_occ, fvo, vind,
                    conv_tol=1e-9, max_cycle=200, log=None):
-    '''Solve the spin-coupled molecular UHF Z-vector equation on the GPU.
+    '''Solve the spin-coupled molecular unrestricted source-SCF Z-vector equation on the GPU.
 
     The canonical equation is
 
-    ``[(A+B)^UHF]^T (Z^alpha,Z^beta) = (F^KS,alpha_vo,F^KS,beta_vo)``.
+    ``[(A+B)^source]^T (Z^alpha,Z^beta) = (F^target,alpha_vo,F^target,beta_vo)``.
 
     GPU4PySCF UCPHF uses the negative-RHS convention. The returned amplitudes
-    are sign-flipped once so DC-Forge exposes the positive-RHS PDF notation.
+    are sign-flipped once so DC-Forge exposes the positive-RHS notation.
 
     Args:
         mo_energy : tuple or cupy.ndarray of shape (2, nmo)
-            Canonical source-UHF orbital energies.
+            Canonical unrestricted source-SCF orbital energies.
         mo_occ : tuple or cupy.ndarray of shape (2, nmo)
-            Exact ``1/0`` source-UHF occupations.
+            Exact ``1/0`` unrestricted source-SCF occupations.
         fvo : tuple of two cupy.ndarray
             Target-UKS virtual-occupied Fock blocks.
         vind : callable

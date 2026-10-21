@@ -5,7 +5,7 @@ import pytest
 from pyscf import gto, dft, lib
 from pyscf.dft import radi, gen_grid
 from pyscf.grad import rks, uks
-from dcforge.cpu.energy import RHFDFT, UHFDFT
+from dcforge.cpu.energy import RNSC, UNSC
 from dcforge.cpu.grad import grid_response as gr
 
 
@@ -49,7 +49,7 @@ def test_gradient(df, unrestricted, xc):
     mol = gto.M(atom=('O 0 0 0; H 0 0 1' if unrestricted else
                       'O 0 0 0; H 0 0 1; H 0 1 0'),
                 spin=int(unrestricted), basis='sto-3g', verbose=0)
-    mf = (UHFDFT if unrestricted else RHFDFT)(mol, xc=xc)
+    mf = (UNSC if unrestricted else RNSC)(mol, xc=xc)
     if df:
         mf = mf.density_fit()
     mf.conv_tol = 1e-11
@@ -68,7 +68,7 @@ def test_gradient(df, unrestricted, xc):
     for name in ('de_skel', 'de_nvar'):
         np.testing.assert_allclose(getattr(drivers[0], name), getattr(drivers[1], name),
                                    atol=1e-9, rtol=0)
-    dm = mf.mf_hf.make_rdm1()
+    dm = mf.mf_source.make_rdm1()
     a, b = [g.get_veff(dm=dm) for g in drivers]
     for tag in ('exc1_grid', 'aux') if df else ('exc1_grid',):
         np.testing.assert_allclose(getattr(a, tag), getattr(b, tag), atol=1e-10, rtol=0)
@@ -107,7 +107,7 @@ def test_fd_and_exception_isolation():
     mol = gto.M(atom='O 0 0 0; H 0 0 1; H 0 1 0', basis='sto-3g', verbose=0)
 
     def target(mol):
-        mf = RHFDFT(mol, xc='PBE').density_fit()
+        mf = RNSC(mol, xc='PBE').density_fit()
         mf.conv_tol = 1e-13
         mf.conv_tol_grad = 1e-10
         mf.grids.level = 3
@@ -131,16 +131,16 @@ def test_fd_and_exception_isolation():
     original = rks.grids_response_cc
     mf.grids.becke_scheme = gen_grid.stratmann
     with pytest.raises(NotImplementedError, match='original_becke'):
-        g.get_veff(dm=mf.mf_hf.make_rdm1())
+        g.get_veff(dm=mf.mf_source.make_rdm1())
     assert rks.grids_response_cc is original
     mf.grids.becke_scheme = gen_grid.original_becke
     g.grid_response_backend = 'pyscf_default'
-    assert np.isfinite(g.get_veff(dm=mf.mf_hf.make_rdm1())).all()
+    assert np.isfinite(g.get_veff(dm=mf.mf_source.make_rdm1())).all()
 
 
 def test_disabled_and_missing_native(monkeypatch):
     mol = gto.M(atom='He 0 0 0', verbose=0)
-    g = RHFDFT(mol, xc='PBE').nuc_grad_method()
+    g = RNSC(mol, xc='PBE').nuc_grad_method()
     calls = []
 
     def unavailable():

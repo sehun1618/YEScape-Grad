@@ -30,10 +30,11 @@ def default_auxbasis(mol, auxbasis=None, with_df=None):
             fallback while building the DF provider.
 
     Notes:
-        DC-Forge shares one exchange-capable provider between source HF and
-        target DFT. The default is therefore selected with ``xc='HF'`` even
-        when the target functional is a local or semilocal DFA. This mirrors
-        ``pyscf.df.df_jk.density_fit`` for an RHF or UHF source.
+        DC-Forge shares one exchange-capable provider between source SCF and
+        target DFT. The default deliberately remains ``xc='HF'`` (JK-fit),
+        including pure-DFA sources/targets, to preserve the HF-source policy.
+        This is a basis-selection policy, not a request to compute exchange
+        for a functional whose exact-exchange coefficient is zero.
     '''
     if auxbasis is not None or with_df is not None:
         return auxbasis

@@ -4,20 +4,20 @@ import numpy as np
 import pytest
 from pyscf import lib
 
-from dcforge.cpu.energy import RHFDFT, UHFDFT
+from dcforge.cpu.energy import RNSC, UNSC
 from tests.common import finite_difference, make_mol, run_workflow
 
 
 CASES = [
-    ("no_cation.xyz", RHFDFT, 1, 2, 1e-4, 3),
-    ("h2_stretched.xyz", RHFDFT, 1, 2, 1e-4, 3),
-    ("water1_asymmetric_stretch.xyz", RHFDFT, 1, 2, 1e-4, 3),
+    ("no_cation.xyz", RNSC, 1, 2, 1e-4, 3),
+    ("h2_stretched.xyz", RNSC, 1, 2, 1e-4, 3),
+    ("water1_asymmetric_stretch.xyz", RNSC, 1, 2, 1e-4, 3),
     # OH is deliberately retained as the known difficult CPHF/grid case. Its
     # 1e-4-Bohr energy difference is dominated by quadrature/SCF noise, so the
     # diagnostic uses a converged 2e-3-Bohr step and a denser grid.
-    ("oh.xyz", UHFDFT, 1, 2, 2e-3, 4),
-    ("ch2_triplet_distorted.xyz", UHFDFT, 1, 2, 1e-4, 3),
-    ("ch3_doublet_distorted.xyz", UHFDFT, 1, 0, 1e-4, 3),
+    ("oh.xyz", UNSC, 1, 2, 2e-3, 4),
+    ("ch2_triplet_distorted.xyz", UNSC, 1, 2, 1e-4, 3),
+    ("ch3_doublet_distorted.xyz", UNSC, 1, 0, 1e-4, 3),
 ]
 
 

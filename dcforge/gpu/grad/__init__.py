@@ -1,7 +1,7 @@
-'''GPU molecular HF-DFT nuclear gradients.'''
+'''GPU molecular target-on-source nuclear gradients.'''
 
-from dcforge.gpu.grad import rhf_dft, uhf_dft
-from dcforge.gpu.grad.rhf_dft import Grad, Gradients
-from dcforge.gpu.grad.rhf_zvec import solve_z_vector
+from dcforge.gpu.grad import rnsc, unsc
+from dcforge.gpu.grad.rnsc import Grad, Gradients
+from dcforge.gpu.grad.r_zvec import solve_z_vector
 
-__all__ = ['Grad', 'Gradients', 'rhf_dft', 'solve_z_vector', 'uhf_dft']
+__all__ = ['Grad', 'Gradients', 'rnsc', 'solve_z_vector', 'unsc']

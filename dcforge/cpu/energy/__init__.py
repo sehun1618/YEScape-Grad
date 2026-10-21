@@ -1,9 +1,14 @@
 '''CPU energy evaluation operations.'''
 
-from dcforge.cpu.energy import rhf_dft, uhf_dft
-from dcforge.cpu.energy.rhf_dft import RHFDFT, energy_tot
-from dcforge.cpu.energy.uhf_dft import UHFDFT
+from dcforge.cpu.energy import rnsc, unsc
+from dcforge.cpu.energy.rnsc import RNSC, energy_tot
+from dcforge.cpu.energy.unsc import UNSC
 
 __all__ = [
-    'RHFDFT', 'UHFDFT', 'energy_tot', 'rhf_dft', 'uhf_dft',
+    'RNSC', 'UNSC', 'energy_tot', 'rnsc', 'unsc',
 ]
+
+# Source-neutral public names; legacy HF-only names remain compatible.
+RHFDFT = RNSC
+UHFDFT = UNSC
+__all__ += ['RHFDFT', 'UHFDFT']

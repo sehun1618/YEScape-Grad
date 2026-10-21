@@ -6,7 +6,7 @@ import sys
 import pytest
 from pyscf import gto, scf
 
-from dcforge.cpu.energy import RHFDFT, UHFDFT
+from dcforge.cpu.energy import RNSC, UNSC
 from tests.common import ROOT, make_mol
 
 
@@ -19,18 +19,18 @@ def test_source_and_target_must_share_one_molecule():
     mol_a = make_mol("water1.xyz", basis="sto-3g")
     mol_b = make_mol("water1.xyz", basis="sto-3g")
     with pytest.raises(ValueError, match="same Mole"):
-        RHFDFT(mol_b, mf_hf=scf.RHF(mol_a))
+        RNSC(mol_b, mf_source=scf.RHF(mol_a))
 
 
-def test_run_hf_false_requires_converged_source():
-    mf = RHFDFT(make_mol("water1.xyz", basis="sto-3g"), xc="PBE")
-    with pytest.raises(RuntimeError, match="source HF calculation must be converged"):
-        mf.kernel(run_hf=False)
+def test_run_source_false_requires_source_orbitals():
+    mf = RNSC(make_mol("water1.xyz", basis="sto-3g"), xc="PBE")
+    with pytest.raises(RuntimeError, match="no canonical orbital state"):
+        mf.kernel(run_source=False)
 
 
-@pytest.mark.parametrize("workflow", [RHFDFT, UHFDFT])
+@pytest.mark.parametrize("workflow", [RNSC, UNSC])
 def test_nlc_is_rejected_before_source_scf(workflow):
-    name = "water1.xyz" if workflow is RHFDFT else "o2_triplet.xyz"
+    name = "water1.xyz" if workflow is RNSC else "o2_triplet.xyz"
     mf = workflow(make_mol(name, basis="sto-3g"), xc="B97M-V")
     with pytest.raises(NotImplementedError, match="nonlocal correlation"):
         mf.kernel()

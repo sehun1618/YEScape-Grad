@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-"""Density-fitted unrestricted molecular GPU HF-DFT gradients."""
+"""Density-fitted unrestricted molecular GPU non-SCF gradients."""
 
 from gpu4pyscf.df.grad import uks as df_uks_grad
 from gpu4pyscf.lib import logger
@@ -18,14 +18,14 @@ from dcforge.gpu.df.grad.uhf_zvec import (
 from dcforge.gpu.df.grad.uhf_zvec import (
     get_z_response_oo as get_z_response_oo_mo,
 )
-from dcforge.gpu.grad import uhf_dft
+from dcforge.gpu.grad import unsc
 
 
-class Gradients(uhf_dft.Gradients, df_uks_grad.Gradients):
+class Gradients(unsc.Gradients, df_uks_grad.Gradients):
     """Unrestricted density-fitted target-DFT-on-UHF GPU gradient driver."""
 
     _keys = (
-        uhf_dft.Gradients._keys
+        unsc.Gradients._keys
         | df_uks_grad.Gradients._keys
         | {
             "fock_deriv_planner_limit_bytes",
@@ -34,41 +34,47 @@ class Gradients(uhf_dft.Gradients, df_uks_grad.Gradients):
     )
 
     def __init__(self, mf):
-        if not hasattr(mf, "with_df") or not hasattr(mf.mf_hf, "with_df"):
+        if not hasattr(mf, "with_df") or not hasattr(mf.mf_source, "with_df"):
             raise TypeError(
                 "GPU DF-UHF Gradients requires density-fitted source and target"
             )
-        if mf.with_df is not mf.mf_hf.with_df:
+        if mf.with_df is not mf.mf_source.with_df:
             raise ValueError(
-                "GPU DF-UHF gradient requires one shared source/target with_df"
+                "GPU DF unrestricted gradient requires one shared source/target with_df"
             )
-        if mf.only_dfj or mf.mf_hf.only_dfj:
-            raise NotImplementedError("GPU DF-UHF gradient requires only_dfj=False")
-        uhf_dft.Gradients.__init__(self, mf)
+        if mf.only_dfj or mf.mf_source.only_dfj:
+            raise NotImplementedError("GPU DF unrestricted gradient requires only_dfj=False")
+        unsc.Gradients.__init__(self, mf)
         self.auxbasis_response = True
         self.fock_deriv_method = "direct"
-        self.response_backend = "mo_direct"
+        # The existing MO-direct action is HF-only: it omits the source fxc.
+        self.response_backend = "ao" if hasattr(mf.mf_source, "xc") else "mo_direct"
         self.fock_deriv_planner_limit_bytes = DEFAULT_FOCK_DERIV_PLANNER_LIMIT_BYTES
         self.fock_deriv_planner = None
 
     def grad_fock(self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst):
         """Return the source-Fock term through the selected DF-UHF route."""
+        if hasattr(self.base.mf_source, "xc"):
+            return unsc.Gradients.grad_fock(
+                self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
         method = self.fock_deriv_method
         self.fock_deriv_method_used = method
         self.fock_deriv_planner = None
         if method == "direct":
             return grad_fock_direct(self, Co, Cv, zvec, dm0, atmlst)
-        return uhf_dft.Gradients.grad_fock(
+        return unsc.Gradients.grad_fock(
             self, Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst
         )
 
     def gen_vind(self, Co, Cv, fvind):
         """Return the DF MO-direct spin-coupled response action."""
         if self.response_backend == "ao":
-            return uhf_dft.Gradients.gen_vind(self, Co, Cv, fvind)
+            return unsc.Gradients.gen_vind(self, Co, Cv, fvind)
         if self.response_backend == "mo_direct":
+            if hasattr(self.base.mf_source, "xc"):
+                raise ValueError("DFA source requires response_backend='ao' to include fxc")
             self.response_backend_used = "mo_direct"
-            return gen_vind_mo(self.base.mf_hf, Co, Cv)
+            return gen_vind_mo(self.base.mf_source, Co, Cv)
         raise ValueError(
             "DF GPU response_backend must be 'ao' or 'mo_direct'; "
             f"got {self.response_backend!r}"
@@ -77,12 +83,12 @@ class Gradients(uhf_dft.Gradients, df_uks_grad.Gradients):
     def get_z_response_oo(self, Co, Cv, zvec, fvind):
         """Return DF MO-direct spin adjoint response OO blocks."""
         if self.response_backend == "ao":
-            return uhf_dft.Gradients.get_z_response_oo(self, Co, Cv, zvec, fvind)
-        return get_z_response_oo_mo(self.base.mf_hf, Co, Cv, zvec)
+            return unsc.Gradients.get_z_response_oo(self, Co, Cv, zvec, fvind)
+        return get_z_response_oo_mo(self.base.mf_source, Co, Cv, zvec)
 
     def dump_flags(self, verbose=None):
         """Log common GPU UHF and DF auxiliary-response controls."""
-        uhf_dft.Gradients.dump_flags(self, verbose)
+        unsc.Gradients.dump_flags(self, verbose)
         logger.info(self, "auxbasis_response = %s", self.auxbasis_response)
         logger.info(
             self,
@@ -92,12 +98,12 @@ class Gradients(uhf_dft.Gradients, df_uks_grad.Gradients):
         return self
 
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
-        """Evaluate the complete DF-UHF gradient with representation response."""
+        """Evaluate the complete DF unrestricted gradient with representation response."""
         if not self.auxbasis_response:
             raise NotImplementedError(
-                "GPU UHF gradient requires auxbasis_response=True"
+                "GPU unrestricted gradient requires auxbasis_response=True"
             )
-        return uhf_dft.Gradients.kernel(self, mo_energy, mo_coeff, mo_occ, atmlst)
+        return unsc.Gradients.kernel(self, mo_energy, mo_coeff, mo_occ, atmlst)
 
 
 Grad = Gradients

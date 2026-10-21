@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Restricted HF Z-vector solver for molecular HF-DFT gradients.'''
+'''Restricted source-SCF Z-vector solver for molecular non-SCF gradients.'''
 
 import numpy as np
 from pyscf.lib import logger
@@ -16,29 +16,29 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^source]^T Z = F^target_vo``.
 
-    For the real closed-shell RHF reference used here, the orbital Hessian is
+    For the real closed-shell HF/KS reference used here, the orbital Hessian is
     symmetric.  The implemented residual is therefore
-    ``(A+B)^HF Z - F^KS_vo``.
+    ``(A+B)^source Z - F^target_vo``.
 
     Args:
         zvec : ndarray of shape (nvir, nocc)
             Canonical positive-RHS Z-vector ``Z_ai``.
         mo_energy : ndarray of shape (nmo,)
-            Canonical source-RHF orbital energies.
+            Canonical restricted source-SCF orbital energies.
         mo_occ : ndarray of shape (nmo,)
             Restricted occupations. Occupied and virtual orbitals are selected
             by ``mo_occ > 0`` and ``mo_occ == 0``, respectively.
         fvo : ndarray of shape (nvir, nocc)
-            Target-KS Fock block ``F^KS_vo`` evaluated on the HF density.
+            Target-KS Fock block ``F^target_vo`` evaluated on the source density.
         vind : callable
-            Induced HF potential action in the virtual-occupied space.  It
-            returns the two-electron part of ``(A+B)^HF zvec``.
+            Induced source potential action in the virtual-occupied space.  It
+            returns the density-response part (J/K and source fxc) of ``(A+B)^source zvec``.
 
     Returns:
         ndarray of shape (nvir, nocc)
-            Elementwise residual ``[(A+B)^HF Z - F^KS_vo]_ai``.
+            Elementwise residual ``[(A+B)^source Z - F^target_vo]_ai``.
     '''
     e_a = mo_energy[mo_occ == 0]
     e_i = mo_energy[mo_occ > 0]
@@ -46,7 +46,7 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 
 def _relative_residual(abs_residual, rhs_norm):
-    '''Return the max-absolute residual relative to ``max|F^KS_vo|``.'''
+    '''Return the max-absolute residual relative to ``max|F^target_vo|``.'''
     if rhs_norm > 0:
         return abs_residual / rhs_norm
     if abs_residual == 0:
@@ -56,30 +56,30 @@ def _relative_residual(abs_residual, rhs_norm):
 
 def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
                    conv_tol=1e-9, max_cycle=200, log=None):
-    '''Solve the molecular restricted-HF Z-vector equation with PySCF CPHF.
+    '''Solve the molecular restricted source Z-vector equation with PySCF CPHF.
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^source]^T Z = F^target_vo``.
 
-    The molecular real-RHF Hessian is symmetric, so the transpose is implicit
+    The molecular real restricted HF/KS Hessian is symmetric, so the transpose is implicit
     in the matrix-vector action below.  PySCF's ``cphf.solve`` uses the
-    convention ``(A+B)^HF x = -h1``.  Passing ``h1=F^KS_vo`` therefore returns
+    convention ``(A+B)^source x = -h1``.  Passing ``h1=F^target_vo`` therefore returns
     ``x=-Z``; the sign is changed once before exposing the DC-Forge Z-vector.
 
     Args:
         mo_energy : ndarray of shape (nmo,)
-            Canonical source-RHF orbital energies.
+            Canonical restricted source-SCF orbital energies.
         mo_occ : ndarray of shape (nmo,)
-            Restricted source-RHF occupations.
+            Restricted source-SCF occupations.
         Co : ndarray of shape (nao, nocc)
-            Occupied source-RHF MO coefficients ``C_o``.
+            Occupied restricted source-SCF MO coefficients ``C_o``.
         Cv : ndarray of shape (nao, nvir)
-            Virtual source-RHF MO coefficients ``C_v``.
+            Virtual restricted source-SCF MO coefficients ``C_v``.
         fvo : ndarray of shape (nvir, nocc)
-            Target-KS Fock block ``F^KS_vo`` evaluated on the HF density.
+            Target-KS Fock block ``F^target_vo`` evaluated on the source density.
         fvind : callable
-            AO source-HF response returned by ``mf_hf.gen_response``.
+            AO source-SCF response returned by ``mf_source.gen_response``.
 
     Kwargs:
         conv_tol : float
@@ -111,18 +111,26 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     if log is None:
         log = logger.new_logger(verbose=logger.WARN)
 
+    if fvo.size == 0:
+        # No virtual-occupied rotations: the adjoint equation is empty, not
+        # a Krylov failure. In particular He/STO-3G has this exact limit.
+        return np.zeros_like(fvo), {
+            'rhs_max_abs': 0., 'residual_max_abs': 0.,
+            'residual_relative': 0., 'solver': 'zero_dimensional',
+        }
+
     nocc = Co.shape[1]
     nvir = Cv.shape[1]
 
     def vind(x):
-        '''Apply the two-electron part of ``(A+B)^HF`` in the VO space.'''
+        '''Apply the density-response part (J/K and source fxc) of ``(A+B)^source`` in the VO space.'''
         shape = np.asarray(x).shape
         x = np.asarray(x).reshape(-1, nvir, nocc)
         v = np.empty_like(x)
 
         # A VO rotation x_ai produces the Hermitian first-order AO density
         # C_v x C_o^dagger + h.c.  The restricted factor 2 converts the
-        # source-HF response into the closed-shell (A+B)^HF action used in the
+        # source-SCF response into the closed-shell (A+B)^source action used in the
         # textbook convention.  Multiple RHSs are accepted in PySCF layout.
         for k in range(x.shape[0]):
             dm1 = Cv @ x[k] @ Co.conj().T
@@ -138,8 +146,8 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     zvec, _ = solve_cphf(cphf, vind, mo_energy, mo_occ, fvo, s1=None,
                          max_cycle=max_cycle, tol=conv_tol, verbose=log)
 
-    # PySCF solves (A+B)^HF x = -F^KS_vo.  DC-Forge exposes the textbook
-    # positive-RHS vector Z satisfying [(A+B)^HF]^T Z = F^KS_vo.
+    # PySCF solves (A+B)^source x = -F^target_vo.  DC-Forge exposes the textbook
+    # positive-RHS vector Z satisfying [(A+B)^source]^T Z = F^target_vo.
     zvec = -np.asarray(zvec)
 
     # PySCF's second return value is not a convergence flag in the s1=None

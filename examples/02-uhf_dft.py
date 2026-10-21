@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pyscf import gto
 
-from dcforge.cpu.energy import UHFDFT
+from dcforge.cpu.energy import UNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +17,7 @@ mol = gto.M(
 )
 
 # Case 1: conventional HF-r2SCAN energy and gradient
-mf = UHFDFT(mol, xc='r2SCAN').set(
+mf = UNSC(mol, xc='r2SCAN').set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,
@@ -32,7 +32,7 @@ mf_grad = mf.nuc_grad_method().set(
 force = -mf_grad.de
 
 # Case 2: density-fitted HF-r2SCAN energy and complete DF gradient
-mf = UHFDFT(mol, xc='r2SCAN').density_fit().set(
+mf = UNSC(mol, xc='r2SCAN').density_fit().set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
     max_cycle=100,

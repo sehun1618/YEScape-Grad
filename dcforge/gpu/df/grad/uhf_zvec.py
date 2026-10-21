@@ -94,11 +94,11 @@ def _get_jk_mo(dfobj, dm, left_coeff, occ_coeff):
     return alpha, beta
 
 
-def gen_vind(mf_hf, Co, Cv):
+def gen_vind(mf_source, Co, Cv):
     '''Build a spin-coupled UCPHF action returning only DF VO blocks.
 
     Args:
-        mf_hf : gpu4pyscf.df.df_jk._DFHF
+        mf_source : gpu4pyscf.df.df_jk._DFHF
             Density-fitted source-UHF object.
         Co, Cv : tuple of two cupy.ndarray
             Alpha/beta occupied and virtual source coefficients.
@@ -137,7 +137,7 @@ def gen_vind(mf_hf, Co, Cv):
             cp.concatenate((dma, dmb), axis=0),
             mo1=(mo1a, mo1b), occ_coeff=(Coa, Cob))
         va, vb = _get_jk_mo(
-            mf_hf.with_df, dm, (Cva, Cvb), (Coa, Cob))
+            mf_source.with_df, dm, (Cva, Cvb), (Coa, Cob))
         out = cp.concatenate(
             (va.reshape(nset, nova), vb.reshape(nset, novb)), axis=1)
         return out.reshape(shape)
@@ -145,11 +145,11 @@ def gen_vind(mf_hf, Co, Cv):
     return vind
 
 
-def get_z_response_oo(mf_hf, Co, Cv, zvec):
+def get_z_response_oo(mf_source, Co, Cv, zvec):
     '''Return both spin OO adjoint blocks without full AO potentials.
 
     Args:
-        mf_hf : gpu4pyscf.df.df_jk._DFHF
+        mf_source : gpu4pyscf.df.df_jk._DFHF
             Density-fitted source-UHF object.
         Co, Cv : tuple of two cupy.ndarray
             Alpha/beta occupied and virtual source coefficients.
@@ -181,5 +181,5 @@ def get_z_response_oo(mf_hf, Co, Cv, zvec):
         mo1=(zleft_a[None], zleft_b[None]),
         occ_coeff=(Coa, Cob))
     va, vb = _get_jk_mo(
-        mf_hf.with_df, dm, (Coa, Cob), (Coa, Cob))
+        mf_source.with_df, dm, (Coa, Cob), (Coa, Cob))
     return va[0], vb[0]

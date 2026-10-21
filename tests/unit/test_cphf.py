@@ -150,7 +150,7 @@ def test_invalid_tolerance(tol):
 @pytest.mark.parametrize('active_spin', [0, 1])
 def test_uhf_single_active_spin_uses_fixed_cphf(device, active_spin):
     xp = np if device == 'cpu' else pytest.importorskip('cupy')
-    module = importlib.import_module(f'dcforge.{device}.grad.uhf_zvec')
+    module = importlib.import_module(f'dcforge.{device}.grad.u_zvec')
     energy = (xp.asarray([-.5, .5]), xp.asarray([-.5, .5]))
     occ = [xp.zeros(2), xp.zeros(2)]
     occ[active_spin][0] = 1

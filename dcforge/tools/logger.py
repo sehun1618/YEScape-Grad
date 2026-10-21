@@ -53,9 +53,13 @@ def log_kernel_time(label):
 
 def _header(obj, mf, title, unrestricted):
     logger.note(obj, '\n================ DC-Forge %s ================', title)
-    # All currently supported workflows use HF source densities. A future
-    # DFA-source implementation must pass its actual source method here.
-    logger.note(obj, '%-28s HF-%s', 'Method', mf.xc)
+    source_xc = getattr(mf.mf_source, 'xc', 'HF')
+    logger.note(obj, '%-28s %s-%s', 'Method', source_xc, mf.xc)
+    logger.info(obj, '%-28s %s', 'Source XC', source_xc)
+    logger.info(obj, '%-28s %s', 'Target XC', mf.xc)
+    if hasattr(mf.mf_source, 'grids'):
+        grids = mf.mf_source.grids
+        _setting(obj, 'Source grid', grids.atom_grid or 'level = %s' % grids.level)
     logger.note(obj, '%-28s %s', 'Spin treatment',
                 'Unrestricted' if unrestricted else 'Restricted')
     dispersion = getattr(mf, 'dispersion', None)
@@ -125,8 +129,8 @@ def energy_summary(mf, unrestricted=False):
         return
     _header(log, mf, 'Energy', unrestricted)
     logger.note(log, '%-28s %s', 'Source SCF converged',
-                'Yes' if mf.mf_hf.converged else 'No')
-    _energy_value(log, mf, 'Source energy', 'e_hf')
+                'Yes' if mf.mf_source.converged else 'No')
+    _energy_value(log, mf, 'Source energy', 'e_source')
     _energy_value(log, mf, 'Target energy', 'e_dft')
     if getattr(mf, 'dispersion', None):
         _energy_value(log, mf, 'D2C dispersion energy', 'e_d2c')
@@ -165,6 +169,7 @@ def gradient_summary(grad, unrestricted=False):
     _write(log, grad.mol, -de, atoms)
     for label, attribute in (
             ('Grid response', 'grid_response'),
+            ('Source grid response', 'source_grid_response'),
             ('Grid response backend', 'grid_response_backend_used'),
             ('Auxiliary-basis response', 'auxbasis_response'),
             ('Z-vector solver', 'z_solver')):
@@ -172,7 +177,7 @@ def gradient_summary(grad, unrestricted=False):
         if value is not None:
             logger.info(log, '%-28s %s', label, value)
     logger.note(log, '%-28s %s', 'Source SCF converged',
-                'Yes' if mf.mf_hf.converged else 'No')
+                'Yes' if mf.mf_source.converged else 'No')
     tol = getattr(grad, 'cphf_conv_tol', None)
     if tol is not None:
         logger.info(log, '%-28s %.3e', 'CPHF tolerance', tol)

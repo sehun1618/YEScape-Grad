@@ -42,11 +42,11 @@ def _get_jk_mo(dfobj, dm, left_coeff, occ_coeff):
         nset, left_coeff.shape[1], occ_coeff.shape[1])
 
 
-def gen_vind(mf_hf, Co, Cv):
+def gen_vind(mf_source, Co, Cv):
     '''Build an RHF CPHF action returning only the DF VO response block.
 
     Args:
-        mf_hf : gpu4pyscf.df.df_jk._DFHF
+        mf_source : gpu4pyscf.df.df_jk._DFHF
             Density-fitted source RHF object.
         Co : cupy.ndarray of shape (nao, nocc)
             Occupied source coefficients.
@@ -62,7 +62,7 @@ def gen_vind(mf_hf, Co, Cv):
         inside the three-center loop.  No ``(nrhs,nao,nao)`` response
         potential is returned to the CPHF solver.
 
-        The conventional function ``dcforge.gpu.grad.rhf_zvec.gen_vind``
+        The conventional function ``dcforge.gpu.grad.r_zvec.gen_vind``
         remains necessary as an AO reference and for non-DF sources. This DF
         function is separate because it depends on a private three-center
         kernel and a tagged-density contract that the conventional provider
@@ -79,16 +79,16 @@ def gen_vind(mf_hf, Co, Cv):
         dm = contract('kpi,qi->kpq', mo1, Co2)
         dm = dm + dm.transpose(0, 2, 1).conj()
         dm = tag_array(dm, mo1=mo1, occ_coeff=Co)
-        return _get_jk_mo(mf_hf.with_df, dm, Cv, Co).reshape(shape)
+        return _get_jk_mo(mf_source.with_df, dm, Cv, Co).reshape(shape)
 
     return vind
 
 
-def get_z_response_oo(mf_hf, Co, Cv, zvec):
+def get_z_response_oo(mf_source, Co, Cv, zvec):
     '''Return ``C_o^dagger G^HF[D_Z]C_o`` without an AO response output.
 
     Args:
-        mf_hf : gpu4pyscf.df.df_jk._DFHF
+        mf_source : gpu4pyscf.df.df_jk._DFHF
             Density-fitted source-RHF object.
         Co : cupy.ndarray of shape (nao, nocc)
             Occupied source coefficients.
@@ -103,7 +103,7 @@ def get_z_response_oo(mf_hf, Co, Cv, zvec):
 
     Notes:
         This is the DF counterpart of
-        ``dcforge.gpu.grad.rhf_nv.get_z_response_oo``. The conventional
+        ``dcforge.gpu.grad.r_nv.get_z_response_oo``. The conventional
         function forms ``G[D_Z]`` in AO space and then projects it; this
         function asks the DF-Hessian kernel for the OO block directly. Both
         remain available because the AO route is the independent numerical
@@ -115,4 +115,4 @@ def get_z_response_oo(mf_hf, Co, Cv, zvec):
     dm = dm + dm.conj().T
     dm = tag_array(
         dm[None], mo1=(.5 * zleft)[None], occ_coeff=Co)
-    return _get_jk_mo(mf_hf.with_df, dm, Co, Co)[0]
+    return _get_jk_mo(mf_source.with_df, dm, Co, Co)[0]

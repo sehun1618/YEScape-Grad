@@ -7,20 +7,20 @@ import numpy as np
 import pytest
 from pyscf import gto, lib
 
-from dcforge.cpu.energy import RHFDFT, UHFDFT
+from dcforge.cpu.energy import RNSC, UNSC
 from dcforge.tools.logger import energy_summary, gradient_summary
 from dcforge.tools import logger as result_logger
 
 
 @pytest.mark.parametrize('workflow,atom,spin', [
-    (RHFDFT, 'H 0 0 0; H 0 0 1', 0),
-    (UHFDFT, 'O 0 0 0; H 0 0 1', 1),
-    (UHFDFT, 'O 0 0 0; H 0 0 1; H 0 1 0', 0)])
+    (RNSC, 'H 0 0 0; H 0 0 1', 0),
+    (UNSC, 'O 0 0 0; H 0 0 1', 1),
+    (UNSC, 'O 0 0 0; H 0 0 1; H 0 1 0', 0)])
 @pytest.mark.parametrize('df', [False, True])
 @pytest.mark.parametrize('backend', ['cpu', pytest.param('gpu', marks=pytest.mark.gpu)])
 def test_kernel_output(workflow, atom, spin, df, backend):
     lib.num_threads(2)
-    unrestricted = workflow is UHFDFT
+    unrestricted = workflow is UNSC
     if backend == 'gpu':
         workflow = getattr(import_module('dcforge.gpu.energy'), workflow.__name__)
     mol = gto.M(atom=atom, basis='sto-3g', spin=spin, verbose=0)
@@ -92,7 +92,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
 def test_diagnostics(residual, limit, verdict):
     mol = gto.M(atom='H 0 0 0; H 0 0 1', verbose=0)
     mf = SimpleNamespace(xc='r2SCAN', dispersion='d2c',
-                         mf_hf=SimpleNamespace(converged=True))
+                         mf_source=SimpleNamespace(converged=True))
     grad = SimpleNamespace(base=mf, mol=mol, de=np.ones((1, 3)),
                            atmlst=[1], verbose=4, stdout=StringIO(),
                            z_residual_max_abs=residual,
@@ -110,8 +110,8 @@ def test_diagnostics(residual, limit, verdict):
 def test_file_output_and_missing_energy(tmp_path):
     with (tmp_path / 'calculation.log').open('w+') as stream:
         mf = SimpleNamespace(xc='r2SCAN', dispersion='d2c', verbose=3,
-                             stdout=stream, mf_hf=SimpleNamespace(converged=True),
-                             e_hf=-10., e_dft=-11., e_d2c=-.1, e_tot=-11.1)
+                             stdout=stream, mf_source=SimpleNamespace(converged=True),
+                             e_source=-10., e_dft=-11., e_d2c=-.1, e_tot=-11.1)
         energy_summary(mf)
         stream.seek(0)
         text = stream.read()
@@ -153,7 +153,7 @@ def test_time_verbosity_and_repeated_calls(monkeypatch, verbose):
 ])
 def test_basis_and_grid_settings(atom_grid, expected):
     mol = gto.M(atom='O 0 0 0; H 0 0 1; H 0 1 0', verbose=0)
-    mf = RHFDFT(mol, xc='PBE').density_fit(
+    mf = RNSC(mol, xc='PBE').density_fit(
         auxbasis={'H': 'def2-svp-jkfit', 'O': 'def2-tzvp-jkfit'})
     mf.stdout = StringIO()
     mf.verbose = 4

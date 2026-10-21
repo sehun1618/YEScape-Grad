@@ -2,11 +2,11 @@
 
 from pyscf import gto
 from pyscf.geomopt.geometric_solver import optimize
-from dcforge.gpu.energy import RHFDFT
+from dcforge.gpu.energy import RNSC
 
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=3)
-mf = RHFDFT(mol, xc='r2SCAN').density_fit()
+mf = RNSC(mol, xc='r2SCAN').density_fit().set_dispersion('d2c')
 mf.conv_tol = 1e-8
 mf.conv_tol_grad = 1e-6
 mf.grids.level = 4

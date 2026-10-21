@@ -1,6 +1,6 @@
 '''Density-fitted molecular GPU analytic gradients.'''
 
-from dcforge.gpu.df.grad import rhf_dft, uhf_dft
-from dcforge.gpu.df.grad.rhf_dft import Grad, Gradients
+from dcforge.gpu.df.grad import rnsc, unsc
+from dcforge.gpu.df.grad.rnsc import Grad, Gradients
 
-__all__ = ['Grad', 'Gradients', 'rhf_dft', 'uhf_dft']
+__all__ = ['Grad', 'Gradients', 'rnsc', 'unsc']

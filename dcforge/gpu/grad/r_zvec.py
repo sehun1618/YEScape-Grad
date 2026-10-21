@@ -3,7 +3,7 @@
 # Theoretical and Computational Chemistry Laboratory (TCCL)
 # Yonsei University
 
-'''Restricted HF Z-vector solver using GPU4PySCF CPHF.'''
+'''Restricted source-SCF Z-vector solver using GPU4PySCF CPHF.'''
 
 import cupy as cp
 from gpu4pyscf.lib import logger
@@ -13,19 +13,19 @@ from dcforge.tools.cphf import solve as solve_cphf
 
 
 def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
-    '''Evaluate ``[(A+B)^HF Z - F^KS_vo]`` on the GPU.
+    '''Evaluate ``[(A+B)^source Z - F^target_vo]`` on the GPU.
 
     Args:
         zvec : cupy.ndarray of shape (nvir, nocc)
             Canonical positive-RHS Z-vector.
         mo_energy : cupy.ndarray of shape (nmo,)
-            Source DF-RHF orbital energies.
+            Source-SCF orbital energies.
         mo_occ : cupy.ndarray of shape (nmo,)
             Exact restricted occupations.
         fvo : cupy.ndarray of shape (nvir, nocc)
             Target-KS Fock virtual-occupied block.
         vind : callable
-            GPU virtual-occupied source-HF response action.
+            GPU virtual-occupied source-SCF response action.
 
     Returns:
         cupy.ndarray of shape (nvir, nocc)
@@ -37,20 +37,20 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 
 def gen_vind(Co, Cv, fvind):
-    '''Build the conventional GPU RHF orbital-Hessian action.
+    '''Build the conventional GPU restricted source-SCF orbital-Hessian action.
 
     Args:
         Co : cupy.ndarray of shape (nao, nocc)
-            Occupied source-RHF coefficients.
+            Occupied restricted source-SCF coefficients.
         Cv : cupy.ndarray of shape (nao, nvir)
-            Virtual source-RHF coefficients.
+            Virtual restricted source-SCF coefficients.
         fvind : callable
-            AO source-HF response returned by ``mf_hf.gen_response``.
+            AO source-SCF response returned by ``mf_source.gen_response``.
 
     Returns:
         callable
-            Batched VO-space action of the two-electron part of
-            ``(A+B)^HF``.
+            Batched VO-space action of the density-response part (J/K and source fxc) of
+            ``(A+B)^source``.
 
     Notes:
         Density fitting overrides this provider with an MO-direct action.
@@ -79,25 +79,25 @@ def gen_vind(Co, Cv, fvind):
 
 def solve_z_vector(mo_energy, mo_occ, fvo, vind,
                    conv_tol=1e-9, max_cycle=200, log=None):
-    '''Solve the positive-RHS molecular RHF Z-vector equation on the GPU.
+    '''Solve the positive-RHS molecular restricted source-SCF Z-vector equation on the GPU.
 
     The canonical equation is
 
-    ``[(A+B)^HF]^T Z = F^KS_vo``.
+    ``[(A+B)^source]^T Z = F^target_vo``.
 
     GPU4PySCF CPHF follows the PySCF convention
-    ``(A+B)^HF x = -h1``.  With ``h1=F^KS_vo`` it returns ``x=-Z``;
+    ``(A+B)^source x = -h1``.  With ``h1=F^target_vo`` it returns ``x=-Z``;
     this function changes the sign exactly once before returning ``zvec``.
 
     Args:
         mo_energy : cupy.ndarray of shape (nmo,)
-            Canonical source DF-RHF orbital energies.
+            Canonical source-SCF orbital energies.
         mo_occ : cupy.ndarray of shape (nmo,)
             Restricted source occupations.
         fvo : cupy.ndarray of shape (nvir, nocc)
-            Target-KS Fock ``F^KS_vo`` at the fixed HF density.
+            Target-KS Fock ``F^target_vo`` at the fixed source density.
         vind : callable
-            Conventional AO or density-fitted MO-direct source-HF
+            Conventional AO or density-fitted MO-direct source-SCF
             orbital-Hessian action in the VO space.
 
     Kwargs:
@@ -121,6 +121,14 @@ def solve_z_vector(mo_energy, mo_occ, fvo, vind,
     '''
     if log is None:
         log = logger.new_logger(verbose=logger.WARN)
+
+    if fvo.size == 0:
+        # No virtual-occupied rotations: the adjoint equation is empty, not
+        # a Krylov failure. In particular He/STO-3G has this exact limit.
+        return cp.zeros_like(fvo), {
+            'rhs_max_abs': 0., 'residual_max_abs': 0.,
+            'residual_relative': 0., 'solver': 'zero_dimensional',
+        }
 
     mo_energy = cp.asarray(mo_energy)
     mo_occ = cp.asarray(mo_occ)
