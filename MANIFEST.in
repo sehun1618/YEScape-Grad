@@ -8,3 +8,9 @@ include pytest.ini
 recursive-include environments *.yml *.md
 prune dev
 prune examples/dev
+prune tests/results
+prune tests/result
+prune results
+prune result
+exclude THEORY.md
+global-exclude __pycache__ *.py[cod] *.chk *.h5 *.log

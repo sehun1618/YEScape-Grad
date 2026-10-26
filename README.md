@@ -126,6 +126,27 @@ Neither library is installed by DC-Forge. Both retain their own licenses.
 
 Nonlocal correlation functionals, including VV10, are not supported.
 
+### Analytic-gradient support
+
+| Calculation | CPU | GPU |
+|---|---|---|
+| Restricted/unrestricted HF or KS source | Supported | Supported |
+| Conventional / density-fitted J and K | Supported | Supported |
+| LDA, GGA, tau-meta-GGA, hybrid, RSH | Supported families; representative functionals tested | Supported families; representative functionals tested |
+| Full grid and auxiliary-basis response | Supported; enabled by default | Supported; enabled by default |
+| Atom-subset gradient | Supported | Full molecule only |
+| `only_dfj=True` gradient | Not supported | Not supported |
+| D2C correction | HF source and available target parameters; requires DFT-D4 | Same |
+| Scanner / geometry optimization | Supported | Supported |
+| PBC, ROHF, fractional occupations, complex orbitals | Outside current scope | Outside current scope |
+| NLC/VV10, Laplacian-dependent meta-GGA, Hessian | Not supported | Not supported |
+
+Complete energy derivatives require grid response and, for DF, auxiliary-basis
+response. CPU conventional calculations also expose a frozen-grid diagnostic;
+DF and GPU gradients require full response. KS-source Fock derivatives use
+`direct`; GPU KS-source Z response uses the AO backend. Support for a functional
+family does not establish accuracy for every functional, molecule or SCF state.
+
 Geometry optimization uses PySCF's optimizer interface. Install `geometric`
 separately if needed. Scanners reuse the previous source density as the initial
 guess and reconverge source SCF at every geometry; use `scanner(mol, dm0=None)` for a
@@ -254,7 +275,7 @@ source. Pass `mf_source=` to attach a native
 conventional HF/KS object; use `.density_fit()` on the workflow afterward.
 `kernel(run_source=False)` explicitly reuses supplied orbitals; the caller
 is responsible for source stationarity. An unconverged flag emits a warning,
-not a rejection. See [theory and code flow](THEORY.md). Legacy
+not a rejection. Legacy
 `mf_hf`, `run_hf`, `e_hf`/`e_uhf` names are retained for old callers; use
 `mf_source`, `e_source` and `dm_source` for source-neutral code.
 Only the source-neutral attributes store state; old attribute names are

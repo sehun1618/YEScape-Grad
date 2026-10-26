@@ -17,43 +17,57 @@ import tempfile
 
 import numpy as np
 from pyscf import gto, lib
+from tests.common import as_numpy
 
 
-def check(backend, unrestricted, use_df, xc, full_fd, basis, target='r2SCAN'):
+def check(backend, unrestricted, use_df, xc, full_fd, basis, target='r2SCAN',
+          mol=None, indices=None, grid_level=2, conv_tol=1e-12, conv_tol_grad=1e-9):
     energy = importlib.import_module('dcforge.'+backend+'.energy')
     cls = energy.UNSC if unrestricted else energy.RNSC
     atom = ('N 0 0 0; H 0 -.8 .6; H 0 .8 .6' if unrestricted else
             'O 0 0 0; H 0 -.757 .587; H 0 .757 .587')
-    mol = gto.M(atom=atom, basis=basis, spin=int(unrestricted), verbose=0)
+    if mol is None:
+        mol = gto.M(atom=atom, basis=basis, spin=int(unrestricted), verbose=0)
 
-    def build(m):
+    def build(m, dm0=None):
         mf = cls(m, xc=target, source_xc=xc)
         if use_df:
             mf = mf.density_fit(auxbasis='def2-universal-jkfit')
-        mf.mf_source.grids.level = mf.grids.level = 2
-        mf.conv_tol, mf.conv_tol_grad = 1e-12, 1e-9
+        mf.mf_source.grids.level = mf.grids.level = grid_level
+        mf.conv_tol, mf.conv_tol_grad = conv_tol, conv_tol_grad
         mf.max_cycle = 200
-        mf.kernel()
+        mf.kernel(dm0=dm0)
         return mf
 
     start = time.perf_counter()
     mf = build(mol)
     grad = mf.nuc_grad_method().run()
-    indices = [(a, x) for a in range(mol.natm) for x in range(3)] if full_fd else [(1, 2)]
+    if indices is None:
+        indices = [(a, x) for a in range(mol.natm) for x in range(3)] if full_fd else [(1, 2)]
     records = []
+    source = mf.mf_source
+    energies0, occ0 = as_numpy(source.mo_energy), as_numpy(source.mo_occ)
+    spin_blocks = zip(energies0, occ0) if unrestricted else [(energies0, occ0)]
+    gaps = [float(e[o == 0].min() - e[o > 0].max()) for e, o in spin_blocks
+            if np.any(o == 0) and np.any(o > 0)]
     for a, x in indices:
         energies = []
         for sign in (-1, 1):
             coords = mol.atom_coords()
             coords[a, x] += sign*2e-4
             displaced = mol.set_geom_(coords, unit='Bohr', inplace=False)
-            energies.append(build(displaced).e_tot)
+            # Follow the central SCF solution; fully reconverge at each displacement.
+            displaced_mf = build(displaced, dm0=source.make_rdm1())
+            energies.append(displaced_mf.e_tot)
         fd = (energies[1]-energies[0])/4e-4
         records.append(dict(atom=a, axis=x, analytic=float(grad.de[a,x]), fd=fd,
                             error=float(grad.de[a,x]-fd)))
     error = max(abs(r['error']) for r in records)
     result = dict(backend=backend, unrestricted=unrestricted, df=use_df, source=xc,
                   target=target, basis=basis, energy=mf.e_tot, gradient=grad.de.tolist(),
+                  source_gap_ha=gaps, grid_level=grid_level,
+                  conv_tol=conv_tol, conv_tol_grad=conv_tol_grad,
+                  fd_initial_guess='central source density',
                   residual=grad.z_residual_max_abs, fd=records,
                   error_ha_bohr=error, error_ev_ang=error*51.4220674763,
                   elapsed_s=time.perf_counter()-start,
