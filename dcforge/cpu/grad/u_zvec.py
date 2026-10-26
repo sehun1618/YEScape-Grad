@@ -109,7 +109,7 @@ def get_z_residual(zvec, mo_energy, mo_occ, fvo, vind):
 
 
 def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
-                   conv_tol=1e-9, max_cycle=200, log=None):
+                   conv_tol=1e-9, max_cycle=200, log=None, vind=None):
     '''Solve the spin-coupled molecular unrestricted source-SCF Z-vector equation.
 
     The canonical equation is
@@ -134,6 +134,9 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
             AO unrestricted source-SCF response action.
 
     Kwargs:
+        vind : callable or None
+            Optional MO-direct solver action (packed spin layout for UHF).
+            Final physical residuals always use the independent AO action.
         conv_tol : float
             Tolerance passed directly to ``pyscf.scf.ucphf.solve``.
         max_cycle : int
@@ -154,7 +157,9 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     if log is None:
         log = logger.new_logger(verbose=logger.WARN)
 
-    vind = gen_vind(Co, Cv, fvind)
+    ao_vind = gen_vind(Co, Cv, fvind)
+    if vind is None:
+        vind = ao_vind
     occa, occb = mo_occ
     ea, eb = mo_energy
     fvoa, fvob = fvo
@@ -199,7 +204,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
         zvec = (np.zeros_like(fvoa), np.zeros_like(fvob))
         solver = 'zero_dimensional'
 
-    residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, vind)
+    residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, ao_vind)
     rhs_norm_spin = tuple(
         float(np.max(np.abs(x))) if x.size else 0.0 for x in fvo
     )

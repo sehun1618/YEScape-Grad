@@ -8,6 +8,7 @@
 from pyscf.df.grad import rks as df_rks_grad
 from pyscf.lib import logger
 
+from dcforge.cpu.df.grad.response import make_response
 from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad import rnsc
 
@@ -46,6 +47,10 @@ class Gradients(rnsc.Gradients, df_rks_grad.Gradients):
         rnsc.Gradients.__init__(self, mf)
         self.auxbasis_response = True
         self.fock_deriv_method = 'direct'
+        self.response_backend = 'ao' if hasattr(mf.mf_source, 'xc') else 'mo_direct'
+
+    def make_response(self, Co, Cv):
+        return make_response(self, Co, Cv, unrestricted=False)
 
     def get_veff(self, mol=None, dm=None):
         return grid_response.get_veff(self, df_rks_grad.get_veff, mol, dm)

@@ -112,11 +112,12 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
 
     fvind = mf_source.gen_response(
         mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
+    response = mf_grad.make_response(Co, Cv)
     zvec, z_info = solve_z_vector(
         mo_energy, mo_occ, Co, Cv, fvo, fvind,
         conv_tol=mf_grad.cphf_conv_tol,
         max_cycle=mf_grad.cphf_max_cycle,
-        log=log,
+        log=log, vind=None if response is None else response.vind,
     )
     warn_z_residual(log, z_info, mf_grad.cphf_residual_warn_tol)
     mf_grad.zvec = zvec
@@ -145,7 +146,7 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     finally:
         mf_grad.grid_response = grid_response
     de_nvar = nonvariational_correction(
-        mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst)
+        mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst, response=response)
 
     # The same geometry-only D2C derivative applies to RHF and UHF sources.
     # It remains separate from both spin CPHF channels.
@@ -172,7 +173,8 @@ class Gradients(uks_grad.Gradients):
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
         'de_d2c', 'd2c_result', 'source_grid_response', 'grid_response_backend',
-        'grid_response_backend_used',
+        'grid_response_backend_used', 'response_backend', 'response_backend_used',
+        'response_mo_cache_bytes', 'response_mo_setup_s',
     }
 
     def __init__(self, mf):
@@ -189,6 +191,10 @@ class Gradients(uks_grad.Gradients):
         self.cphf_residual_warn_tol = 1e-8
         self.z_residual_warning = None
         self.fock_deriv_method = 'direct'
+        self.response_backend = 'ao'
+        self.response_backend_used = None
+        self.response_mo_cache_bytes = 0
+        self.response_mo_setup_s = 0.
         self.de_d2c = None
         self.d2c_result = None
 
@@ -204,6 +210,7 @@ class Gradients(uks_grad.Gradients):
             self, 'cphf_residual_warn_tol = %s',
             self.cphf_residual_warn_tol)
         logger.info(self, 'fock_deriv_method = %s', self.fock_deriv_method)
+        logger.info(self, 'response_backend = %s', self.response_backend)
         logger.info(self, 'dispersion = %s', self.base.dispersion)
         return self
 
@@ -223,6 +230,14 @@ class Gradients(uks_grad.Gradients):
             "fock_deriv_method must be 'make_h1' or 'direct'; "
             f'got {method!r}'
         )
+
+    def make_response(self, Co, Cv):
+        """Conventional/source-DFA response uses the existing AO provider."""
+        self.response_backend_used = None
+        if self.response_backend != 'ao':
+            raise ValueError("conventional CPU response_backend must be 'ao'")
+        self.response_backend_used = 'ao'
+        return None
 
     @log_kernel_time('Gradient workflow')
     def kernel(self, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):

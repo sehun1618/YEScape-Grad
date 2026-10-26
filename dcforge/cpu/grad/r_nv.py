@@ -133,7 +133,7 @@ def grad_ovlp_response_full(Co, Cv, zvec, s1oo, fvind):
     return 2 * lib.einsum('ai,kxai->kx', zvec, v1vo)
 
 
-def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
+def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind, response=None):
     '''Return the overlap response with one self-adjoint source response.
 
     The full perturbation route contracts one source-SCF response for every
@@ -162,14 +162,17 @@ def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
         ndarray of shape (nset, 3)
             Overlap-density response contribution in Ha/Bohr.
     '''
-    dz = Cv @ zvec @ Co.conj().T
-    vz = fvind(dz + dz.conj().T)
-    vz_oo = Co.conj().T @ vz @ Co
+    if response is None:
+        dz = Cv @ zvec @ Co.conj().T
+        vz = fvind(dz + dz.conj().T)
+        vz_oo = Co.conj().T @ vz @ Co
+    else:
+        vz_oo = response.oo(zvec)
     return 4 * lib.einsum('kxij,ij->kx', s1oo, vz_oo).real
 
 
 def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
-                              de_fock, fvind, atmlst=None):
+                              de_fock, fvind, atmlst=None, response=None):
     '''Assemble the perturbation-specific ``4 Z^dagger V^lambda`` correction.
 
     The perturbation-specific source is
@@ -200,6 +203,8 @@ def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
             AO source-SCF response action.
 
     Kwargs:
+        response : MOResponse or None
+            Per-call DF-HF provider; None uses the existing AO response.
         atmlst : sequence of int or None
             Nuclear centers included in the gradient. All atoms are used when
             omitted.
@@ -216,7 +221,7 @@ def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
 
     s1oo, s1vo = make_s1_oo_vo(mol, Co, Cv, s1, atmlst)
     de_ovlp_energy = grad_ovlp_energy(s1vo, e_occ, zvec)
-    de_ovlp_response = grad_ovlp_response(Co, Cv, zvec, s1oo, fvind)
+    de_ovlp_response = grad_ovlp_response(Co, Cv, zvec, s1oo, fvind, response)
 
     mf_grad.s1oo = s1oo
     mf_grad.s1vo = s1vo

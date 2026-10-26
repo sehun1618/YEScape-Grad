@@ -55,7 +55,7 @@ def _relative_residual(abs_residual, rhs_norm):
 
 
 def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
-                   conv_tol=1e-9, max_cycle=200, log=None):
+                   conv_tol=1e-9, max_cycle=200, log=None, vind=None):
     '''Solve the molecular restricted source Z-vector equation with PySCF CPHF.
 
     The canonical equation is
@@ -82,6 +82,9 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
             AO source-SCF response returned by ``mf_source.gen_response``.
 
     Kwargs:
+        vind : callable or None
+            Optional MO-direct solver action (packed spin layout for UHF).
+            Final physical residuals always use the independent AO action.
         conv_tol : float
             Krylov tolerance passed directly to ``pyscf.scf.cphf.solve``.
             It is not interpreted as a bound on the reconstructed physical
@@ -122,7 +125,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     nocc = Co.shape[1]
     nvir = Cv.shape[1]
 
-    def vind(x):
+    def ao_vind(x):
         '''Apply the density-response part (J/K and source fxc) of ``(A+B)^source`` in the VO space.'''
         shape = np.asarray(x).shape
         x = np.asarray(x).reshape(-1, nvir, nocc)
@@ -143,8 +146,9 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     # Omitting s1 selects PySCF's fixed-metric VO CPHF equation.  Supplying
     # s1 is required instead for direct U^lambda response to a nuclear
     # displacement, as in pyscf.hessian.rhf.solve_mo1.
-    zvec, _ = solve_cphf(cphf, vind, mo_energy, mo_occ, fvo, s1=None,
-                         max_cycle=max_cycle, tol=conv_tol, verbose=log)
+    zvec, _ = solve_cphf(
+        cphf, ao_vind if vind is None else vind, mo_energy, mo_occ, fvo,
+        s1=None, max_cycle=max_cycle, tol=conv_tol, verbose=log)
 
     # PySCF solves (A+B)^source x = -F^target_vo.  DC-Forge exposes the textbook
     # positive-RHS vector Z satisfying [(A+B)^source]^T Z = F^target_vo.
@@ -153,7 +157,7 @@ def solve_z_vector(mo_energy, mo_occ, Co, Cv, fvo, fvind,
     # PySCF's second return value is not a convergence flag in the s1=None
     # route.  Reconstruct the physical equation residual for diagnostics.
     rhs_norm = float(np.max(np.abs(fvo))) if fvo.size else 0.0
-    residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, vind)
+    residual = get_z_residual(zvec, mo_energy, mo_occ, fvo, ao_vind)
     abs_residual = float(np.max(np.abs(residual))) if residual.size else 0.0
     rel_residual = _relative_residual(abs_residual, rhs_norm)
 

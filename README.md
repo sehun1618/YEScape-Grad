@@ -25,6 +25,35 @@ Ha/Bohr; force is minus gradient. Source and target have independent grids.
 Explicit `kernel(run_source=False)` reuses supplied orbitals: the caller
 is responsible for stationarity, and an unconverged flag produces a warning.
 
+## CPU response backend
+
+For a **density-fitted HF source**, both restricted and unrestricted CPU gradients
+now default to `response_backend='mo_direct'`. Conventional and DFA-source gradients
+use `'ao'`; the HF-only MO provider must not be used for a DFA source's XC kernel.
+The target functional does not select the response backend.
+
+```python
+mf = RNSC(mol, xc='PBE').density_fit()  # UNSC works the same way
+mf.kernel()
+grad = mf.nuc_grad_method()
+g = grad.kernel()                       # DF-HF: MO-direct by default
+print(grad.response_backend_used)       # actual route, including memory fallback
+# Reference route: mf.nuc_grad_method().set(response_backend='ao').kernel()
+```
+
+CPU MO-direct transforms and caches DF OO/VO/VV factors once per gradient call,
+including spin-coupled Coulomb and spin-local exchange for UHF. It has an additional
+`O(naux*nmo^2)` cache/setup cost; it is not always faster or smaller than AO.
+The cache is local to the call and rebuilt after geometry/orbital changes.
+If estimated cache plus workspace exceeds 80% of the remaining `max_memory` budget,
+the driver logs a warning and uses AO. `response_mo_cache_bytes` and
+`response_mo_setup_s` expose cache size and setup wall time. No persistent MO cache
+is retained between calls. The final physical Z residual is checked with the AO
+operator even when the solve uses MO-direct.
+
+This response choice is independent of `fock_deriv_method='direct'`, which controls
+source-Fock nuclear derivative contractions. GPU paths are unchanged.
+
 ## Installation
 
 Requires Python 3.11+. Use a separate environment.

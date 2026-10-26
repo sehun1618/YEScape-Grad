@@ -34,7 +34,7 @@ def grad_ovlp_energy(s1vo, e_occ, zvec):
     return de
 
 
-def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
+def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind, response=None):
     '''Return the overlap-Hessian term with one adjoint source response.
 
     The direct legacy order builds ``3*natm`` spin-density perturbations from
@@ -67,22 +67,23 @@ def grad_ovlp_response(Co, Cv, zvec, s1oo, fvind):
         not one four-index ``einsum``. This follows the faster contraction
         ordering identified in the legacy CPU/GPU comparison.
     '''
-    dmz = []
-    for Co_s, Cv_s, z_s in zip(Co, Cv, zvec):
-        dz = Cv_s @ z_s @ Co_s.conj().T
-        dmz.append(dz + dz.conj().T)
-
-    vz = fvind(np.asarray(dmz))
+    if response is None:
+        dmz = []
+        for Co_s, Cv_s, z_s in zip(Co, Cv, zvec):
+            dz = Cv_s @ z_s @ Co_s.conj().T
+            dmz.append(dz + dz.conj().T)
+        vz = fvind(np.asarray(dmz))
+        blocks = [o.conj().T @ v @ o for o, v in zip(Co, vz)]
+    else:
+        blocks = response.oo(zvec)
     de = np.zeros(s1oo[0].shape[:2])
-    for Co_s, s1oo_s, vz_s in zip(Co, s1oo, vz):
-        tmp = Co_s.conj().T @ vz_s
-        vzoo = tmp @ Co_s
-        de += np.real(lib.einsum('kxij,ij->kx', s1oo_s, vzoo))
+    for s, v in zip(s1oo, blocks):
+        de += np.real(lib.einsum('kxij,ij->kx', s, v))
     return de
 
 
 def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
-                              de_fock, fvind, atmlst=None):
+                              de_fock, fvind, atmlst=None, response=None):
     '''Assemble the spin-resolved ``2 sum_σ Z^σ V^lambda_σ`` correction.
 
     Args:
@@ -102,6 +103,8 @@ def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
             Coupled alpha/beta AO source response.
 
     Kwargs:
+        response : MOResponse or None
+            Per-call DF-HF provider; None uses the existing AO response.
         atmlst : sequence of int or None
             Nuclear centers included in the gradient.
 
@@ -124,7 +127,7 @@ def nonvariational_correction(mf_grad, Co, Cv, mo_energy, zvec, s1,
         e_occ.append(e_s[:Co_s.shape[1]])
 
     de_ovlp_energy = grad_ovlp_energy(s1vo, e_occ, zvec)
-    de_ovlp_response = grad_ovlp_response(Co, Cv, zvec, s1oo, fvind)
+    de_ovlp_response = grad_ovlp_response(Co, Cv, zvec, s1oo, fvind, response)
 
     mf_grad.de_fock = de_fock
     mf_grad.de_ovlp_energy = de_ovlp_energy

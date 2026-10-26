@@ -8,6 +8,7 @@
 from pyscf.df.grad import uks as df_uks_grad
 from pyscf.lib import logger
 
+from dcforge.cpu.df.grad.response import make_response
 from dcforge.cpu.grad import grid_response
 from dcforge.cpu.grad import unsc
 
@@ -27,6 +28,10 @@ class Gradients(unsc.Gradients, df_uks_grad.Gradients):
         unsc.Gradients.__init__(self, mf)
         self.auxbasis_response = True
         self.fock_deriv_method = 'direct'
+        self.response_backend = 'ao' if hasattr(mf.mf_source, 'xc') else 'mo_direct'
+
+    def make_response(self, Co, Cv):
+        return make_response(self, Co, Cv, unrestricted=True)
 
     def get_veff(self, mol=None, dm=None):
         return grid_response.get_veff(self, df_uks_grad.get_veff, mol, dm)
