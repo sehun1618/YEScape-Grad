@@ -153,3 +153,26 @@ The test requires native cuTENSOR and checks one FD component for each of
 eight HF/KS-source, R/U, conventional/DF cases. This is an installation
 check, not a replacement for the full numerical suite. Detailed local
 reports and logs are stored under `results/publication_check/`.
+
+
+### GPU4PySCF 1.9.0 compatibility validation
+
+The current dependency target is PySCF 2.14.0 / GPU4PySCF 1.9.0.
+The 1.8.1 results above are historical and were not relabeled as 1.9 results.
+The 1.9 upgrade checks used CuPy 14.0.1 and native cuTENSOR 2.6.0 on CUDA 13:
+
+- CPHF, source J/K and DF memory tests: 92 passed, 2 expected failures.
+- The expected failures are native restricted CPHF nonzero-level-shift
+  broadcasting cases; the default zero-level-shift path is tested separately.
+- 28 small-molecule cases covered HF/PBE/r2SCAN/CAM-B3LYP/LC-WPBE/HSE06
+  sources with restricted/unrestricted and conventional/DF paths.
+- Maximum gradient change when switching to native 1.9 CPHF was
+  7.35e-14 Ha/Bohr; maximum sampled-coordinate FD error was 2.15e-7 Ha/Bohr.
+
+This is focused compatibility validation, not a fresh-install certification
+or a repeat of the full publication validation matrix above. Run the focused
+checks from the repository root in the selected GPU environment:
+
+```bash
+python -m pytest tests/unit/test_cphf.py tests/unit/test_source_jk.py tests/unit/test_gpu_memory.py -q
+```

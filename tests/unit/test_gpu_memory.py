@@ -65,3 +65,39 @@ def test_explicit_limit_remains_strict():
     assert memory.normalize_fock_deriv_planner_limit("adaptive") == "adaptive"
     assert memory.normalize_fock_deriv_planner_limit(1234) == 1234
     assert memory.normalize_fock_deriv_planner_limit(None) is None
+
+
+@pytest.mark.parametrize("sum_results", [False, True])
+@pytest.mark.parametrize("n_dm", [1, 3])
+def test_190_batch_fits_upstream_minimum(sum_results, n_dm):
+    opt = FakeInt3c2eOpt(5000, 100, 10_000_000)
+    dm = FakeDM(10, 10, 0)
+    plan = memory.adaptive_derivative_planner_limit(
+        opt, [[dm, dm]] * n_dm, sum_results=sum_results)
+    buffers = 2 if sum_results else n_dm
+    batch = int((plan["resolved_limit_bytes"] - plan["fixed_intermediate_bytes"])
+                * .5 / (buffers * opt.nao_pair * 8))
+    assert batch >= plan["minimum_aux_batch_size"]
+
+
+@pytest.mark.parametrize("pair_form", ["list", "single"])
+def test_overcomplete_factors_are_refactored_without_changing_density(monkeypatch, pair_form):
+    import cupy as cp
+    from gpu4pyscf.lib.cupy_helper import tag_array
+    dm = tag_array(cp.eye(3), factor_l=cp.ones((3, 2)),
+                   factor_r=cp.ones((3, 2)), symmetrize=1)
+    regular = cp.eye(3)
+    pairs = [[dm, regular]] if pair_form == "list" else [dm]
+    def upstream(opt, received, **kwargs):
+        normalized = received[0][0] if pair_form == "list" else received[0]
+        assert not hasattr(normalized, "factor_l")
+        cp.testing.assert_array_equal(normalized, dm)
+        assert normalized.data.ptr == dm.data.ptr
+        if pair_form == "list":
+            assert received[0][1] is regular
+        return 123
+    monkeypatch.setattr(memory.df_tdrhf_grad, "_jk_energies_per_atom", upstream)
+    grad = SimpleNamespace(fock_deriv_planner_limit_bytes=None)
+    assert memory.jk_energies_per_atom_bounded(
+        grad, FakeInt3c2eOpt(3, 5, 6), pairs, j_factor=[1],
+        k_factor=[1], sum_results=True, verbose=0) == 123

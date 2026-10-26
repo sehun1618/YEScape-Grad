@@ -10,6 +10,7 @@ from operator import index
 from threading import RLock
 
 import gpu4pyscf
+import cupy as cp
 from gpu4pyscf.df.grad import tdrhf as df_tdrhf_grad
 
 ADAPTIVE_FOCK_DERIV_PLANNER_LIMIT = "adaptive"
@@ -78,7 +79,8 @@ def _round_up(value, quantum):
 
 
 def adaptive_derivative_planner_limit(
-    int3c2e_opt, dm_pairs, workspace_bytes=DEFAULT_FOCK_DERIV_PLANNER_WORKSPACE_BYTES
+    int3c2e_opt, dm_pairs, workspace_bytes=DEFAULT_FOCK_DERIV_PLANNER_WORKSPACE_BYTES,
+    *, sum_results=True,
 ):
     """Estimate a size-aware ceiling for GPU4PySCF DF derivatives.
 
@@ -97,6 +99,8 @@ def adaptive_derivative_planner_limit(
             Density-matrix pairs passed to ``_jk_energies_per_atom``.
         workspace_bytes : int
             Small-system ceiling and extra auxiliary-batch headroom.
+        sum_results : bool
+            Whether upstream sums density-pair contributions into two buffers.
 
     Returns:
         dict
@@ -131,8 +135,12 @@ def adaptive_derivative_planner_limit(
     nao_pair = len(pair_addresses)
     laux = int(int3c2e_opt.auxmol.uniq_l_ctr[:, 0].max())
     minimum_aux_batch_size = (laux + 1) * (laux + 2) // 2 + 1
+    # GPU4PySCF 1.9 uses two AO-pair buffers when summing observables,
+    # independently of the number of density pairs. The planner reserves
+    # only half of its remaining memory for these buffers.
+    n_pair_buffers = 2 if sum_results else n_dm
     minimum_batch_workspace_bytes = (
-        2 * n_dm * nao_pair * 8 * minimum_aux_batch_size
+        2 * n_pair_buffers * nao_pair * 8 * minimum_aux_batch_size
     )
     minimum_required_bytes = (
         fixed_intermediate_bytes + minimum_batch_workspace_bytes
@@ -165,7 +173,7 @@ def adaptive_derivative_planner_limit(
 def bounded_derivative_planner(limit_bytes):
     """Temporarily bound the upstream derivative planner's free-memory view.
 
-    GPU4PySCF 1.8.1 derives both the auxiliary batch and dense AO block from
+    GPU4PySCF 1.9.0 derives both the auxiliary batch and dense AO block from
     its module-local ``get_avail_mem`` symbol.  The adapter caps only that
     planning query; it does not impose a CuPy pool limit or change integral
     precision.  A process-wide lock serializes DC-Forge adapter scopes, and
@@ -219,6 +227,16 @@ def jk_energies_per_atom_bounded(
     mf_grad, int3c2e_opt, dm_pairs, *, j_factor, k_factor, sum_results, verbose
 ):
     """Call the private upstream derivative kernel under the configured ceiling."""
+    # Symmetrizing an occupied/transition factor can give 2*nocc > nao.
+    # The 1.9 derivative contraction uses an AO-sized transpose workspace.
+    # For this case only, let upstream refactor the identical dense density
+    # (rank <= nao); retain inexpensive tagged factors for the usual case.
+    nao = int(int3c2e_opt.mol.nao)
+    dm_pairs = [
+        [dm.view(cp.ndarray) if _factor_rank(dm, nao) > nao else dm
+         for dm in pair] if isinstance(pair, (tuple, list)) else (pair.view(cp.ndarray) if _factor_rank(pair, nao) > nao else pair)
+        for pair in dm_pairs
+    ]
     requested_limit = getattr(
         mf_grad,
         "fock_deriv_planner_limit_bytes",
@@ -227,7 +245,8 @@ def jk_energies_per_atom_bounded(
     requested_limit = normalize_fock_deriv_planner_limit(requested_limit)
     model = None
     if requested_limit == ADAPTIVE_FOCK_DERIV_PLANNER_LIMIT:
-        model = adaptive_derivative_planner_limit(int3c2e_opt, dm_pairs)
+        model = adaptive_derivative_planner_limit(
+            int3c2e_opt, dm_pairs, sum_results=sum_results)
         limit_bytes = model["resolved_limit_bytes"]
     else:
         limit_bytes = requested_limit

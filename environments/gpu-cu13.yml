@@ -1,4 +1,4 @@
-# Installed dependency snapshot; not a fresh-environment GPU certification.
+# PySCF 2.14.0 / GPU4PySCF 1.9.0; not a fresh-environment certification.
 # Requires a compatible NVIDIA driver. Toolkit/compiler installation is separate.
 name: dcforge-gpu-cu13
 channels:
@@ -12,5 +12,6 @@ dependencies:
       - pyscf==2.14.0
       - pytest==8.4.2
       - cupy-cuda13x==14.0.1
-      - gpu4pyscf-cuda13x==1.8.1
+      - cutensor-cu13==2.6.0
+      - gpu4pyscf-cuda13x==1.9.0
       - gpu4pyscf-libxc-cuda13x==0.8.1

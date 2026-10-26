@@ -166,3 +166,26 @@ def test_uhf_single_active_spin_uses_fixed_cphf(device, active_spin):
         zvec, info = module.solve_z_vector(energy, occ, fvo, vind, conv_tol=1e-11)
     assert info['residual_max_abs'] < 1e-20
     assert float(xp.max(xp.abs(zvec[active_spin] - fvo[active_spin]))) < 1e-20
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize('unrestricted', [False, True])
+def test_gpu_190_uses_native_solver_without_rebinding(unrestricted, monkeypatch):
+    gpu4pyscf = pytest.importorskip('gpu4pyscf')
+    if np.lib.NumpyVersion(gpu4pyscf.__version__) < '1.9.0':
+        pytest.skip('Native cutoff requires GPU4PySCF 1.9')
+    import dcforge.tools.cphf as adapter
+    def unexpected(*args, **kwargs):
+        raise AssertionError('1.9 must not rebind solver globals')
+    monkeypatch.setattr(adapter, '_bind_globals', unexpected)
+    test_cphf_against_diagonal_solution('gpu4pyscf', unrestricted, False, 2, 0.)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize('tol', [0, -1, float('nan'), float('inf')])
+def test_gpu_invalid_tolerance(tol):
+    import cupy as cp
+    from gpu4pyscf.scf import cphf as gpu_cphf
+    with pytest.raises(ValueError, match='finite and positive'):
+        solve(gpu_cphf, lambda x: x, cp.array([-.5, .5]), cp.array([2., 0.]),
+              cp.ones((1, 1)), tol=tol)

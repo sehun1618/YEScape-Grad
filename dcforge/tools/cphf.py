@@ -16,12 +16,15 @@ function globals bind only their Krylov call; neither site-packages nor
 process-wide PySCF/GPU4PySCF functions are monkeypatched. This matters when
 independent solvers run concurrently or a response callback nests a solve.
 
-On upgrading PySCF (notably 2.15), check BOTH CPHF/UCPHF and Krylov QR before
-retiring this shim. GPU4PySCF has its own solvers and needs a separate check.
+GPU4PySCF >= 1.9.0 uses its native CPHF/UCPHF implementation, which already
+sets this cutoff in both overlap branches. Older GPU versions and CPU PySCF
+retain the local shim. Before retiring the CPU shim, check BOTH CPHF/UCPHF
+and Krylov QR (notably on upgrading to PySCF 2.15).
 The epsilon floor is upstream policy, NOT a physical-residual guarantee.
 Keep the caller's independent residual checks and existing fallback policy.
 '''
 
+from inspect import signature
 from types import FunctionType, SimpleNamespace
 
 import numpy as np
@@ -54,8 +57,17 @@ def solve(module, *args, **kwargs):
         unrelated native PySCF calls and the separate mixed-Z3 solver are
         not modified. The linear-dependence cutoff is never below machine eps.
     '''
-    namespace = vars(module).copy()
+    bound = signature(module.solve).bind(*args, **kwargs)
+    bound.apply_defaults()
+    tol = float(bound.arguments['tol'])
+    if not np.isfinite(tol) or tol <= 0:
+        raise ValueError('CPHF tolerance must be finite and positive')
     gpu = module.__name__.startswith('gpu4pyscf.')
+    if gpu:
+        import gpu4pyscf
+        if np.lib.NumpyVersion(gpu4pyscf.__version__) >= '1.9.0':
+            return module.solve(*args, **kwargs)
+    namespace = vars(module).copy()
     native_krylov = namespace['krylov'] if gpu else namespace['lib'].krylov
 
     def krylov(aop, b, **options):
