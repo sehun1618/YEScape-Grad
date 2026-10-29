@@ -203,9 +203,9 @@ def test_total_time_repeats_and_failure(monkeypatch):
         energy(mf, fail=True)
     gradient(grad)
     totals = [s for s in mf.stdout.getvalue().splitlines() if s.startswith('Total')]
-    assert totals == ['Total wall time = 103.000 s',
-                      'Total wall time = 204.000 s',
-                      'Total wall time = 5.000 s']
+    assert totals == ['Total wall time = 5.000 s',
+                      'Total wall time = 6.000 s',
+                      'Total wall time (gradient only; source reused) = 5.000 s']
 
 
 def test_nested_energy_time_is_not_counted_twice(monkeypatch):
@@ -224,3 +224,44 @@ def test_nested_energy_time_is_not_counted_twice(monkeypatch):
 
     gradient(grad)
     assert 'Total wall time = 5.000 s' in mf.stdout.getvalue()
+
+
+@pytest.mark.parametrize('options', [{'run_source':False}, {'run_hf':False}])
+def test_reused_source_has_distinct_timing_label(monkeypatch, options):
+    ticks=iter([0.,2.,100.,103.])
+    monkeypatch.setattr(result_logger,'perf_counter',lambda:next(ticks))
+    mf=SimpleNamespace(verbose=3,stdout=StringIO())
+    grad=SimpleNamespace(base=mf,verbose=3,stdout=mf.stdout)
+    @result_logger.log_kernel_time('Energy workflow')
+    def energy(self, run_source=True, *, run_hf=None):pass
+    @result_logger.log_kernel_time('Gradient workflow')
+    def gradient(self):pass
+    energy(mf,**options);gradient(grad)
+    text=mf.stdout.getvalue()
+    assert 'Target-energy evaluation (source reused) wall time = 2.000 s' in text
+    assert 'Total wall time (source reused) = 5.000 s' in text
+    assert 'Energy workflow wall time' not in text
+
+
+def test_energy_timer_includes_source_and_target_and_synchronizes(monkeypatch):
+    now=[0.];events=[]
+    monkeypatch.setattr(result_logger,'perf_counter',lambda:now[0])
+    monkeypatch.setattr(result_logger,'_synchronize',lambda obj:events.append(now[0]))
+    mf=SimpleNamespace(verbose=3,stdout=StringIO())
+    @result_logger.log_kernel_time('Energy workflow')
+    def energy(self):
+        now[0]+=7.  # source SCF
+        now[0]+=2.  # target evaluation
+    energy(mf)
+    assert events==[0.,9.]
+    assert 'Energy workflow wall time = 9.000 s' in mf.stdout.getvalue()
+
+
+@pytest.mark.parametrize('backend', ['cpu', pytest.param('gpu', marks=pytest.mark.gpu)])
+@pytest.mark.parametrize('name', ['RNSC', 'UNSC'])
+def test_reset_discards_previous_energy_timing(backend, name):
+    cls=getattr(import_module(f'dcforge.{backend}.energy'),name)
+    mf=cls(gto.M(atom='He 0 0 0',basis='sto-3g',verbose=0))
+    mf._last_energy_timing=(0.,123.)
+    mf.reset()
+    assert mf._last_energy_timing is None

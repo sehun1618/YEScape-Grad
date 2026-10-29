@@ -1,5 +1,5 @@
 include README.md
-recursive-include third_party *
+include LICENSE
 recursive-include examples *.py
 recursive-include tests/structures *.xyz
 recursive-include tests *.py *.md

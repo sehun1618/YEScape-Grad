@@ -8,11 +8,12 @@
 These helpers only read completed results. They never evaluate energy, Fock,
 response, or residuals. Total energy and forces print at every verbosity.
 NOTE adds summaries and timings; INFO adds settings and detailed diagnostics.
-No output file, verbosity switch, GPU timer or persistence format is introduced.
-Public kernels report host elapsed time without GPU synchronization.
+No output file, verbosity switch or persistence format is introduced.
+Public kernels report host elapsed time with GPU synchronization at boundaries.
 '''
 
 from functools import wraps
+from inspect import signature
 from time import perf_counter
 
 import numpy as np
@@ -20,32 +21,54 @@ from pyscf.lib import logger
 from pyscf.grad.rhf import _write
 
 
-def log_kernel_time(label):
-    '''Log successful kernel elapsed time at NOTE level and above.
+def _synchronize(obj):
+    if any(cls.__module__.startswith('dcforge.gpu.') for cls in type(obj).__mro__):
+        import cupy
+        cupy.cuda.get_current_stream().synchronize()
 
-    This is host wall time, not CPU process time or a CUDA-event profile.
-    Do not synchronize GPUs or change PySCF's process-wide TIMER_LEVEL.
-    A local start time prevents reuse of stale timings across repeated calls.
-    '''
+
+def log_kernel_time(label):
+    """Measure one successful call, including source SCF inside energy kernels.
+
+    Explicit source reuse is labeled separately. Total is the latest energy
+    duration plus this gradient duration, excluding idle time between calls.
+    An energy call nested inside a gradient is already included in that gradient.
+    """
     def decorate(kernel):
+        call_signature = signature(kernel)
+
         @wraps(kernel)
         def timed(self, *args, **kwargs):
-            start = perf_counter()
+            reused = False
             if label == 'Energy workflow':
                 self._last_energy_timing = None
+                bound = call_signature.bind(self, *args, **kwargs)
+                bound.apply_defaults()
+                run_source = bound.arguments.get('run_source', True)
+                run_hf = bound.arguments.get('run_hf')
+                reused = not (run_source if run_hf is None else run_hf)
+                self._last_energy_source_reused = reused
+            _synchronize(self)
+            start = perf_counter()
             result = kernel(self, *args, **kwargs)
+            _synchronize(self)
             end = perf_counter()
             elapsed = end-start
             log = logger.new_logger(self)
-            logger.note(log, '%s wall time = %.3f s', label, elapsed)
+            display = 'Target-energy evaluation (source reused)' if reused else label
+            logger.note(log, '%s wall time = %.3f s', display, elapsed)
             if label == 'Energy workflow':
                 self._last_energy_timing = (start, elapsed)
             elif label == 'Gradient workflow':
+                self._last_gradient_timing = (start, elapsed)
                 energy = getattr(self.base, '_last_energy_timing', None)
-                # Measure the actual interval, including time between calls.
-                # Nested energy must not exclude the start of the gradient.
-                total_start = min(start, energy[0]) if energy is not None else start
-                logger.note(log, 'Total wall time = %.3f s', end-total_start)
+                if energy is not None:
+                    total = elapsed + energy[1] if energy[0] < start else elapsed
+                    suffix = ' (source reused)' if getattr(
+                        self.base, '_last_energy_source_reused', False) else ''
+                    logger.note(log, 'Total wall time%s = %.3f s', suffix, total)
+                else:
+                    logger.note(log, 'Total wall time (gradient only; source reused) = %.3f s', elapsed)
             return result
         return timed
     return decorate

@@ -8,27 +8,8 @@ sources: LDA, GGA, tau-dependent meta-GGA, global hybrids and RSH. Target SCF
 is never performed. A density alone is insufficient: its stationary source
 SCF, orbital energies and response kernel define the gradient.
 
-```python
-from pyscf import gto
-from dcforge.cpu.energy import RNSC  # GPU: dcforge.gpu.energy
-
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587', basis='def2-svp')
-mf = RNSC(mol, xc='r2SCAN', source_xc='PBE').density_fit()
-mf.mf_source.grids.level = 4  # source SCF and its response
-mf.grids.level = 4            # fixed-density target evaluation
-energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()
-```
-
-Use `UNSC` for unrestricted sources. Energies are in Ha and gradients in
-Ha/Bohr; force is minus gradient. Source and target have independent grids.
-Explicit `kernel(run_source=False)` reuses supplied orbitals: the caller
-is responsible for stationarity, and an unconverged flag produces a warning.
 
 ## Installation
-
-Requires Python 3.11+. Use a separate environment.
-Run the commands below from the repository root.
 
 ### CPU
 
@@ -70,30 +51,6 @@ python -m pip check
 - DC-Forge does not install GPU packages, drivers, or the Toolkit.
 - The table lists installation choices, not validated configurations.
   Run the GPU tests on your environment.
-
-This checkout targets **PySCF 2.14.0 and GPU4PySCF 1.9.0**.
-This combination was checked with
-CUDA 13 on molecular restricted/unrestricted conventional/DF cases.
-The CUDA 12 command above is an installation example, not a tested configuration.
-`environments/gpu-cu13.yml` records the dependency pins; it is not a
-fresh-install certification. The recipe pins `cutensor-cu13==2.6.0`; merely
-installing it is not proof that the native contraction engine was selected.
-The runtime checks used an existing environment
-with native cuTENSOR enabled. Verify the selected contraction engine explicitly:
-
-```python
-import cupy as cp
-from gpu4pyscf.lib import cutensor
-assert cutensor.cutensor is not None and cutensor.contract_engine is None
-cp.testing.assert_allclose(
-    cutensor.contract('ij,jk->ik', cp.ones((2, 3)), cp.ones((3, 2))), 3)
-```
-
-GPU4PySCF 1.9.0 uses its native CPHF/UCPHF cutoff policy. GPU4PySCF 1.8.1
-and CPU PySCF retain DC-Forge's local compatibility layer. Neither policy
-makes `tol` a guarantee on the independently measured physical Z residual.
-The DF memory planner targets the 1.9 allocation layout; the 1.8.1 numerical
-cross-check is not a certification of large-system memory behavior.
 
 ### Optional libraries
 
@@ -173,6 +130,12 @@ DC-Forge prints total energy and forces at every verbose level. Level 3 adds
 result summaries and wall times; level 4 adds calculation settings and detailed
 diagnostics. PySCF internal logs follow the same `verbose` setting.
 The printed forces are `-gradient`; the gradient API still returns `dE/dR`.
+
+At verbosity 3 or above, `Energy workflow` includes source SCF and target
+energy evaluation. `Total` adds energy and gradient kernel durations, excluding
+idle time between calls. GPU timings synchronize the current stream at kernel
+boundaries. Explicit source reuse is labeled separately and excludes the earlier
+SCF; imports, external setup and file saving are outside these kernel timers.
 
 ### Conventional and density-fitted calculations
 
@@ -266,8 +229,3 @@ raise an error rather than falling back to ordinary D4.
 
 Developed by Sehun Kim <sehun1618@yonsei.ac.kr>,
 Theoretical and Computational Chemistry Laboratory (TCCL), Yonsei University.
-
-Original source comments, scientific citations and upstream attribution are
-preserved. Upstream license notices are in `third_party/`. These notices do
-not themselves license DC-Forge's original contributions. A project-wide
-license must be chosen by the rights holders before public distribution.

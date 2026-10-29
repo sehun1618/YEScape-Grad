@@ -207,8 +207,7 @@ class RNSC(SourceAPI, rks.RKS):
         '''Reset source and target GPU objects to the same molecule.'''
         rks.RKS.reset(self, mol)
         self.mf_source.reset(mol)
-        self.e_source = self.e_dft = self.e_d2c = self.dm_source = None
-        self.d2c_result = None
+        _clear_target_state(self)
         return self
 
     def density_fit(self, auxbasis=None, with_df=None, only_dfj=False):

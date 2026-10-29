@@ -7,7 +7,8 @@ name = "dc-forge"
 version = "0.0.1"
 description = "Molecular density-corrected DFT energies and analytic gradients with PySCF"
 readme = "README.md"
-license-files = ["third_party/pyscf/LICENSE", "third_party/pyscf/NOTICE", "third_party/gpu4pyscf/LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
