@@ -21,14 +21,15 @@ from gpu4pyscf.hessian.rks import get_dweight_dA
 from gpu4pyscf.dft.numint import _GDFTOpt
 
 
-def _features(ao, dm, deriv=None, xctype='GGA'):
+def _features(ao, dm, deriv=None, xctype='GGA', ad=None):
     '''Density, spatial gradient and tau; optionally their nuclear derivative.
 
     ao and deriv have shape (4, ngrid, nao); dm is real symmetric and may be
     indefinite (the Z transition density). No positive-density assumption is
     made here. LibXC itself is evaluated only at the physical source density.
     '''
-    ad = ao @ dm
+    if ad is None:
+        ad = ao @ dm
     dot = lambda a, b: contract('gi,gi->g', a, b)
     if deriv is None:
         values = [dot(ao[0], ad[0])]
@@ -44,6 +45,32 @@ def _features(ao, dm, deriv=None, xctype='GGA'):
         if xctype == 'MGGA':
             values.append(sum(dot(deriv[k], ad[k]) for k in range(1, 4)))
     return cp.stack(values)
+
+
+def _ao_nuclear_terms(ao, ap, aq, fq, v, weights, xctype):
+    """Contract once per AO; atom dependence is only its center and grid owner.
+
+    For features (rho, grad rho, tau), combine their derivatives into
+    sum_k dAO_k * Y_k. P/Q and spin contributions share the same AO derivatives.
+    The tau derivative has no factor 2 because tau itself contains 1/2.
+    """
+    ncomp = 1 if xctype == 'LDA' else 4
+    y = cp.zeros_like(ap[0][:ncomp])
+    for products, coefficients in ((ap, fq), (aq, v)):
+        cs = coefficients.reshape(len(products), -1, len(weights))
+        for ad, c in zip(products, cs):
+            w = c * weights
+            y[0] += 2 * w[0, :, None] * ad[0]
+            if xctype != 'LDA':
+                for k in range(1, 4):
+                    y[0] += 2 * w[k, :, None] * ad[k]
+                    y[k] += 2 * w[k, :, None] * ad[0]
+                    if xctype == 'MGGA':
+                        y[k] += w[4, :, None] * ad[k]
+    second = ((4, 5, 6), (5, 7, 8), (6, 8, 9))
+    return cp.stack([sum(contract('gi,gi->i', ao[j], y[k])
+                         for k, j in enumerate((axis+1, *second[axis])[:ncomp]))
+                     for axis in range(3)])
 
 
 def grad_xc_fock(source, dm, transition_dm, atmlst, block_size=2048,
@@ -105,16 +132,16 @@ def grad_xc_fock(source, dm, transition_dm, atmlst, block_size=2048,
     p = cp.asarray(dm).reshape(-1, mol.nao, mol.nao)
     q = cp.asarray(transition_dm).reshape(p.shape)
     slices = mol.aoslice_by_atom()[:, 2:]
-    # AO derivatives: x, y, z; xx, xy, xz; xy, yy, yz; xz, yz, zz.
-    second = ((4, 5, 6), (5, 7, 8), (6, 8, 9))
     out = cp.zeros((len(atmlst), 3))
     for owner, (coords, weights, weight1) in enumerate(grid_iterator(grids)):
         for lo in range(0, len(weights), block_size):
             hi = min(lo + block_size, len(weights))
             ao = eval_ao(coords[lo:hi])
             a = ao[:4]
-            rho = cp.stack([_features(a, d, xctype=xctype) for d in p])
-            rq = cp.stack([_features(a, d, xctype=xctype) for d in q])
+            ap = [a @ d for d in p]
+            aq = [a @ d for d in q]
+            rho = cp.stack([_features(a, d, xctype=xctype, ad=ad) for d, ad in zip(p, ap)])
+            rq = cp.stack([_features(a, d, xctype=xctype, ad=ad) for d, ad in zip(q, aq)])
             rho_xc = rho if spin else rho[0]
             if xctype == 'LDA':
                 rho_xc = rho_xc[:, 0] if spin else rho_xc[0]
@@ -127,18 +154,11 @@ def grad_xc_fock(source, dm, transition_dm, atmlst, block_size=2048,
             if grid_response:
                 out += contract('nxg,g->nx', weight1[atmlst, :, lo:hi],
                                 contract('ag,ag->g', v, rq))
+            d = _ao_nuclear_terms(ao, ap, aq, fq, v, weights[lo:hi], xctype)
+            moving_grid = d.sum(axis=1) if grid_response else cp.zeros(3)
             for n, atom in enumerate(atmlst):
-                # ponytail: explicit atom/axis loops repeat AO-density products;
-                # this small-system reference favors auditability over speed.
-                # Cache AO@P/Q and batch center contractions before scaling up.
-                shift = cp.full(mol.nao, float(grid_response and atom == owner))
                 p0, p1 = slices[atom]
-                shift[p0:p1] -= 1
-                for axis in range(3):
-                    da = ao[[axis+1, *second[axis]]] * shift
-                    rp1 = cp.stack([_features(a, d, da, xctype) for d in p])
-                    rq1 = cp.stack([_features(a, d, da, xctype) for d in q])
-                    out[n, axis] += cp.sum(weights[lo:hi] * (
-                        cp.sum(fq * rp1.reshape(v.shape), axis=0)
-                        + cp.sum(v * rq1.reshape(v.shape), axis=0)))
+                out[n] -= d[:, p0:p1].sum(axis=1)
+                if atom == owner:
+                    out[n] += moving_grid
     return out

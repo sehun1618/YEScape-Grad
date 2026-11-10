@@ -12,6 +12,7 @@ Source XC includes AO-center/grid motion but not orbital relaxation.
 
 import numpy as np
 from pyscf import lib
+from dcforge.tools.logger import gradient_stage, source_xc_timing
 from dcforge.cpu.source import rhf
 from dcforge.cpu.source.xc import grad_xc_fock
 
@@ -51,12 +52,19 @@ def grad_fock(mf_grad, Co, Cv, zvec, dm0, atmlst):
         return vj, lib.tag_array(vk, aux=aux) if aux is not None else vk
 
     grad.get_jk = weighted_jk
-    hjk = rhf.grad_fock_direct(grad, Co, Cv, zvec, dm0, atmlst,
-                             with_k=with_exchange)
+    with gradient_stage(mf_grad, 'Source one-electron and J/K derivative'):
+        hjk = rhf.grad_fock_direct(grad, Co, Cv, zvec, dm0, atmlst,
+                                 with_k=with_exchange)
     q = Cv @ zvec @ Co.T
     q = 2*(q+q.T)
-    xc = -grad_xc_fock(source, dm0, q, atmlst,
-                       grid_response=mf_grad.source_grid_response)
+    mf_grad.source_xc_stage_times = {}
+    with gradient_stage(mf_grad, 'Source XC derivative (AO, kernel and moving grid)'):
+        xc = -grad_xc_fock(source, dm0, q, atmlst,
+                           grid_response=mf_grad.source_grid_response,
+                           grid_response_backend=mf_grad.grid_response_backend,
+                           timings=mf_grad.source_xc_stage_times)
+    source_xc_timing(mf_grad)
+    mf_grad.source_grid_response_backend_used = mf_grad.grid_response_backend if mf_grad.source_grid_response else 'inactive'
     mf_grad.de_source_hjk, mf_grad.de_source_xc = hjk, xc
     mf_grad.fock_deriv_method_used = 'direct_source_ks'
     mf_grad.fock_deriv_intermediate_bytes = grad.fock_deriv_intermediate_bytes

@@ -11,7 +11,8 @@ from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.grad import uks as uks_grad
 from gpu4pyscf.lib import logger
 
-from dcforge.tools.logger import log_kernel_time
+from dcforge.tools.logger import log_kernel_time, gradient_stage
+from dcforge.tools.sc_limit import sc_gradient_if_equivalent
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rnsc import _check_source_state, _check_xc
 from dcforge.gpu.grad.skeleton import skeleton_gradient_uhf
@@ -116,23 +117,30 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     Cv = (Ca[:, sva], Cb[:, svb])
     dm0 = mf_source.make_rdm1(mo_coeff, mo_occ)
 
+    sc_result = sc_gradient_if_equivalent(
+        mf_grad, mo_energy, mo_coeff, mo_occ, dm0, Co, atmlst)
+    if sc_result is not None:
+        return sc_result
+
     # F^target[P^source], projected below into the source MO basis.
     # The source Fock/kernel instead determines the orbital response.
-    fock_target = mf.get_fock(dm=dm0)
-    fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
-    fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
-    fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
-    foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
+    with gradient_stage(mf_grad, 'Target Fock evaluation and MO projection'):
+        fock_target = mf.get_fock(dm=dm0)
+        fock_mo_a = Ca.conj().T @ fock_target[0] @ Ca
+        fock_mo_b = Cb.conj().T @ fock_target[1] @ Cb
+        fvo = (fock_mo_a[sva][:, soa], fock_mo_b[svb][:, sob])
+        foo = (fock_mo_a[soa][:, soa], fock_mo_b[sob][:, sob])
 
-    fvind = mf_source.gen_response(
-        mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
-    vind = mf_grad.gen_vind(Co, Cv, fvind)
-    zvec, z_info = solve_z_vector(
-        mo_energy, mo_occ, fvo, vind,
-        conv_tol=mf_grad.cphf_conv_tol,
-        max_cycle=mf_grad.cphf_max_cycle,
-        log=log,
-    )
+    with gradient_stage(mf_grad, 'Z-vector response solve'):
+        fvind = mf_source.gen_response(
+            mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
+        vind = mf_grad.gen_vind(Co, Cv, fvind)
+        zvec, z_info = solve_z_vector(
+            mo_energy, mo_occ, fvo, vind,
+            conv_tol=mf_grad.cphf_conv_tol,
+            max_cycle=mf_grad.cphf_max_cycle,
+            log=log,
+        )
     warn_z_residual(log, z_info, mf_grad.cphf_residual_warn_tol)
     mf_grad.zvec = zvec
     mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
@@ -166,19 +174,22 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     if mf._numint._xc_type(mf.xc) == 'HF':
         mf_grad.grid_response = False
     try:
-        de_skel = skeleton_gradient_uhf(
-            mf_grad, foo, e_occ, s1oo,
-            mo_energy, mo_coeff, mo_occ, atmlst)
+        with gradient_stage(mf_grad, 'Target explicit gradient (including target grid)'):
+            de_skel = skeleton_gradient_uhf(
+                mf_grad, foo, e_occ, s1oo,
+                mo_energy, mo_coeff, mo_occ, atmlst)
     finally:
         mf_grad.grid_response = grid_response
 
-    de_fock = mf_grad.grad_fock(
-        Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
+    with gradient_stage(mf_grad, 'Source Fock derivative (including source XC)'):
+        de_fock = mf_grad.grad_fock(
+            Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
     if vzoo is None:
         vzoo = mf_grad.get_z_response_oo(Co, Cv, zvec, fvind)
     de_ovlp_response = grad_ovlp_response(s1oo, vzoo)
-    de_nvar = nonvariational_correction(
-        mf_grad, s1oo, de_fock, de_ovlp_energy, de_ovlp_response)
+    with gradient_stage(mf_grad, 'NSC overlap response and assembly'):
+        de_nvar = nonvariational_correction(
+            mf_grad, s1oo, de_fock, de_ovlp_energy, de_ovlp_response)
 
     # The same geometry-only D2C derivative applies to RHF and UHF sources.
     # Its host evaluation is separate from both GPU spin-response channels.
@@ -201,6 +212,7 @@ class Gradients(uks_grad.Gradients):
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
         'response_backend', 'z_response_oo_schedule_used',
+        'sc_limit', 'sc_limit_used', 'gradient_stage_times', 'source_grid_response_backend_used',
         'de_d2c', 'd2c_result', 'source_grid_response',
     }
 
@@ -214,6 +226,8 @@ class Gradients(uks_grad.Gradients):
         uks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
         self.source_grid_response = True
+        self.sc_limit = True
+        self.sc_limit_used = False
         self.cphf_conv_tol = 1e-9
         self.cphf_max_cycle = 200
         self.cphf_residual_warn_tol = 1e-8

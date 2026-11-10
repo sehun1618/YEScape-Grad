@@ -1,4 +1,4 @@
-"""UHF spin warning at the shared CPU/GPU source-state boundary."""
+"""UHF/UKS spin warnings at the shared CPU/GPU source-state boundary."""
 import io
 import numpy as np
 import pytest
@@ -7,12 +7,13 @@ from dcforge.cpu.energy import UNSC, RNSC
 from dcforge.cpu.energy.rnsc import _check_source_state
 
 
+@pytest.mark.parametrize('source_xc', [None, 'PBE'])
 @pytest.mark.parametrize('spin,s2,warn', [(0,0.,False),(0,.099,False),(0,.1,True),
     (1,.849,False),(1,.85,True),(1,.65,True),(2,2.,False),(2,2.1,True)])
-def test_spin_warning_boundary(spin, s2, warn):
+def test_spin_warning_boundary(spin, s2, warn, source_xc):
     atom = 'H 0 0 0' if spin == 1 else 'H 0 0 0; H 0 0 1'
     mol = gto.M(atom=atom, spin=spin, basis='sto-3g', verbose=0)
-    mf = UNSC(mol, xc='PBE')
+    mf = UNSC(mol, xc='PBE', source_xc=source_xc)
     source = mf.mf_source
     n = mol.nao
     source.mo_coeff = np.stack([np.eye(n)]*2)
@@ -25,14 +26,15 @@ def test_spin_warning_boundary(spin, s2, warn):
     message = mf.stdout.getvalue()
     assert ('spin contaminated' in message) == warn
     if warn:
-        assert 'Be very cautious when using the HF-DFT energy and gradient' in message
+        assert ('UKS source' if source_xc else 'UHF source') in message
+        assert ('NSC-DFT energy and gradient' if source_xc else 'HF-DFT energy and gradient') in message
         assert 'consider a different source' in message
         assert 'Results are returned unchanged' not in message
         assert f'target S(S+1)={spin/2*(spin/2+1):.6f}' in message
 
 
-@pytest.mark.parametrize('restricted,source_xc', [(True,None),(False,'PBE')])
-def test_non_uhf_sources_skip_spin_check(restricted, source_xc):
+@pytest.mark.parametrize('restricted,source_xc', [(True,None),(True,'PBE')])
+def test_restricted_sources_skip_spin_check(restricted, source_xc):
     mol = gto.M(atom='H 0 0 0; H 0 0 1', basis='sto-3g', verbose=0)
     mf = (RNSC if restricted else UNSC)(mol, source_xc=source_xc)
     source = mf.mf_source
@@ -42,23 +44,25 @@ def test_non_uhf_sources_skip_spin_check(restricted, source_xc):
     source.mo_occ = np.zeros_like(source.mo_energy)
     source.converged = True
     if not restricted:source.grids.level=0
-    def unexpected():raise AssertionError('Only UHF sources should be checked')
+    def unexpected():raise AssertionError('Only unrestricted sources should be checked')
     source.spin_square=unexpected
     _check_source_state(mf)
 
 
 @pytest.mark.parametrize('backend', ['cpu', pytest.param('gpu', marks=pytest.mark.gpu)])
 @pytest.mark.parametrize('use_df', [False, True])
-def test_broken_symmetry_energy_and_gradient_warn_without_changing_results(backend, use_df):
+@pytest.mark.parametrize('source_xc', [None, 'PBE'])
+def test_broken_symmetry_energy_and_gradient_warn_without_changing_results(backend, use_df, source_xc):
     from importlib import import_module
     from pyscf import lib
     lib.num_threads(2)
     xp = np if backend == 'cpu' else pytest.importorskip('cupy')
     cls = import_module('dcforge.'+backend+'.energy').UNSC
     mol = gto.M(atom='H 0 0 0; H 0 0 3', basis='sto-3g', verbose=0)
-    mf = cls(mol, xc='PBE')
+    mf = cls(mol, xc='PBE', source_xc=source_xc)
     if use_df:mf=mf.density_fit(auxbasis='def2-universal-jkfit')
     mf.grids.level=0;mf.conv_tol=1e-10
+    if source_xc:mf.mf_source.grids.level=0
     mf.stdout=io.StringIO();mf.verbose=3
     dm=xp.asarray([[[1.,0.],[0.,0.]],[[0.,0.],[0.,1.]]])
     energy=mf.kernel(dm0=dm)

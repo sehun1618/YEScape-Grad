@@ -135,18 +135,20 @@ def _check_source_state(mf):
                 or getattr(e, 'shape', None) != (c.shape[1],)
                 or getattr(o, 'shape', None) != (c.shape[1],)):
             raise ValueError('source orbital shapes do not match the active AO space')
-    if not hasattr(source, 'xc') and (isinstance(coeff, (tuple, list)) or coeff.ndim == 3):
+    if isinstance(coeff, (tuple, list)) or coeff.ndim == 3:
         # mol.spin is Nalpha-Nbeta = 2S, not the target <S^2> itself.
         spin = abs(mf.mol.spin) / 2
         target_s2 = spin * (spin + 1)
         s2 = float(source.spin_square()[0])
         # Compare endpoints to include e.g. 0.85 versus 0.75 despite subtraction rounding.
         if s2 >= target_s2 + 0.1 or s2 <= target_s2 - 0.1:
-            logger.warn(mf, 'UHF source is spin contaminated: <S^2>=%.6f, '
+            source_name = 'UKS' if hasattr(source, 'xc') else 'UHF'
+            method_name = 'NSC-DFT' if hasattr(source, 'xc') else 'HF-DFT'
+            logger.warn(mf, '%s source is spin contaminated: <S^2>=%.6f, '
                         'target S(S+1)=%.6f, absolute difference=%.6f >= 0.1. '
-                        'Be very cautious when using the HF-DFT energy and gradient '
+                        'Be very cautious when using the %s energy and gradient '
                         'and consider a different source.',
-                        s2, target_s2, abs(s2 - target_s2))
+                        source_name, s2, target_s2, abs(s2 - target_s2), method_name)
     if not source.converged:
         logger.warn(mf, 'Reusing source orbitals marked unconverged; source '
                     'stationarity and analytic-gradient/FD agreement are not guaranteed.')

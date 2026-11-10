@@ -5,14 +5,16 @@
 
 '''DC-Forge result logging using the existing PySCF logger.
 
-These helpers only read completed results. They never evaluate energy, Fock,
-response, or residuals. Total energy and forces print at every verbosity.
+Result formatting reads completed values. Timing wraps existing kernels without
+additional energy, Fock, response or residual evaluations. Total energy and forces
+print at every verbosity.
 NOTE adds summaries and timings; INFO adds settings and detailed diagnostics.
 No output file, verbosity switch or persistence format is introduced.
 Public kernels report host elapsed time with GPU synchronization at boundaries.
 '''
 
 from functools import wraps
+from contextlib import contextmanager
 from inspect import signature
 from time import perf_counter
 
@@ -27,11 +29,66 @@ def _synchronize(obj):
         cupy.cuda.get_current_stream().synchronize()
 
 
+def run_gradient_kernel(kernel, grad, *args):
+    """Relabel PySCF's aggregate timer without modifying upstream module globals."""
+    from types import SimpleNamespace
+    from dcforge.tools.cphf import _bind_globals
+    def timer(obj, label, *clock):
+        if label == 'SCF gradients':
+            label = 'complete gradient (cumulative; all stages)'
+        return logger.timer(obj, label, *clock)
+    proxy = SimpleNamespace(**dict(vars(logger), timer=timer))
+    return _bind_globals(kernel, dict(kernel.__globals__, logger=proxy))(grad, *args)
+
+
+@contextmanager
+def gradient_stage(grad, label):
+    """Bracket a named calculation; nested times are inclusive, not additive."""
+    _synchronize(grad)
+    start = perf_counter()
+    logger.info(grad, 'Begin %s', label)
+    try:
+        yield
+    except Exception:
+        logger.warn(grad, 'Failed %s', label)
+        raise
+    else:
+        _synchronize(grad)
+        elapsed = perf_counter()-start
+        if not hasattr(grad, 'gradient_stage_times'):
+            grad.gradient_stage_times = {}
+        grad.gradient_stage_times[label] = elapsed
+        logger.info(grad, 'End %s: wall time = %.3f s', label, elapsed)
+
+
+def source_xc_timing(grad):
+    """Format recorded timings without rounding or modifying the stored values."""
+    times = grad.source_xc_stage_times
+    if not times:
+        return
+    if grad.verbose < logger.DEBUG:
+        logger.info(grad, 'Source XC total: wall = %.3f s, CPU = %.3f s',
+                    times['total'], times['cpu_total'])
+        return
+    logger.debug(grad, 'Source XC timing (s)')
+    logger.debug(grad, '  %-24s %11s %11s', 'Stage', 'Wall', 'CPU')
+    for key, label in (
+            ('grid_partition', 'Grid partition'),
+            ('ao_evaluation', 'AO evaluation'),
+            ('ao_density_products', 'AO-density products'),
+            ('density_and_xc', 'Density and XC'),
+            ('nuclear_contractions', 'Nuclear contractions'),
+            ('total', 'Total')):
+        logger.debug(grad, '  %-24s %11.3f %11.3f',
+                     label, times[key], times['cpu_'+key])
+
+
 def log_kernel_time(label):
     """Measure one successful call, including source SCF inside energy kernels.
 
     Explicit source reuse is labeled separately. Total is the latest energy
-    duration plus this gradient duration, excluding idle time between calls.
+    duration plus this gradient duration; combined kernel time excludes idle time,
+    while total elapsed time includes time between calls.
     An energy call nested inside a gradient is already included in that gradient.
     """
     def decorate(kernel):
@@ -48,6 +105,11 @@ def log_kernel_time(label):
                 run_hf = bound.arguments.get('run_hf')
                 reused = not (run_source if run_hf is None else run_hf)
                 self._last_energy_source_reused = reused
+            if label == 'Gradient workflow':
+                self.gradient_stage_times = {}
+                if hasattr(self, "source_xc_stage_times"):
+                    self.source_xc_stage_times = {}
+                logger.info(self, 'Begin gradient workflow; aggregate timers include all stages')
             _synchronize(self)
             start = perf_counter()
             result = kernel(self, *args, **kwargs)
@@ -66,9 +128,11 @@ def log_kernel_time(label):
                     total = elapsed + energy[1] if energy[0] < start else elapsed
                     suffix = ' (source reused)' if getattr(
                         self.base, '_last_energy_source_reused', False) else ''
-                    logger.note(log, 'Total wall time%s = %.3f s', suffix, total)
+                    logger.note(log, 'Combined kernel wall time%s = %.3f s', suffix, total)
+                    logger.note(log, 'Total elapsed wall time%s = %.3f s',
+                                suffix, end-min(start, energy[0]))
                 else:
-                    logger.note(log, 'Total wall time (gradient only; source reused) = %.3f s', elapsed)
+                    logger.note(log, 'Total elapsed wall time (gradient only; source reused) = %.3f s', elapsed)
             return result
         return timed
     return decorate
@@ -193,7 +257,9 @@ def gradient_summary(grad, unrestricted=False):
     for label, attribute in (
             ('Grid response', 'grid_response'),
             ('Source grid response', 'source_grid_response'),
-            ('Grid response backend', 'grid_response_backend_used'),
+            ('Target grid backend', 'grid_response_backend_used'),
+            ('Source grid backend', 'source_grid_response_backend_used'),
+            ('SC limit used', 'sc_limit_used'),
             ('Auxiliary-basis response', 'auxbasis_response'),
             ('Z-vector solver', 'z_solver')):
         value = getattr(grad, attribute, None)
@@ -210,13 +276,15 @@ def gradient_summary(grad, unrestricted=False):
         residual = info.get('residual_max_abs')
     limit = getattr(grad, 'cphf_residual_warn_tol',
                     getattr(grad, 'cphf_residual_tol', None))
-    if residual is None:
+    if getattr(grad, 'sc_limit_used', False):
+        logger.note(log, '%-28s not applicable (SC limit)', 'Z-vector residual (max abs)')
+    elif residual is None:
         logger.note(log, '%-28s not available', 'Z-vector residual (max abs)')
     else:
         logger.note(log, '%-28s %.6e', 'Z-vector residual (max abs)', residual)
     if limit is not None:
         logger.info(log, '%-28s %.3e', 'Residual check limit', limit)
-    verdict = 'NOT CHECKED'
+    verdict = 'NOT APPLICABLE (SC limit)' if getattr(grad, 'sc_limit_used', False) else 'NOT CHECKED'
     if residual is not None and limit is not None:
         verdict = 'PASS' if np.isfinite(residual) and residual <= limit else 'WARNING'
     logger.note(log, '%-28s %s', 'Residual check', verdict)

@@ -9,7 +9,8 @@ import numpy as np
 from pyscf.grad import rks as rks_grad
 from pyscf.lib import logger
 
-from dcforge.tools.logger import log_kernel_time
+from dcforge.tools.logger import log_kernel_time, gradient_stage, run_gradient_kernel
+from dcforge.tools.sc_limit import sc_gradient_if_equivalent
 from dcforge.cpu.disp.d2c import evaluate_d2c, normalize_dispersion
 from dcforge.cpu.energy.rnsc import _check_source_state, _check_xc
 from dcforge.cpu.grad import grid_response
@@ -113,26 +114,33 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     Cv = mo_coeff[:, sv]
     dm0 = mf_source.make_rdm1(mo_coeff, mo_occ)
 
+    sc_result = sc_gradient_if_equivalent(
+        mf_grad, mo_energy, mo_coeff, mo_occ, dm0, Co, atmlst)
+    if sc_result is not None:
+        return sc_result
+
     # The Source MO basis diagonalizes F^source, not the target KS Fock.  Its VO block
     # F^target_vo is therefore the nonvariational Z-vector RHS, while F^target_oo
     # builds the target energy-weighted density in the skeleton term.
     # F^target[P^source], projected below into the source MO basis.
     # The source Fock/kernel instead determines the orbital response.
-    fock_target = mf.get_fock(dm=dm0)
-    fock_mo = mo_coeff.conj().T @ fock_target @ mo_coeff
-    fvo = fock_mo[sv][:, so]
-    foo = fock_mo[so][:, so]
+    with gradient_stage(mf_grad, 'Target Fock evaluation and MO projection'):
+        fock_target = mf.get_fock(dm=dm0)
+        fock_mo = mo_coeff.conj().T @ fock_target @ mo_coeff
+        fvo = fock_mo[sv][:, so]
+        foo = fock_mo[so][:, so]
 
-    # The left-hand side is the SOURCE orbital Hessian, including source fxc
-    # for KS. The TARGET contributes the VO right-hand side, not its kernel.
-    fvind = mf_source.gen_response(mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
-    response = mf_grad.make_response(Co, Cv)
-    zvec, z_info = solve_z_vector(
-        mo_energy, mo_occ, Co, Cv, fvo, fvind,
-        conv_tol=mf_grad.cphf_conv_tol,
-        max_cycle=mf_grad.cphf_max_cycle,
-        log=log, vind=None if response is None else response.vind,
-    )
+        # The left-hand side is the SOURCE orbital Hessian, including source fxc
+        # for KS. The TARGET contributes the VO right-hand side, not its kernel.
+    with gradient_stage(mf_grad, 'Z-vector response solve'):
+        fvind = mf_source.gen_response(mo_coeff=mo_coeff, mo_occ=mo_occ, hermi=1)
+        response = mf_grad.make_response(Co, Cv)
+        zvec, z_info = solve_z_vector(
+            mo_energy, mo_occ, Co, Cv, fvo, fvind,
+            conv_tol=mf_grad.cphf_conv_tol,
+            max_cycle=mf_grad.cphf_max_cycle,
+            log=log, vind=None if response is None else response.vind,
+        )
     warn_z_residual(log, z_info, mf_grad.cphf_residual_warn_tol)
     mf_grad.zvec = zvec
     mf_grad.z_rhs_max_abs = z_info['rhs_max_abs']
@@ -145,11 +153,14 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None,
     # not belong in the perturbation-independent adjoint solve above; together
     # with F^src,lambda it forms V^lambda for each nuclear coordinate here.
     s1 = mf_grad.get_ovlp(mol)
-    de_fock = mf_grad.grad_fock(
-        Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
-    de_skel = skeleton_gradient(mf_grad, dm0, foo, Co, s1, atmlst)
-    de_nvar = nonvariational_correction(
-        mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst, response=response)
+    with gradient_stage(mf_grad, 'Source Fock derivative (including source XC)'):
+        de_fock = mf_grad.grad_fock(
+            Co, Cv, zvec, dm0, mo_coeff, mo_occ, atmlst)
+    with gradient_stage(mf_grad, 'Target explicit gradient (including target grid)'):
+        de_skel = skeleton_gradient(mf_grad, dm0, foo, Co, s1, atmlst)
+    with gradient_stage(mf_grad, 'NSC overlap response and assembly'):
+        de_nvar = nonvariational_correction(
+            mf_grad, Co, Cv, mo_energy, zvec, s1, de_fock, fvind, atmlst, response=response)
 
     # D2C dispersion depends on geometry, elements and charge, but not on the source
     # HF orbitals.  It is therefore an additive explicit derivative and never
@@ -182,6 +193,7 @@ class Gradients(rks_grad.Gradients):
     _keys = rks_grad.Gradients._keys | {
         'cphf_conv_tol', 'cphf_max_cycle', 'cphf_residual_warn_tol',
         'fock_deriv_method', 'z_residual_warning',
+        'sc_limit', 'sc_limit_used', 'gradient_stage_times', 'source_grid_response_backend_used', 'source_xc_stage_times',
         'de_d2c', 'd2c_result', 'source_grid_response', 'grid_response_backend',
         'grid_response_backend_used', 'response_backend', 'response_backend_used',
         'response_mo_cache_bytes', 'response_mo_setup_s',
@@ -194,6 +206,9 @@ class Gradients(rks_grad.Gradients):
         rks_grad.Gradients.__init__(self, mf)
         self.grid_response = True
         self.source_grid_response = True
+        self.source_xc_stage_times = {}
+        self.sc_limit = True
+        self.sc_limit_used = False
         self.grid_response_backend = 'becke_omp'
         self.grid_response_backend_used = None
         self.cphf_conv_tol = 1e-9
@@ -256,7 +271,7 @@ class Gradients(rks_grad.Gradients):
             _check_source_state(self.base)
         if atmlst is not None:
             atmlst = np.asarray(atmlst, dtype=int)
-        de = rks_grad.Gradients.kernel(
+        de = run_gradient_kernel(rks_grad.Gradients.kernel,
             self, mo_energy, mo_coeff, mo_occ, atmlst)
         self.de_nuc = self.grad_nuc(atmlst=self.atmlst)
         self.de_skel = self.de_skel_elec + self.de_nuc

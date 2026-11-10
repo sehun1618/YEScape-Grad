@@ -12,6 +12,32 @@ from dcforge.tools.logger import energy_summary, gradient_summary
 from dcforge.tools import logger as result_logger
 
 
+@pytest.mark.parametrize('verbose', [0, 3, 4, 5, 6])
+def test_source_xc_timing_format(verbose):
+    keys = ['grid_partition', 'ao_evaluation', 'ao_density_products',
+            'density_and_xc', 'nuclear_contractions', 'total']
+    times = {k: 1.23456789 for k in keys}
+    times.update({'cpu_'+k: 23.456789 for k in keys})
+    before = times.copy()
+    grad = SimpleNamespace(verbose=verbose, stdout=StringIO(), source_xc_stage_times=times)
+    result_logger.source_xc_timing(grad)
+    text = grad.stdout.getvalue()
+    assert times == before
+    if verbose < 4:
+        assert not text
+    elif verbose == 4:
+        assert text == 'Source XC total: wall = 1.235 s, CPU = 23.457 s\n'
+    else:
+        assert len(text.splitlines()) == 8
+        assert text.startswith('Source XC timing (s)\n')
+        assert 'AO-density products' in text and 'Wall' in text and 'CPU' in text
+        assert text.count('1.235') == 6 and text.count('23.457') == 6
+    grad.source_xc_stage_times = {}
+    grad.stdout = StringIO()
+    result_logger.source_xc_timing(grad)
+    assert not grad.stdout.getvalue()
+
+
 @pytest.mark.parametrize('workflow,atom,spin', [
     (RNSC, 'H 0 0 0; H 0 0 1', 0),
     (UNSC, 'O 0 0 0; H 0 0 1', 1),
@@ -48,7 +74,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     text = stream.getvalue()
     assert text.count('DC-Forge Gradient') == 1
     assert text.count('Gradient workflow wall time =') == 1
-    assert text.count('Total wall time =') == 1
+    assert text.count('Total elapsed wall time =') == 1
     assert 'gradients ---------------' not in text
     assert 'Z-vector residual (max abs)' in text
     assert 'Ha/Bohr' in text
@@ -203,9 +229,9 @@ def test_total_time_repeats_and_failure(monkeypatch):
         energy(mf, fail=True)
     gradient(grad)
     totals = [s for s in mf.stdout.getvalue().splitlines() if s.startswith('Total')]
-    assert totals == ['Total wall time = 5.000 s',
-                      'Total wall time = 6.000 s',
-                      'Total wall time (gradient only; source reused) = 5.000 s']
+    assert totals == ['Total elapsed wall time = 103.000 s',
+                      'Total elapsed wall time = 204.000 s',
+                      'Total elapsed wall time (gradient only; source reused) = 5.000 s']
 
 
 def test_nested_energy_time_is_not_counted_twice(monkeypatch):
@@ -223,7 +249,7 @@ def test_nested_energy_time_is_not_counted_twice(monkeypatch):
         energy(self.base)
 
     gradient(grad)
-    assert 'Total wall time = 5.000 s' in mf.stdout.getvalue()
+    assert 'Total elapsed wall time = 5.000 s' in mf.stdout.getvalue()
 
 
 @pytest.mark.parametrize('options', [{'run_source':False}, {'run_hf':False}])
@@ -239,7 +265,7 @@ def test_reused_source_has_distinct_timing_label(monkeypatch, options):
     energy(mf,**options);gradient(grad)
     text=mf.stdout.getvalue()
     assert 'Target-energy evaluation (source reused) wall time = 2.000 s' in text
-    assert 'Total wall time (source reused) = 5.000 s' in text
+    assert 'Combined kernel wall time (source reused) = 5.000 s' in text
     assert 'Energy workflow wall time' not in text
 
 
