@@ -1,4 +1,6 @@
-# YEScape-Grad
+# YEScape-Grad: Yonsei Electronic Structure Calculations and Property Evaluation
+
+
 
 Molecular non-self-consistent energies and analytic nuclear gradients built on PySCF
 and, optionally, GPU4PySCF.
