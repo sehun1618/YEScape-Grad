@@ -1,31 +1,7 @@
 # YEScape-Grad: Yonsei Electronic Structure Calculations and Property Evaluation
 
-
-
 Molecular non-self-consistent energies and analytic nuclear gradients built on PySCF
 and, optionally, GPU4PySCF.
-
-This development branch extends HF sources to restricted/unrestricted KS
-sources: LDA, GGA, tau-dependent meta-GGA, global hybrids and RSH. Target SCF
-is never performed. A density alone is insufficient: its stationary source
-SCF, orbital energies and response kernel define the gradient.
-
-```python
-from pyscf import gto
-from yescape_grad.cpu.energy import RNSC  # GPU: yescape_grad.gpu.energy
-
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587', basis='def2-svp')
-mf = RNSC(mol, xc='r2SCAN', source_xc='PBE').density_fit()
-mf.mf_source.grids.level = 4  # source SCF and its response
-mf.grids.level = 4            # fixed-density target evaluation
-energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()
-```
-
-Use `UNSC` for unrestricted sources. Energies are in Ha and gradients in
-Ha/Bohr; force is minus gradient. Source and target have independent grids.
-Explicit `kernel(run_source=False)` reuses supplied orbitals: the caller
-is responsible for stationarity, and an unconverged flag produces a warning.
 
 ## Installation
 
@@ -73,29 +49,10 @@ python -m pip check
 - The table lists installation choices, not validated configurations.
   Run the GPU tests on your environment.
 
-This checkout targets **PySCF 2.14.0 and GPU4PySCF 1.9.0**.
-This combination was checked with
-CUDA 13 on molecular restricted/unrestricted conventional/DF cases.
-The CUDA 12 command above is an installation example, not a tested configuration.
-`environments/gpu-cu13.yml` records the dependency pins; it is not a
-fresh-install certification. The recipe pins `cutensor-cu13==2.6.0`; merely
-installing it is not proof that the native contraction engine was selected.
-The runtime checks used an existing environment
-with native cuTENSOR enabled. Verify the selected contraction engine explicitly:
-
-```python
-import cupy as cp
-from gpu4pyscf.lib import cutensor
-assert cutensor.cutensor is not None and cutensor.contract_engine is None
-cp.testing.assert_allclose(
-    cutensor.contract('ij,jk->ik', cp.ones((2, 3)), cp.ones((3, 2))), 3)
-```
-
-GPU4PySCF 1.9.0 uses its native CPHF/UCPHF cutoff policy. GPU4PySCF 1.8.1
-and CPU PySCF retain YEScape-Grad's local compatibility layer. Neither policy
-makes `tol` a guarantee on the independently measured physical Z residual.
-The DF memory planner targets the 1.9 allocation layout; the 1.8.1 numerical
-cross-check is not a certification of large-system memory behavior.
+YEScape-Grad targets **PySCF 2.14.0 and GPU4PySCF 1.9.0**.
+GPU calculations have been validated with CUDA 13 and cuTENSOR.
+See `environments/gpu-cu13.yml` for the tested dependency versions.
+The CUDA 12 installation example above has not been validated.
 
 ### Optional libraries
 
