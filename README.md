@@ -95,131 +95,166 @@ Nonlocal correlation functionals, including VV10, are not supported.
 | PBC, ROHF, fractional occupations, complex orbitals | Outside current scope | Outside current scope |
 | NLC/VV10, Laplacian-dependent meta-GGA, Hessian | Not supported | Not supported |
 
-Complete energy derivatives require grid response and, for DF, auxiliary-basis
-response. CPU conventional calculations also expose a frozen-grid diagnostic;
-DF and GPU gradients require full response. KS-source Fock derivatives use
-`direct`; GPU KS-source Z response uses the AO backend. Support for a functional
-family does not establish accuracy for every functional, molecule or SCF state.
-
-Geometry optimization uses PySCF's optimizer interface. Install `geometric`
-separately if needed. Scanners reuse the previous source density as the initial
-guess and reconverge source SCF at every geometry; use `scanner(mol, dm0=None)` for a
-fresh guess. Scanner views share source/DF state with their original object.
-
 
 ## Examples
 
-### HF-DFT energy and gradient
+### NSC energy and gradient
+
+Evaluate r²SCAN on stationary PBE orbitals (`PBE → r²SCAN`):
 
 ```python
 from pyscf import gto
-from yescape_grad.cpu.energy import RHFDFT
+from yescape_grad.cpu.energy import RNSC
 
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
-            basis='def2-svp')
-mf = RHFDFT(mol, xc='PBE').density_fit()
+mol = gto.M(
+    atom='''
+        O  0.000   0.000   0.000
+        H  0.000  -0.757   0.587
+        H  0.000   0.757   0.587
+    ''',
+    basis='def2-svp',
+)
+mf = RNSC(mol, source_xc='PBE', xc='r2SCAN').density_fit()
+mf.conv_tol = 1e-8
+mf.conv_tol_grad = 1e-6
+mf.mf_source.grids.level = 4
+mf.grids.level = 4
+
 energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()  # Ha/Bohr
+gradient = mf.nuc_grad_method().kernel()
 force = -gradient
-print('HF energy [Ha]:', mf.e_hf)
-print('HF-DFT energy [Ha]:', energy)
+
+print('Source energy [Ha]:', mf.e_source)
+print('Target energy [Ha]:', energy)
 print('Force [Ha/Bohr]:', force)
 ```
 
-`kernel()` converges HF and then evaluates the target functional without
-target DFT SCF. Energy is in Hartree; forces are minus the energy gradient.
-YEScape-Grad prints total energy and forces at every verbose level. Level 3 adds
-result summaries and wall times; level 4 adds calculation settings and detailed
-diagnostics. PySCF internal logs follow the same `verbose` setting.
-The printed forces are `-gradient`; the gradient API still returns `dE/dR`.
+`source_xc` determines the stationary orbitals and their response kernel.
+`xc` selects the target functional. `kernel()` converges the source SCF and
+then evaluates the target energy without target SCF. Source and target grids
+are configured independently. The gradient is `dE/dR`; force is its negative.
+
+### Source and target choices
+
+For the same molecule, HF-DFT is selected explicitly with `source_xc='HF'`:
+
+```python
+# PBE orbitals -> r2SCAN
+pbe_source = RNSC(mol, source_xc='PBE', xc='r2SCAN')
+
+# HF orbitals -> r2SCAN
+hf_source = RNSC(mol, source_xc='HF', xc='r2SCAN')
+```
+
+See [source/target examples](examples/03-source-target.py) for meta-GGA,
+global-hybrid and range-separated-hybrid sources, and the identical-functional
+limit. These combinations illustrate the interface, not an accuracy ranking.
 
 ### Conventional and density-fitted calculations
 
-Using the `mol` above, choose one of the following:
-
 ```python
 # Conventional integrals
-mf = RHFDFT(mol, xc='PBE')
+conventional = RNSC(mol, source_xc='PBE', xc='r2SCAN')
 
-# Automatically selected auxiliary basis
-mf = RHFDFT(mol, xc='PBE').density_fit()
+# Automatically selected JK-fit auxiliary basis
+fitted = RNSC(mol, source_xc='PBE', xc='r2SCAN').density_fit()
 
-# Explicit JK-fit auxiliary basis for def2-svp
-mf = RHFDFT(mol, xc='PBE').density_fit(auxbasis='def2-svp-jkfit')
+# Explicit auxiliary basis
+fitted = RNSC(mol, source_xc='PBE', xc='r2SCAN').density_fit(
+    auxbasis='def2-universal-jkfit',
+)
 ```
 
-Then call `kernel()` and `nuc_grad_method().kernel()` as above.
+Configure and run either object as in the first example. Full grid response
+and DF auxiliary-basis response are enabled by default.
+See the [restricted example](examples/01-restricted.py) for both complete runs.
 
-### Open-shell calculations
+### Unrestricted calculations
 
-Use `UHFDFT` and set `spin = Nalpha - Nbeta`. For example, an OH doublet:
+Use `UNSC` with `spin = Nalpha - Nbeta`. This NH₂ doublet example evaluates
+PBE on PBE0 orbitals:
 
 ```python
 from pyscf import gto
-from yescape_grad.cpu.energy import UHFDFT
+from yescape_grad.cpu.energy import UNSC
 
-mol = gto.M(atom='O 0 0 0; H 0 0 .97', basis='def2-svp', spin=1)
-mf = UHFDFT(mol, xc='PBE').density_fit()
-energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()
+open_shell_mol = gto.M(
+    atom='''
+        N  0.000   0.000   0.000
+        H  0.000  -0.780   0.600
+        H  0.000   0.780   0.600
+    ''',
+    basis='def2-svp',
+    spin=1,
+)
+umf = UNSC(open_shell_mol, source_xc='PBE0', xc='PBE').density_fit()
+umf.conv_tol = 1e-8
+umf.conv_tol_grad = 1e-6
+umf.mf_source.grids.level = 4
+umf.grids.level = 4
+
+energy = umf.kernel()
+gradient = umf.nuc_grad_method().kernel()
 force = -gradient
 ```
+
+See the [unrestricted example](examples/02-unrestricted.py) for conventional
+and DF calculations.
 
 ### GPU calculations
 
-Use the GPU classes with the same calculation interface. This example uses
-closed-shell water; use `UHFDFT` for an open-shell molecule.
+Use the same interface with the GPU imports in place of the CPU imports:
 
 ```python
-from pyscf import gto
-from yescape_grad.gpu.energy import RHFDFT
-
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
-            basis='def2-svp')
-mf = RHFDFT(mol, xc='PBE').density_fit()
-energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()
-force = -gradient
+from yescape_grad.gpu.energy import RNSC, UNSC
 ```
 
-Install the GPU dependencies described above before using this example.
+Install the GPU dependencies above first. Complete GPU examples use the same
+systems and settings as their CPU counterparts:
+[restricted](examples/gpu/01-restricted.py),
+[unrestricted](examples/gpu/02-unrestricted.py), and
+[source/target choices](examples/gpu/03-source-target.py).
 
 ### Geometry optimization
 
-With the optional `geometric` package installed:
+For the PBE → r²SCAN workflow `mf` from the first example, install `geometric`
+and pass its gradient scanner to PySCF's optimizer interface:
 
 ```python
 from pyscf.geomopt.geometric_solver import optimize
 
 scanner = mf.nuc_grad_method().as_scanner()
-optimized_mol = optimize(scanner)
-# Independent fresh-guess evaluation, if needed:
-energy, gradient = scanner(optimized_mol, dm0=None)
+optimized_mol = optimize(scanner, maxsteps=50)
 ```
 
-The same interface works for CPU/GPU and conventional/DF calculations.
+The scanner uses the previous source density as an initial guess and
+reconverges source SCF at each geometry. See the complete
+[CPU](examples/07-geom_opt.py) and [GPU](examples/gpu/07-geom_opt.py) examples.
 
 ### D2C dispersion
 
-After installing DFT-D4, enable D2C for a supported target functional:
+D2C is parameterized for HF sources and selected target functionals; it is
+not a general correction for arbitrary KS sources. With DFT-D4 installed:
 
 ```python
-from yescape_grad.cpu.energy import RHFDFT
+from yescape_grad.cpu.energy import RNSC
 
-# Use the water molecule defined above.
-mf = RHFDFT(mol, xc='PBE').density_fit().set_dispersion('d2c')
-energy = mf.kernel()
-gradient = mf.nuc_grad_method().kernel()
-force = -gradient
+# Use the water molecule from the first example.
+d2c = RNSC(mol, source_xc='HF', xc='r2SCAN').density_fit()
+d2c.set_dispersion('d2c')
+d2c.conv_tol = 1e-8
+d2c.conv_tol_grad = 1e-6
+d2c.grids.level = 4
 
-print('HF-DFT energy without dispersion [Ha]:', mf.e_dft)
-print('D2C dispersion energy [Ha]:', mf.e_d2c)
-print('Total energy [Ha]:', energy)
+energy = d2c.kernel()
+gradient = d2c.nuc_grad_method().kernel()
 ```
 
-Both the returned energy and gradient include D2C dispersion.
-Parameters are selected for the target functional; unsupported functionals
-raise an error rather than falling back to ordinary D4.
+Both results include the dispersion correction. See the
+[D2C example](examples/06-d2c.py) for its separate energy and gradient terms.
+
+Additional examples cover [source checkpoints](examples/04-checkpoint.py)
+and [source/target grids](examples/05-grid.py).
 
 ## Attribution and distribution
 

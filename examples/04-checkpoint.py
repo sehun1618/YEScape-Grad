@@ -1,79 +1,114 @@
-'''Restore conventional and density-fitted RHF checkpoints for HF-DFT gradients.'''
+"""Restore a stationary PBE source for r2SCAN energy and gradient (CPU)."""
+
+from pathlib import Path
 
 import numpy as np
-from pyscf import gto, scf
+from pyscf import gto
 from pyscf.scf import chkfile
 
 from yescape_grad.cpu.energy import RNSC
 
-np.set_printoptions(precision=12, suppress=True)
+# Files in the current working directory are overwritten on rerun.
 
-# Checkpoints remain in the working directory and are overwritten on rerun.
+#
+# 1. Conventional integrals
+#
+mol = gto.M(
+    atom='''
+        O  0.000   0.000   0.000
+        H  0.000  -0.757   0.587
+        H  0.000   0.757   0.587
+    ''',
+    basis='def2-svp',
+    verbose=3,
+)
+mf = RNSC(mol, source_xc='PBE', xc='r2SCAN')
+mf.conv_tol = 1e-8
+mf.conv_tol_grad = 1e-6
+mf.max_cycle = 100
+mf.mf_source.grids.level = 4
+mf.grids.level = 4
+path = str(Path('pbe_conv.chk').resolve())
+mf.chkfile = path
+energy = mf.kernel()
+gradient = mf.nuc_grad_method().kernel()
+assert mf.mf_source.converged
 
-# Case 1: conventional RHF water
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
-            basis='def2-svp', verbose=0)
-mf_source = scf.RHF(mol)
-mf_source.chkfile = 'rhf.chk'
-mf_source.conv_tol = 1e-8
-mf_source.conv_tol_grad = 1e-6
-mf_source.max_cycle = 100
-mf_source.kernel()
+# Reload the molecule and source orbitals from the checkpoint.
+mol2, state = chkfile.load_scf(path)
+restored = RNSC(mol2, source_xc='PBE', xc='r2SCAN')
+restored.mf_source.grids.level = 4
+restored.grids.level = 4
 
-# Restore the saved HF orbitals, without running HF again.
-mol, state = chkfile.load_scf('rhf.chk')
-mf_source = scf.RHF(mol)
+# Recreate the original functional/grid/DF configuration: orbitals alone
+# do not specify the source Hamiltonian. DF integrals are rebuilt.
+mf_source = restored.mf_source
 mf_source.e_tot = state['e_tot']
 mf_source.mo_coeff = state['mo_coeff']
 mf_source.mo_energy = state['mo_energy']
 mf_source.mo_occ = state['mo_occ']
-# Assumes a converged checkpoint; this flag does not verify convergence.
-mf_source.converged = True
 
-mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
+# Justified only because this example checked convergence before saving.
+restored.mf_source.converged = True
+
+energy2 = restored.kernel(run_source=False)
+gradient2 = restored.nuc_grad_method().kernel()
+
+np.testing.assert_allclose(energy2, energy, atol=1e-9, rtol=0)
+np.testing.assert_allclose(gradient2, gradient, atol=1e-8, rtol=0)
+print('Restored checkpoint:', path)
+print('Max gradient difference [Ha/Bohr]:',
+      np.max(np.abs(gradient2 - gradient)))
+
+
+#
+# 2. Density fitting
+#
+mol = gto.M(
+    atom='''
+        O  0.000   0.000   0.000
+        H  0.000  -0.757   0.587
+        H  0.000   0.757   0.587
+    ''',
+    basis='def2-svp',
+    verbose=3,
+)
+mf = RNSC(mol, source_xc='PBE', xc='r2SCAN')
+mf = mf.density_fit(auxbasis='def2-universal-jkfit')
+mf.conv_tol = 1e-8
+mf.conv_tol_grad = 1e-6
+mf.max_cycle = 100
+mf.mf_source.grids.level = 4
 mf.grids.level = 4
-energy = mf.kernel(run_source=False)
-mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200)
-gradient = mf_grad.kernel()
+path = str(Path('pbe_df.chk').resolve())
+mf.chkfile = path
+energy = mf.kernel()
+gradient = mf.nuc_grad_method().kernel()
+assert mf.mf_source.converged
 
-print('\n[RHF checkpoint]')
-print(f'HF-r2SCAN energy [Ha]: {energy:.15f}')
-print('Gradient [Ha/Bohr]:\n', gradient)
-print('Force [Ha/Bohr]:\n', -gradient)
+# Reload the molecule and source orbitals from the checkpoint.
+mol2, state = chkfile.load_scf(path)
+restored = RNSC(mol2, source_xc='PBE', xc='r2SCAN')
+restored = restored.density_fit(auxbasis='def2-universal-jkfit')
+restored.mf_source.grids.level = 4
+restored.grids.level = 4
 
-
-
-
-
-# Case 2: density-fitted RHF water
-mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
-            basis='def2-svp', verbose=0)
-mf_source = scf.RHF(mol).density_fit(auxbasis='def2-svp-jkfit')
-mf_source.chkfile = 'rhf_df.chk'
-mf_source.conv_tol = 1e-8
-mf_source.conv_tol_grad = 1e-6
-mf_source.max_cycle = 100
-mf_source.kernel()
-
-mol, state = chkfile.load_scf('rhf_df.chk')
-# Recreate the same DF settings; they are not stored in the SCF checkpoint.
-mf = RNSC(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit')
-mf_source = mf.mf_source
+# Recreate the original functional/grid/DF configuration: orbitals alone
+# do not specify the source Hamiltonian. DF integrals are rebuilt.
+mf_source = restored.mf_source
 mf_source.e_tot = state['e_tot']
 mf_source.mo_coeff = state['mo_coeff']
 mf_source.mo_energy = state['mo_energy']
 mf_source.mo_occ = state['mo_occ']
-mf_source.converged = True
 
-mf.grids.level = 4
-energy = mf.kernel(run_source=False)
-mf_grad = mf.nuc_grad_method().set(cphf_max_cycle=200,
-                                   auxbasis_response=True)
-gradient = mf_grad.kernel()
+# Justified only because this example checked convergence before saving.
+restored.mf_source.converged = True
 
-print('\n[DF-RHF checkpoint]')
-print(f'HF-r2SCAN energy [Ha]: {energy:.15f}')
-print('Gradient [Ha/Bohr]:\n', gradient)
-print('Force [Ha/Bohr]:\n', -gradient)
+energy2 = restored.kernel(run_source=False)
+gradient2 = restored.nuc_grad_method().kernel()
 
-# The checkpoint restores orbitals, not CDERI; DF integrals are rebuilt as needed.
+np.testing.assert_allclose(energy2, energy, atol=1e-9, rtol=0)
+np.testing.assert_allclose(gradient2, gradient, atol=1e-8, rtol=0)
+print('Restored checkpoint:', path)
+print('Max gradient difference [Ha/Bohr]:',
+      np.max(np.abs(gradient2 - gradient)))

@@ -1,69 +1,49 @@
-'''Choose molecular XC grids by level or explicit atomic grid sizes.'''
-
-from pathlib import Path
+"""Separate source/target quadratures and CPU grid-derivative backends."""
 
 import numpy as np
-from pyscf import gto, scf
+from pyscf import gto
 
 from yescape_grad.cpu.energy import RNSC
 
-ROOT = Path(__file__).resolve().parents[1]
-
 mol = gto.M(
-    atom=str(ROOT / 'tests' / 'structures' / 'water1.xyz'),
-    unit='Angstrom',
-    basis='aug-cc-pvtz',
-    verbose=0,
+    atom='''
+        O  0.000   0.000   0.000
+        H  0.000  -0.757   0.587
+        H  0.000   0.757   0.587
+    ''',
+    basis='def2-svp',
+    verbose=3,
 )
-mf_source = scf.RHF(mol).set(
-    conv_tol=1e-8,
-    conv_tol_grad=1e-6,
-    max_cycle=100,
-).run()
+mf = RNSC(mol, source_xc='PBE', xc='r2SCAN').density_fit()
+mf.conv_tol = 1e-8
+mf.conv_tol_grad = 1e-6
+mf.max_cycle = 100
 
-# Reuse one HF density; set grid options before kernel().
-
-# Case 1: PySCF level presets (element-dependent radial/angular grid sizes)
-print('\nr2SCAN grid-level convergence on the same RHF density')
-for level in (2, 4, 6):
-    mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
-    mf.grids.level = level
-    energy = mf.kernel(run_source=False)
-    print(f'level {level}: {mf.grids.coords.shape[0]} points, '
-          f'E = {energy:.15f} Ha')
-
-# Case 2: one explicit (radial points, angular points) pair for all atoms
-mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
+#
+# 1. Independent source and target grids
+#
+# Source grid defines both the stationary source and its response.
+mf.mf_source.grids.level = 4
+# Target quadrature can be selected independently, before evaluation.
 mf.grids.atom_grid = (99, 590)
-energy = mf.kernel(run_source=False)
-print(f'\nUniform atomic sizes: {mf.grids.coords.shape[0]} points, '
-      f'E = {energy:.15f} Ha')
+mf.grids.prune = None
+energy = mf.kernel()
+# To change the source grid later, reset/rebuild it and rerun source SCF.
+# Do not reuse source orbitals as stationary for a different source grid.
 
-# Case 3: different atomic grid sizes for each element
-mf = RNSC(mol, xc='r2SCAN', mf_source=mf_source)
-mf.grids.atom_grid = {'H': (75, 302), 'O': (99, 590)}
-energy = mf.kernel(run_source=False)
-print(f'\nElement-specific sizes: {mf.grids.coords.shape[0]} points, '
-      f'E = {energy:.15f} Ha')
-
-# atom_grid overrides level for specified elements; others use level presets.
-
-# Case 4: choose the CPU grid-response backend on the same grids
-# Same grids and response equations; only the derivative backend changes.
+#
+# 2. Same quadratures, different CPU partition-derivative backends
+#
 grad_default = mf.nuc_grad_method().set(
-    grid_response=True,
     grid_response_backend='pyscf_default',
-    cphf_max_cycle=200,
 )
 reference = grad_default.kernel()
 
-# becke_omp is the default and requires the OpenMP extension.
 grad_omp = mf.nuc_grad_method().set(
-    grid_response=True,
     grid_response_backend='becke_omp',
-    cphf_max_cycle=200,
 )
 optimized = grad_omp.kernel()
-print('\nMax grid-backend gradient difference [Ha/Bohr]:',
-      np.max(np.abs(optimized - reference)))
+
 np.testing.assert_allclose(optimized, reference, atol=1e-9, rtol=0)
+print('Max backend difference [Ha/Bohr]:',
+      np.max(np.abs(optimized - reference)))

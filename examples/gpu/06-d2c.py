@@ -6,18 +6,21 @@
 # https://doi.org/10.1021/acs.jctc.4c00689
 # D2C damping parameters: Supporting Information, Table S1 (D2C-DFT column).
 
-from pathlib import Path
 
 import numpy as np
 from pyscf import gto
 
+
 from yescape_grad.cpu.disp.d2c import evaluate_d2c, get_d2c_parameters
 from yescape_grad.gpu.energy import RNSC
 
-ROOT = Path(__file__).resolve().parents[2]
 
 mol = gto.M(
-    atom=str(ROOT / 'tests' / 'structures' / 'water1.xyz'),
+    atom='''
+        O  0.000   0.000   0.000
+        H  0.000  -0.757   0.587
+        H  0.000   0.757   0.587
+    ''',
     unit='Angstrom',
     basis='def2-svp',
     verbose=0,
@@ -25,12 +28,14 @@ mol = gto.M(
 np.set_printoptions(precision=12, suppress=True)
 
 
+# D2C is parameterized for HF sources, not arbitrary KS sources.
 # D2C uses published target-functional parameters; unsupported XC raises an error.
-mf = RNSC(mol, xc='r2SCAN').set_dispersion('d2c').set(
+mf = RNSC(mol, source_xc='HF', xc='r2SCAN').set_dispersion('d2c').set(
     conv_tol=1e-8,
     conv_tol_grad=1e-6,
 )
 mf.grids.level = 4
+
 energy = mf.kernel()
 mf_grad = mf.nuc_grad_method().set(
     grid_response=True,
