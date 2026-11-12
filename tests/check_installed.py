@@ -6,15 +6,15 @@ from pathlib import Path
 
 import numpy as np
 from pyscf import gto, lib
-import dcforge
+import yescape_grad
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--backend', choices=['cpu', 'gpu'], required=True)
 parser.add_argument('--prefix', type=Path, required=True)
 parser.add_argument('--fd', action='store_true', help='Check one relaxed-source FD component per case')
 args = parser.parse_args()
-assert Path(dcforge.__file__).resolve().is_relative_to(args.prefix.resolve()), dcforge.__file__
-print('Installed package:', dcforge.__file__, flush=True)
+assert Path(yescape_grad.__file__).resolve().is_relative_to(args.prefix.resolve()), yescape_grad.__file__
+print('Installed package:', yescape_grad.__file__, flush=True)
 lib.num_threads(48)
 if args.backend == 'gpu':
     import cupy as cp
@@ -22,7 +22,7 @@ if args.backend == 'gpu':
     assert cutensor.cutensor is not None and cutensor.contract_engine is None
     cp.testing.assert_allclose(cutensor.contract(
         'ij,jk->ik', cp.ones((2, 3)), cp.ones((3, 2))), 3)
-api = import_module('dcforge.' + args.backend + '.energy')
+api = import_module('yescape_grad.' + args.backend + '.energy')
 for unrestricted in (False, True):
     for use_df in (False, True):
         for source in ('HF', 'PBE'):

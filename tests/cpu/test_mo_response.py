@@ -2,8 +2,8 @@
 import numpy as np
 import pytest
 from pyscf import gto, dft
-from dcforge.cpu.energy import RNSC, UNSC
-from dcforge.cpu.df.grad.response import MOResponse
+from yescape_grad.cpu.energy import RNSC, UNSC
+from yescape_grad.cpu.df.grad.response import MOResponse
 from tests.common import configure_workflow, displaced_mol
 
 

@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 from pyscf import dft, gto, lib
-from dcforge.cpu.source.xc import grad_xc_fock
+from yescape_grad.cpu.source.xc import grad_xc_fock
 
 
 @pytest.mark.parametrize('xc', ['LDA,VWN', 'PBE', 'r2SCAN'])

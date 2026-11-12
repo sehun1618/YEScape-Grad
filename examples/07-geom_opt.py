@@ -2,7 +2,7 @@
 
 from pyscf import gto
 from pyscf.geomopt.geometric_solver import optimize
-from dcforge.cpu.energy import RNSC
+from yescape_grad.cpu.energy import RNSC
 
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=3)

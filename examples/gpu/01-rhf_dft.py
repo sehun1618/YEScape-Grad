@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pyscf import gto
 
-from dcforge.gpu.energy import RNSC
+from yescape_grad.gpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[2]
 

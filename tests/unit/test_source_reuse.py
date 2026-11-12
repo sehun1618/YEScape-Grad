@@ -11,7 +11,7 @@ from pyscf import gto, lib
 @pytest.mark.parametrize('unrestricted', [False, True])
 def test_explicit_reuse_without_array_fingerprints(backend, unrestricted):
     lib.num_threads(48)
-    api = import_module('dcforge.'+backend+'.energy')
+    api = import_module('yescape_grad.'+backend+'.energy')
     mol = gto.M(atom='N 0 0 0; H 0 -.8 .6; H 0 .8 .6' if unrestricted
                 else 'O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
                 spin=int(unrestricted), basis='sto-3g', verbose=0)
@@ -35,7 +35,7 @@ def test_explicit_reuse_without_array_fingerprints(backend, unrestricted):
 
 
 def test_normal_scf_failure_is_not_silently_accepted():
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     mf = RNSC(gto.M(atom='H 0 0 0; H 0 0 .8', basis='sto-3g', verbose=0), xc='PBE')
     with mock.patch.object(mf.mf_source, 'kernel', return_value=0.):
         with pytest.raises(RuntimeError, match='did not converge'):

@@ -4,7 +4,7 @@ import numpy as np
 from pyscf import gto, scf
 from pyscf.scf import chkfile
 
-from dcforge.cpu.energy import RNSC
+from yescape_grad.cpu.energy import RNSC
 
 np.set_printoptions(precision=12, suppress=True)
 

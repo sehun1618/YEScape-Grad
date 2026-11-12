@@ -21,7 +21,7 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
         pytest.importorskip('gpu4pyscf')
         if not cp.cuda.runtime.getDeviceCount():
             pytest.skip('CUDA device required')
-    module = importlib.import_module(f'dcforge.{backend}.energy')
+    module = importlib.import_module(f'yescape_grad.{backend}.energy')
     workflow = module.UNSC if unrestricted else module.RNSC
     mol = make_mol('nh2_doublet.xyz' if unrestricted else 'water1.xyz')
 
@@ -96,7 +96,7 @@ def test_scanner_density_reuse_and_geometry_parity(backend, unrestricted, df, mo
 
 @pytest.mark.cpu
 def test_energy_scanner_incompatible_guess_and_frozen_source_rejected(monkeypatch):
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     scanner = configure_workflow(RNSC(make_mol('water1.xyz'), xc='PBE')).as_scanner()
     scanner(scanner.mol)
     changed = scanner.mol.copy()
@@ -118,7 +118,7 @@ def test_energy_scanner_incompatible_guess_and_frozen_source_rejected(monkeypatc
 
 @pytest.mark.cpu
 def test_scanner_keyboard_interrupt_invalidates_gradient_state(monkeypatch):
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     mol = make_mol('water1.xyz', basis='sto-3g')
     scanner = configure_workflow(RNSC(mol, xc='PBE')).nuc_grad_method().as_scanner()
     scanner(mol)
@@ -138,8 +138,8 @@ def test_scanner_d2c_geometry_update(backend):
     if backend == 'gpu':
         pytest.importorskip('cupy')
         pytest.importorskip('gpu4pyscf')
-    from dcforge.cpu.disp.d2c import evaluate_d2c
-    cls = importlib.import_module(f'dcforge.{backend}.energy').RNSC
+    from yescape_grad.cpu.disp.d2c import evaluate_d2c
+    cls = importlib.import_module(f'yescape_grad.{backend}.energy').RNSC
     mol = make_mol('water1.xyz')
     mf = configure_workflow(cls(mol, xc='r2SCAN').density_fit(auxbasis='def2-svp-jkfit'))
     scanner = mf.set_dispersion('d2c').nuc_grad_method().as_scanner()
@@ -160,7 +160,7 @@ def test_scanner_geometry_optimization(backend):
     if backend == 'gpu':
         pytest.importorskip('gpu4pyscf')
     from pyscf.geomopt.geometric_solver import kernel
-    cls = importlib.import_module(f'dcforge.{backend}.energy').RNSC
+    cls = importlib.import_module(f'yescape_grad.{backend}.energy').RNSC
     mf = configure_workflow(cls(make_mol('water1.xyz'), xc='PBE').density_fit(
         auxbasis='def2-svp-jkfit'))
     converged, mol = kernel(mf, maxsteps=15)

@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from dcforge.cpu.energy import RNSC as CPU_RHFDFT
-from dcforge.cpu.energy import UNSC as CPU_UHFDFT
-from dcforge.gpu.energy import RNSC as GPU_RHFDFT
-from dcforge.gpu.energy import UNSC as GPU_UHFDFT
+from yescape_grad.cpu.energy import RNSC as CPU_RHFDFT
+from yescape_grad.cpu.energy import UNSC as CPU_UHFDFT
+from yescape_grad.gpu.energy import RNSC as GPU_RHFDFT
+from yescape_grad.gpu.energy import UNSC as GPU_UHFDFT
 from tests.common import make_mol, run_workflow
 
 

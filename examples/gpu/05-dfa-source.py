@@ -1,7 +1,7 @@
 '''PBE-r2SCAN: evaluate r2SCAN on the stationary PBE density.'''
 
 from pyscf import gto
-from dcforge.gpu.energy import RNSC
+from yescape_grad.gpu.energy import RNSC
 
 mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
             basis='def2-svp', verbose=4)

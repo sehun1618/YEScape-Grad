@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pyscf import gto, scf
 
-from dcforge.cpu.energy import RNSC
+from yescape_grad.cpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 

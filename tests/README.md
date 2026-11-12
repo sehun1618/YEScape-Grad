@@ -1,6 +1,6 @@
 # Tests
 
-Run the commands below from the repository root, with DC-Forge and the test
+Run the commands below from the repository root, with YEScape-Grad and the test
 dependencies installed.
 Tests that calculate D2C dispersion are skipped when DFT-D4 is not installed;
 parameter lookup and validation tests still run.

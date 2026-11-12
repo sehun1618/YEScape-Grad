@@ -10,12 +10,12 @@ from pyscf import gto, lib
 @pytest.mark.parametrize('backend', ['cpu', pytest.param('gpu', marks=pytest.mark.gpu)])
 def test_source_module_layout(backend):
     for name in ('rhf', 'uhf', 'rks', 'uks'):
-        module_name = 'dcforge.' + backend + '.source.' + name
+        module_name = 'yescape_grad.' + backend + '.source.' + name
         module = import_module(module_name)
         function = module.grad_fock_direct if name.endswith('hf') else module.grad_fock
         assert function.__module__ == module_name
     for spin in ('r', 'u'):
-        common = import_module('dcforge.' + backend + '.grad.' + spin + '_nv')
+        common = import_module('yescape_grad.' + backend + '.grad.' + spin + '_nv')
         assert not hasattr(common, 'grad_fock_direct')
         assert hasattr(common, 'nonvariational_correction')
 
@@ -25,7 +25,7 @@ def test_source_module_layout(backend):
 @pytest.mark.parametrize('df', [False, True])
 def test_ks_source(backend, unrestricted, df):
     lib.num_threads(48)
-    module = import_module('dcforge.'+backend+'.energy')
+    module = import_module('yescape_grad.'+backend+'.energy')
     cls = module.UNSC if unrestricted else module.RNSC
     assert cls.__name__ == ('UNSC' if unrestricted else 'RNSC')
     assert (module.UHFDFT if unrestricted else module.RHFDFT) is cls
@@ -87,7 +87,7 @@ def test_ks_source(backend, unrestricted, df):
 
 
 def test_changed_source_grid_rebuilds():
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     mol = gto.M(atom='H 0 0 0; H 0 0 .8', basis='sto-3g', verbose=0)
     mf = RNSC(mol, xc='PBE', source_xc='PBE')
     mf.mf_source.grids.level = mf.grids.level = 0
@@ -100,7 +100,7 @@ def test_changed_source_grid_rebuilds():
 
 
 def test_source_options():
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     from pyscf import dft, scf
     mol = gto.M(atom='H 0 0 0; H 0 0 .74',basis='sto-3g',verbose=0)
     source = dft.RKS(mol, xc='PBE')
@@ -122,7 +122,7 @@ def test_source_options():
 
 def test_ks_checkpoint(tmp_path):
     from pyscf import dft, scf
-    from dcforge.cpu.energy import RNSC
+    from yescape_grad.cpu.energy import RNSC
     lib.num_threads(48)
     mol = gto.M(atom='H 0 0 0; H 0 0 .8', basis='sto-3g',verbose=0)
     mf = RNSC(mol, xc='r2SCAN', source_xc='PBE')
@@ -149,7 +149,7 @@ def test_ks_checkpoint(tmp_path):
 @pytest.mark.parametrize('df', [False, True])
 def test_empty_rotation_space(backend, df):
     mol = gto.M(atom='He 0 0 0', basis='sto-3g', verbose=0)
-    cls = import_module('dcforge.'+backend+'.energy').RNSC
+    cls = import_module('yescape_grad.'+backend+'.energy').RNSC
     mf = cls(mol, xc='r2SCAN', source_xc='PBE')
     if df:
         mf = mf.density_fit()

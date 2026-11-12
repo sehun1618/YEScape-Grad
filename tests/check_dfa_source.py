@@ -22,7 +22,7 @@ from tests.common import as_numpy
 
 def check(backend, unrestricted, use_df, xc, full_fd, basis, target='r2SCAN',
           mol=None, indices=None, grid_level=2, conv_tol=1e-12, conv_tol_grad=1e-9):
-    energy = importlib.import_module('dcforge.'+backend+'.energy')
+    energy = importlib.import_module('yescape_grad.'+backend+'.energy')
     cls = energy.UNSC if unrestricted else energy.RNSC
     atom = ('N 0 0 0; H 0 -.8 .6; H 0 .8 .6' if unrestricted else
             'O 0 0 0; H 0 -.757 .587; H 0 .757 .587')

@@ -3,8 +3,8 @@ import io
 import numpy as np
 import pytest
 from pyscf import gto
-from dcforge.cpu.energy import UNSC, RNSC
-from dcforge.cpu.energy.rnsc import _check_source_state
+from yescape_grad.cpu.energy import UNSC, RNSC
+from yescape_grad.cpu.energy.rnsc import _check_source_state
 
 
 @pytest.mark.parametrize('source_xc', [None, 'PBE'])
@@ -57,7 +57,7 @@ def test_broken_symmetry_energy_and_gradient_warn_without_changing_results(backe
     from pyscf import lib
     lib.num_threads(2)
     xp = np if backend == 'cpu' else pytest.importorskip('cupy')
-    cls = import_module('dcforge.'+backend+'.energy').UNSC
+    cls = import_module('yescape_grad.'+backend+'.energy').UNSC
     mol = gto.M(atom='H 0 0 0; H 0 0 3', basis='sto-3g', verbose=0)
     mf = cls(mol, xc='PBE', source_xc=source_xc)
     if use_df:mf=mf.density_fit(auxbasis='def2-universal-jkfit')

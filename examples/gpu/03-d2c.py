@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 from pyscf import gto
 
-from dcforge.cpu.disp.d2c import evaluate_d2c, get_d2c_parameters
-from dcforge.gpu.energy import RNSC
+from yescape_grad.cpu.disp.d2c import evaluate_d2c, get_d2c_parameters
+from yescape_grad.gpu.energy import RNSC
 
 ROOT = Path(__file__).resolve().parents[2]
 

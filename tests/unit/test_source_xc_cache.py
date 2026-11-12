@@ -1,7 +1,7 @@
 """Cached density products must never be recomputed inside feature derivatives."""
 import numpy as np
 import pytest
-from dcforge.cpu.source.xc import _features
+from yescape_grad.cpu.source.xc import _features
 
 @pytest.mark.parametrize('xc', ['LDA', 'GGA', 'MGGA'])
 @pytest.mark.parametrize('differentiate', [False, True])

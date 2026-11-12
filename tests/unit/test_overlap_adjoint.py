@@ -1,7 +1,7 @@
 '''Check the documented overlap-adjoint signs and spin factors independently.'''
 
 import numpy as np
-from dcforge.cpu.grad import r_nv, u_nv
+from yescape_grad.cpu.grad import r_nv, u_nv
 
 
 def test_overlap_adjoint_identity():

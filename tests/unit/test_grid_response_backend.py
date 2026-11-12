@@ -5,8 +5,8 @@ import pytest
 from pyscf import gto, dft, lib
 from pyscf.dft import radi, gen_grid
 from pyscf.grad import rks, uks
-from dcforge.cpu.energy import RNSC, UNSC
-from dcforge.cpu.grad import grid_response as gr
+from yescape_grad.cpu.energy import RNSC, UNSC
+from yescape_grad.cpu.grad import grid_response as gr
 
 
 @pytest.mark.parametrize('adjust', [None, radi.treutler_atomic_radii_adjust,

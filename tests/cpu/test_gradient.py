@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from dcforge.cpu.energy import RNSC, UNSC
+from yescape_grad.cpu.energy import RNSC, UNSC
 from tests.common import make_mol, run_workflow
 
 

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from dcforge.cpu.disp.d2c import (
+from yescape_grad.cpu.disp.d2c import (
     evaluate_d2c,
     get_d2c_parameters,
     normalize_dispersion,

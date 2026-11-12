@@ -1,6 +1,6 @@
 # PySCF 2.14.0 / GPU4PySCF 1.9.0; not a fresh-environment certification.
 # Requires a compatible NVIDIA driver. Toolkit/compiler installation is separate.
-name: dcforge-gpu-cu13
+name: yescape_grad-gpu-cu13
 channels:
   - conda-forge
 dependencies:

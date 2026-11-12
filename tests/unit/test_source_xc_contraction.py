@@ -13,7 +13,7 @@ from pyscf import gto, lib
 @pytest.mark.parametrize('xc', ['LDA,VWN', 'PBE', 'r2SCAN'])
 def test_xc_contraction_parity(backend, unrestricted, xc):
     lib.num_threads(48)
-    xc_module = import_module('dcforge.' + backend + '.source.xc')
+    xc_module = import_module('yescape_grad.' + backend + '.source.xc')
     grad_xc_fock = xc_module.grad_xc_fock
     dft = import_module('pyscf.dft' if backend == 'cpu' else 'gpu4pyscf.dft')
     mol = gto.M(atom='H 0 0 0; H 0 0 .8', basis='sto-3g', verbose=0)

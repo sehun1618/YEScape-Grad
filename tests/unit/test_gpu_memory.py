@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("gpu4pyscf")
-from dcforge.gpu.df.grad import memory
+from yescape_grad.gpu.df.grad import memory
 
 
 class FakeDM:

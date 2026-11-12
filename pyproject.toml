@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dc-forge"
+name = "YEScape-Grad"
 version = "0.0.1"
 description = "Molecular density-corrected DFT energies and analytic gradients with PySCF"
 readme = "README.md"
@@ -21,4 +21,4 @@ test = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dcforge*"]
+include = ["yescape_grad*"]

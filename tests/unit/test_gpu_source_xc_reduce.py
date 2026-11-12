@@ -11,7 +11,7 @@ def test_atomic_reduction(xc, unrestricted):
     from gpu4pyscf import dft
     from gpu4pyscf.dft.numint import NumInt
     import cupy as cp
-    from dcforge.gpu.source.xc import grad_xc_fock
+    from yescape_grad.gpu.source.xc import grad_xc_fock
 
     lib.num_threads(4)
     mol = gto.M(

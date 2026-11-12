@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from pyscf import df, dft, scf
 
-from dcforge.cpu.energy import RNSC, UNSC, energy_tot
+from yescape_grad.cpu.energy import RNSC, UNSC, energy_tot
 from tests.common import configure_workflow, make_mol, run_workflow
 
 

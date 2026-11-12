@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 from pyscf import gto, lib
 
-from dcforge.cpu.energy import RNSC, UNSC
-from dcforge.tools.logger import energy_summary, gradient_summary
-from dcforge.tools import logger as result_logger
+from yescape_grad.cpu.energy import RNSC, UNSC
+from yescape_grad.tools.logger import energy_summary, gradient_summary
+from yescape_grad.tools import logger as result_logger
 
 
 @pytest.mark.parametrize('verbose', [0, 3, 4, 5, 6])
@@ -48,7 +48,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     lib.num_threads(2)
     unrestricted = workflow is UNSC
     if backend == 'gpu':
-        workflow = getattr(import_module('dcforge.gpu.energy'), workflow.__name__)
+        workflow = getattr(import_module('yescape_grad.gpu.energy'), workflow.__name__)
     mol = gto.M(atom=atom, basis='sto-3g', spin=spin, verbose=0)
     mf = workflow(mol, xc='PBE')
     if df:
@@ -58,7 +58,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     mf.stdout = stream = StringIO()
     energy = mf.kernel()
     text = stream.getvalue()
-    assert text.count('DC-Forge Energy') == 1
+    assert text.count('YEScape-Grad Energy') == 1
     assert text.count('Energy workflow wall time =') == 1
     assert 'HF-PBE' in text
     assert ('Unrestricted' if unrestricted else 'Restricted') in text
@@ -67,12 +67,12 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     stream.seek(0)
     stream.truncate()
     assert mf.energy_tot() == pytest.approx(energy, abs=1e-10, rel=0)
-    assert 'DC-Forge Energy' not in stream.getvalue()
+    assert 'YEScape-Grad Energy' not in stream.getvalue()
     assert 'Energy workflow wall time =' not in stream.getvalue()
     grad = mf.nuc_grad_method()
     values = grad.kernel()
     text = stream.getvalue()
-    assert text.count('DC-Forge Gradient') == 1
+    assert text.count('YEScape-Grad Gradient') == 1
     assert text.count('Gradient workflow wall time =') == 1
     assert text.count('Total elapsed wall time =') == 1
     assert 'gradients ---------------' not in text
@@ -84,9 +84,9 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     energy_summary(mf, unrestricted=unrestricted)
     gradient_summary(grad, unrestricted=unrestricted)
     baseline_summary = stream.getvalue()
-    assert 'DC-Forge Total energy' in baseline_summary
-    assert 'DC-Forge Forces' in baseline_summary
-    force_lines = baseline_summary.split('DC-Forge Forces [Ha/Bohr]')[1].splitlines()
+    assert 'YEScape-Grad Total energy' in baseline_summary
+    assert 'YEScape-Grad Forces' in baseline_summary
+    force_lines = baseline_summary.split('YEScape-Grad Forces [Ha/Bohr]')[1].splitlines()
     rows = [line.split() for line in force_lines if line.split() and line.split()[0].isdigit()]
     np.testing.assert_allclose(np.array([r[2:] for r in rows], dtype=float),
                                -values, atol=1e-10, rtol=0)
@@ -100,7 +100,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
         if verbose < 3:
             assert text == baseline_summary
         else:
-            assert 'DC-Forge Energy' in text and 'DC-Forge Gradient' in text
+            assert 'YEScape-Grad Energy' in text and 'YEScape-Grad Gradient' in text
             assert 'Z-vector residual' in text
             assert ('Integral treatment' in text) == (verbose >= 4)
         assert mf.verbose == grad.verbose == verbose
@@ -108,7 +108,7 @@ def test_kernel_output(workflow, atom, spin, df, backend):
     stream.seek(0)
     stream.truncate()
     np.testing.assert_allclose(grad.kernel(), values, atol=1e-10, rtol=0)
-    assert 'DC-Forge Forces' in stream.getvalue()
+    assert 'YEScape-Grad Forces' in stream.getvalue()
 
 
 @pytest.mark.parametrize('residual,limit,verdict', [
@@ -286,7 +286,7 @@ def test_energy_timer_includes_source_and_target_and_synchronizes(monkeypatch):
 @pytest.mark.parametrize('backend', ['cpu', pytest.param('gpu', marks=pytest.mark.gpu)])
 @pytest.mark.parametrize('name', ['RNSC', 'UNSC'])
 def test_reset_discards_previous_energy_timing(backend, name):
-    cls=getattr(import_module(f'dcforge.{backend}.energy'),name)
+    cls=getattr(import_module(f'yescape_grad.{backend}.energy'),name)
     mf=cls(gto.M(atom='He 0 0 0',basis='sto-3g',verbose=0))
     mf._last_energy_timing=(0.,123.)
     mf.reset()

@@ -2,8 +2,8 @@
 
 import pytest
 
-from dcforge.gpu._df import default_auxbasis
-from dcforge.gpu.energy import RNSC, UNSC
+from yescape_grad.gpu._df import default_auxbasis
+from yescape_grad.gpu.energy import RNSC, UNSC
 from tests.common import make_mol
 
 pytestmark = pytest.mark.gpu

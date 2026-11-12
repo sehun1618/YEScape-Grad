@@ -2,7 +2,7 @@
 
 import pytest
 
-from dcforge.tools.zvec import warn_z_residual
+from yescape_grad.tools.zvec import warn_z_residual
 
 
 class _Log:

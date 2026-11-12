@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pyscf import gto
 
-from dcforge.cpu.energy import UNSC
+from yescape_grad.cpu.energy import UNSC
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -12,7 +12,7 @@ import pytest
 from pyscf import lib
 from pyscf.scf import cphf
 
-from dcforge.tools.cphf import solve
+from yescape_grad.tools.cphf import solve
 
 
 @pytest.mark.parametrize('backend', [
@@ -69,7 +69,7 @@ def test_cphf_against_diagonal_solution(backend, unrestricted, overlap, nset,
     if backend == 'gpu4pyscf' and not unrestricted and not overlap and level_shift:
         # GPU4PySCF 1.8.1 has a separate 2D/3D level-shift broadcasting bug.
         # Prove it also occurs natively before marking this unsupported path.
-        # DC-Forge's Z callers use the default zero level shift.
+        # YEScape-Grad's Z callers use the default zero level shift.
         try:
             module.solve(vind, energy, occ, h1 * 1e8, tol=1e-11,
                          level_shift=level_shift, verbose=0)
@@ -150,7 +150,7 @@ def test_invalid_tolerance(tol):
 @pytest.mark.parametrize('active_spin', [0, 1])
 def test_uhf_single_active_spin_uses_fixed_cphf(device, active_spin):
     xp = np if device == 'cpu' else pytest.importorskip('cupy')
-    module = importlib.import_module(f'dcforge.{device}.grad.u_zvec')
+    module = importlib.import_module(f'yescape_grad.{device}.grad.u_zvec')
     energy = (xp.asarray([-.5, .5]), xp.asarray([-.5, .5]))
     occ = [xp.zeros(2), xp.zeros(2)]
     occ[active_spin][0] = 1
@@ -174,7 +174,7 @@ def test_gpu_190_uses_native_solver_without_rebinding(unrestricted, monkeypatch)
     gpu4pyscf = pytest.importorskip('gpu4pyscf')
     if np.lib.NumpyVersion(gpu4pyscf.__version__) < '1.9.0':
         pytest.skip('Native cutoff requires GPU4PySCF 1.9')
-    import dcforge.tools.cphf as adapter
+    import yescape_grad.tools.cphf as adapter
     def unexpected(*args, **kwargs):
         raise AssertionError('1.9 must not rebind solver globals')
     monkeypatch.setattr(adapter, '_bind_globals', unexpected)

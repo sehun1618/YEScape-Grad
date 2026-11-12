@@ -16,7 +16,7 @@ from pyscf import gto, lib
 @pytest.mark.parametrize('use_df', [False, True])
 def test_public_aliases_and_failed_rerun(backend, unrestricted, use_df):
     lib.num_threads(48)
-    api = import_module('dcforge.' + backend + '.energy')
+    api = import_module('yescape_grad.' + backend + '.energy')
     mol = gto.M(atom='H 0 0 0; H 0 0 .8', basis='sto-3g', verbose=0)
     mf = (api.UNSC if unrestricted else api.RNSC)(
         mol, xc='r2SCAN', source_xc='PBE')
@@ -24,7 +24,7 @@ def test_public_aliases_and_failed_rerun(backend, unrestricted, use_df):
         mf = mf.density_fit()
     mf.grids.level = mf.mf_source.grids.level = 0
     assert type(mf.Gradients()) is type(mf.nuc_grad_method())
-    assert type(mf.Gradients()).__module__.startswith('dcforge.')
+    assert type(mf.Gradients()).__module__.startswith('yescape_grad.')
     with pytest.raises(NotImplementedError):
         mf.Hessian()
     with mock.patch.object(mf.mf_source, 'kernel', wraps=mf.mf_source.kernel) as run:

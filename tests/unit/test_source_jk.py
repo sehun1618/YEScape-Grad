@@ -13,7 +13,7 @@ from pyscf import gto, lib
 def test_source_derivative_skips_unused_integrals(backend, unrestricted, density_fit, xc, monkeypatch):
     lib.num_threads(48)
     xp = np if backend == 'cpu' else import_module('cupy')
-    energy = import_module('dcforge.'+backend+'.energy')
+    energy = import_module('yescape_grad.'+backend+'.energy')
     mol = gto.M(atom='N 0 0 0; H 0 -.8 .6; H 0 .8 .6' if unrestricted
                 else 'O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
                 spin=int(unrestricted), basis='sto-3g', verbose=0)
@@ -42,7 +42,7 @@ def test_source_derivative_skips_unused_integrals(backend, unrestricted, density
             monkeypatch.setattr(native, name, trace)
         monkeypatch.setattr(source, 'nuc_grad_method', lambda: native)
     else:
-        module = import_module('dcforge.gpu.source.'+('uks' if unrestricted else 'rks'))
+        module = import_module('yescape_grad.gpu.source.'+('uks' if unrestricted else 'rks'))
         owner = module if density_fit else module.tdrhf
         name = 'jk_energies_per_atom_bounded' if density_fit else '_jk_energies_per_atom'
         original = getattr(owner, name)
@@ -53,7 +53,7 @@ def test_source_derivative_skips_unused_integrals(backend, unrestricted, density
             records.append((len(pairs), js, kwargs['k_factor']))
             return original(*args, **kwargs)
         monkeypatch.setattr(owner, name, trace)
-    module = import_module('dcforge.'+backend+'.source.'+('uks' if unrestricted else 'rks'))
+    module = import_module('yescape_grad.'+backend+'.source.'+('uks' if unrestricted else 'rks'))
     result = module.grad_fock(mf.nuc_grad_method(), co, cv, z,
                               source.make_rdm1(), list(range(mol.natm)))
     assert bool(xp.isfinite(result).all())

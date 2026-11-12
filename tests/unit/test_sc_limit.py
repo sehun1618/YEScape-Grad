@@ -7,7 +7,7 @@ from pyscf import gto,lib
 
 def build(backend,u,df,source,target):
     lib.num_threads(4)
-    cls=getattr(import_module(f'dcforge.{backend}.energy'),'UNSC' if u else 'RNSC')
+    cls=getattr(import_module(f'yescape_grad.{backend}.energy'),'UNSC' if u else 'RNSC')
     mol=gto.M(atom='N 0 0 0; H 0 -.78 .58; H 0 .82 .63' if u else 'O 0 0 0; H 0 -.78 .58; H 0 .82 .63',spin=int(u),basis='6-31g',verbose=0)
     mf=cls(mol,xc=target,source_xc=source)
     if df:mf=mf.density_fit(auxbasis='def2-universal-jkfit')
@@ -23,7 +23,7 @@ def build(backend,u,df,source,target):
 @pytest.mark.parametrize('xc',['LDA,VWN','PBE','r2SCAN','B3LYP','CAM-B3LYP'])
 def test_sc_limit_matrix(backend,u,df,xc,monkeypatch):
     mf=build(backend,u,df,xc,xc);g=mf.nuc_grad_method();g.cphf_conv_tol=1e-11
-    module=import_module(f'dcforge.{backend}.grad.{"u" if u else "r"}nsc')
+    module=import_module(f'yescape_grad.{backend}.grad.{"u" if u else "r"}nsc')
     def forbidden(*a,**k):raise AssertionError('SC branch attempted NSC response')
     with monkeypatch.context() as m:
         m.setattr(module,'solve_z_vector',forbidden)
@@ -54,7 +54,7 @@ def test_source_grid_backends(u,df,source,monkeypatch):
     target='r2SCAN' if source=='PBE' else 'PBE'
     mf=build('cpu',u,df,source,target);g=mf.nuc_grad_method();g.cphf_conv_tol=1e-11
     g.grid_response_backend='pyscf_default';a=g.kernel()
-    from dcforge.cpu.grad import grid_response
+    from yescape_grad.cpu.grad import grid_response
     original=grid_response.grids_response_becke;calls=[]
     def tracked(grids,*args,**kw):
         calls.append(grids is mf.mf_source.grids)
@@ -67,7 +67,7 @@ def test_source_grid_backends(u,df,source,monkeypatch):
 
 @pytest.mark.parametrize('change',['xc','grid','weights','omega','unconverged','orbitals','grid_response','source_grid_response','df'])
 def test_sc_eligibility_rejects_mismatch(change):
-    from dcforge.tools.sc_limit import equivalent_source
+    from yescape_grad.tools.sc_limit import equivalent_source
     mf=build('cpu',False,False,'PBE','PBE');g=mf.nuc_grad_method()
     args=[mf.mo_energy,mf.mo_coeff,mf.mo_occ]
     assert equivalent_source(g,*args)

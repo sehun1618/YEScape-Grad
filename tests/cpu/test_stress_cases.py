@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pyscf import lib
 
-from dcforge.cpu.energy import RNSC, UNSC
+from yescape_grad.cpu.energy import RNSC, UNSC
 from tests.common import finite_difference, make_mol, run_workflow
 
 

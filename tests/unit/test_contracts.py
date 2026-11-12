@@ -6,12 +6,12 @@ import sys
 import pytest
 from pyscf import gto, scf
 
-from dcforge.cpu.energy import RNSC, UNSC
+from yescape_grad.cpu.energy import RNSC, UNSC
 from tests.common import ROOT, make_mol
 
 
 def test_top_level_import_does_not_import_gpu4pyscf():
-    code = "import dcforge, sys; assert 'gpu4pyscf' not in sys.modules"
+    code = "import yescape_grad, sys; assert 'gpu4pyscf' not in sys.modules"
     subprocess.run([sys.executable, "-c", code], cwd=ROOT, check=True)
 
 

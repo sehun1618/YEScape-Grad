@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pyscf.data import nist
 
-from dcforge.gpu.energy import RNSC, UNSC
+from yescape_grad.gpu.energy import RNSC, UNSC
 from tests.common import as_numpy, finite_difference_gradient, make_mol, run_workflow
 
 

@@ -32,7 +32,7 @@ def molecule(name):
 
 
 def scf_limit(backend, unrestricted, use_df, xc):
-    api = import_module('dcforge.' + backend + '.energy')
+    api = import_module('yescape_grad.' + backend + '.energy')
     mol = make_mol('nh2_doublet.xyz' if unrestricted else 'water1.xyz', basis='sto-3g')
     mf = (api.UNSC if unrestricted else api.RNSC)(mol, source_xc=xc, xc=xc)
     if use_df:

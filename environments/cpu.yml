@@ -1,6 +1,6 @@
 # Dependency snapshot used for the molecular CPU hybrid/RSH FD checks.
 # These are tested versions, not minimum supported versions.
-name: dcforge-cpu
+name: yescape_grad-cpu
 channels:
   - conda-forge
 dependencies:

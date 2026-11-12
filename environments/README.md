@@ -1,6 +1,6 @@
 # Environment examples
 
-`pyproject.toml` defines DC-Forge's installation requirements.
+`pyproject.toml` defines YEScape-Grad's installation requirements.
 These files pin dependency snapshots; they do not define minimum supported
 versions or lock every transitive dependency.
 
@@ -8,13 +8,13 @@ Run from the repository root:
 
 ```bash
 conda env create -f environments/cpu.yml
-conda activate dcforge-cpu
+conda activate yescape_grad-cpu
 python -m pip install .
 python -m pip check
 ```
 
 For CUDA 13, replace `cpu.yml` with `gpu-cu13.yml` and activate
-`dcforge-gpu-cu13`. Install a compatible NVIDIA driver separately.
+`yescape_grad-gpu-cu13`. Install a compatible NVIDIA driver separately.
 For other CUDA families, follow the
 [GPU4PySCF installation guide](https://github.com/pyscf/gpu4pyscf#installation);
 do not combine CUDA variants.
@@ -39,7 +39,7 @@ Alternatively, select `mf_grad.grid_response_backend = 'pyscf_default'`.
 ## Optional packages
 
 Neither YAML file explicitly installs DFT-D4 or cuTENSOR.
-DC-Forge's own installation requirements do not include either package;
+YEScape-Grad's own installation requirements do not include either package;
 third-party GPU packages may have their own dependency rules.
 
 - D2C dispersion: install `dftd4` separately. The local installed version is

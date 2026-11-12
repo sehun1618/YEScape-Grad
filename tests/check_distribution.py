@@ -20,10 +20,10 @@ def check_archive(path):
         assert not forbidden.intersection(parts.parts), name
         assert parts.name != 'THEORY.md', name
         assert parts.suffix not in {'.pyc', '.pyo', '.chk', '.h5', '.log'}, name
-    assert 'dcforge/cpu/energy/rnsc.py' in names
-    assert 'dcforge/gpu/energy/rnsc.py' in names
+    assert 'yescape_grad/cpu/energy/rnsc.py' in names
+    assert 'yescape_grad/gpu/energy/rnsc.py' in names
     if path.suffix != '.whl':
-        assert 'dcforge/cpu/grad/c_ext/grid_response_becke.c' in names
+        assert 'yescape_grad/cpu/grad/c_ext/grid_response_becke.c' in names
     print(f'PASS {path.name}: {len(names)} archive entries')
 
 
