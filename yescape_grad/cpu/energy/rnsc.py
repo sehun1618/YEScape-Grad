@@ -226,7 +226,7 @@ class RNSC(SourceAPI, rks.RKS):
     '''
 
     _keys = rks.RKS._keys | {
-        'mf_source', 'e_source', 'e_dft', 'e_d2c', 'dm_source',
+        'source_solver', 'mf_source', 'e_source', 'e_dft', 'e_d2c', 'dm_source',
         'dispersion', 'd2c_result', '_source_signature',
     }
     _source_options = (
@@ -284,7 +284,7 @@ class RNSC(SourceAPI, rks.RKS):
         self.mf_source.converged = False
         self._copy_source_options(self, self.mf_source)
         self._prepare_source_grid()
-        e_source = self.mf_source.kernel(dm0=dm0, **kwargs)
+        e_source = self._run_source_solver(dm0=dm0, **kwargs)
         if not self.mf_source.converged:
             raise RuntimeError('restricted source SCF calculation did not converge')
         self._sync_source_results()

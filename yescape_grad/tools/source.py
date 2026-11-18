@@ -8,11 +8,38 @@
 Legacy ``mf_hf``/``run_hf`` names remain compatible. New code should use
 ``mf_source`` and ``kernel(run_source=...)``. Source and target grids are
 independent; configure ``mf.mf_source.grids`` before source SCF.
+Set ``mf.source_solver = 'newton'`` for native source Newton SCF, including
+scanner calls. The default 'diis' keeps the ordinary native SCF kernel and
+its configured DIIS settings. Newton convergence is not guaranteed.
 '''
 
 
 class SourceAPI:
     '''Source-neutral names without duplicating the stored SCF state.'''
+
+    source_solver = 'diis'
+
+    def _run_source_solver(self, dm0=None, **kwargs):
+        """Run native SCF or transient Newton SCF on the source only.
+
+        Keep the native source and its DF owner intact for gradient/scanner
+        consumers. Newton is rebuilt after each geometry reset.
+        """
+        source = self.mf_source
+        if self.source_solver == 'diis':
+            return source.kernel(dm0=dm0, **kwargs)
+        if self.source_solver != 'newton':
+            raise ValueError("source_solver must be 'diis' or 'newton'")
+        solver = source.newton()
+        # A supplied density (including scanner reuse) must take precedence
+        # over orbital attributes left by an earlier geometry.
+        solver.mo_coeff = solver.mo_occ = None
+        energy = solver.kernel(dm0=dm0, **kwargs)
+        for name in ('mo_coeff', 'mo_occ', 'mo_energy', 'e_tot',
+                     'converged', 'cycles', 'scf_summary'):
+            if hasattr(solver, name):
+                setattr(source, name, getattr(solver, name))
+        return energy
 
     @property
     def mf_hf(self):

@@ -18,6 +18,8 @@ mf = RNSC(mol, source_xc='PBE', xc='r2SCAN').density_fit()
 mf.conv_tol = 1e-8
 mf.conv_tol_grad = 1e-6
 mf.max_cycle = 100
+# Optional: use native Newton SCF for the source at every geometry.
+# mf.source_solver = 'newton'
 mf.mf_source.grids.level = 4
 mf.grids.level = 4
 

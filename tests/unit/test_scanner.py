@@ -168,3 +168,63 @@ def test_scanner_geometry_optimization(backend):
     fresh = configure_workflow(cls(mol, xc='PBE').density_fit(auxbasis='def2-svp-jkfit'))
     fresh.kernel()
     assert np.max(np.abs(as_numpy(fresh.nuc_grad_method().kernel()))) < 4.5e-4
+
+
+@pytest.mark.parametrize('backend', [
+    pytest.param('cpu', marks=pytest.mark.cpu),
+    pytest.param('gpu', marks=pytest.mark.gpu),
+])
+@pytest.mark.parametrize('unrestricted', [False, True], ids=['rks', 'uks'])
+@pytest.mark.parametrize('df', [False, True], ids=['conventional', 'df'])
+def test_newton_source_scanner(backend, unrestricted, df, monkeypatch):
+    from pyscf import gto
+    if backend == 'gpu':
+        cp = pytest.importorskip('cupy')
+        pytest.importorskip('gpu4pyscf')
+        if not cp.cuda.runtime.getDeviceCount():
+            pytest.skip('CUDA device required')
+    module = importlib.import_module(f'yescape_grad.{backend}.energy')
+    cls = module.UNSC if unrestricted else module.RNSC
+    mol = gto.M(atom='O 0 0 0; H 0 -.757 .587; H 0 .757 .587',
+                basis='def2-svp', spin=int(unrestricted),
+                charge=int(unrestricted), verbose=0)
+
+    def make(mol):
+        mf = cls(mol, xc='PBE', source_xc='PBE0')
+        if df:
+            mf = mf.density_fit()
+        mf.conv_tol = 1e-8
+        mf.conv_tol_grad = 1e-6
+        mf.grids.level = mf.mf_source.grids.level = 1
+        return mf
+
+    scanner = make(mol).set(source_solver='newton').nuc_grad_method().as_scanner()
+    source = scanner.base.mf_source
+    owner = getattr(source, 'with_df', None)
+    newton = source.newton
+    calls = []
+
+    def capture():
+        calls.append(source.mol)
+        return newton()
+
+    monkeypatch.setattr(source, 'newton', capture)
+    scanner(mol)
+    moved = displaced_mol(mol, 1, 2, .015)
+    energy, gradient = scanner(moved)
+    assert len(calls) == 2 and calls[-1] is moved
+    assert scanner.base.mf_source is source
+    if df:
+        assert source.with_df is owner is scanner.base.with_df
+    reference = make(moved)
+    np.testing.assert_allclose(energy, reference.kernel(), atol=2e-7, rtol=0)
+    np.testing.assert_allclose(as_numpy(gradient),
+        as_numpy(reference.nuc_grad_method().kernel()), atol=2e-7, rtol=0)
+    scanner.base.source_solver = 'invalid'
+    with pytest.raises(ValueError, match='source_solver'):
+        scanner(moved)
+    assert not scanner.converged and scanner.de is None
+    assert scanner.base.e_tot is None
+    scanner.base.source_solver = 'newton'
+    scanner(mol, dm0=None)
+    assert scanner.converged and len(calls) == 3
