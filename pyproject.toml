@@ -4,17 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "YEScape-Grad"
-version = "0.0.1"
+version = "1.0.0"
 description = "Molecular density-corrected DFT energies and analytic gradients with PySCF"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "pyscf==2.14.0",
     "scipy",
 ]
+
+[project.urls]
+Repository = "https://github.com/sehun1618/YEScape-Grad"
+Issues = "https://github.com/sehun1618/YEScape-Grad/issues"
 
 [project.optional-dependencies]
 test = ["pytest"]

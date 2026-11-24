@@ -1,0 +1,3 @@
+1.0.0
+-----
+Initial public package release for molecular non-self-consistent energies and analytic nuclear gradients. Includes CPU and GPU workflows for restricted and unrestricted sources, conventional and density-fitted integrals, and geometry scans and optimization.

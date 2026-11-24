@@ -7,4 +7,4 @@ GPU workflows require an explicit ``yescape_grad.gpu`` import.
 from yescape_grad import cpu
 
 __all__ = ['cpu']
-__version__ = '0.0.1'
+__version__ = '1.0.0'

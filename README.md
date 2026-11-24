@@ -5,28 +5,32 @@ and, optionally, GPU4PySCF.
 
 ## Installation
 
-Requires Python 3.11+. Use a separate environment.
-Run the commands below from the repository root.
-
 ### CPU
 
+In a Python 3.10+ environment:
+
 ```bash
-python -m pip install .
-# Optional: editable installation with test dependencies
-python -m pip install -e '.[test]'
+pip install yescape-grad
 ```
 
-Installs NumPy, SciPy, and **PySCF 2.14.0**; an existing PySCF version may change.
-No GPU packages are installed.
+This installs NumPy, SciPy, and PySCF 2.14.0. GPU4PySCF is installed separately.
 
-The default CPU grid backend, `becke_omp`, requires a C compiler with OpenMP.
-If it cannot be built, set
-`mf_grad.grid_response_backend = 'pyscf_default'`.
+To install from GitHub:
+
+```bash
+git clone https://github.com/sehun1618/YEScape-Grad.git
+cd YEScape-Grad
+python -m pip install .
+```
+
+Building the default CPU grid-response backend (`becke_omp`) from source
+requires a C compiler with OpenMP support and Python development headers.
+If the extension is unavailable, set `mf_grad.grid_response_backend = 'pyscf_default'`.
 
 ### GPU
 
-Install **GPU4PySCF 1.9.0** separately for your CUDA environment, then install
-YEScape-Grad. Follow the [GPU4PySCF installation guide](https://github.com/pyscf/gpu4pyscf#installation).
+After the installation above, add **GPU4PySCF 1.9.0** to the same environment.
+Choose the build for your CUDA version. Follow the [GPU4PySCF installation guide](https://github.com/pyscf/gpu4pyscf#installation).
 
 | CUDA family | GPU4PySCF package | Optional cuTENSOR package |
 |---|---|---|
@@ -38,7 +42,6 @@ Example for a compatible CUDA 12 environment:
 
 ```bash
 python -m pip install 'gpu4pyscf-cuda12x==1.9.0'
-python -m pip install .
 python -m pip check
 ```
 
@@ -49,7 +52,7 @@ python -m pip check
 - The table lists installation choices, not validated configurations.
   Run the GPU tests on your environment.
 
-YEScape-Grad targets **PySCF 2.14.0 and GPU4PySCF 1.9.0**.
+YEScape-Grad currently targets **PySCF 2.14.0 and GPU4PySCF 1.9.0**.
 GPU calculations have been validated with CUDA 13 and cuTENSOR.
 See `environments/gpu-cu13.yml` for the tested dependency versions.
 The CUDA 12 installation example above has not been validated.
@@ -86,14 +89,11 @@ Nonlocal correlation functionals, including VV10, are not supported.
 |---|---|---|
 | Restricted/unrestricted HF or KS source | Supported | Supported |
 | Conventional / density-fitted J and K | Supported | Supported |
-| LDA, GGA, tau-meta-GGA, hybrid, RSH | Supported families; representative functionals tested | Supported families; representative functionals tested |
-| Full grid and auxiliary-basis response | Supported; enabled by default | Supported; enabled by default |
-| Atom-subset gradient | Supported | Full molecule only |
-| `only_dfj=True` gradient | Not supported | Not supported |
+| LDA, GGA, $\tau$-meta-GGA, hybrid, RSH | Supported families; representative functionals tested | Supported families; representative functionals tested |
 | D2C correction | HF source and available target parameters; requires DFT-D4 | Same |
 | Scanner / geometry optimization | Supported | Supported |
-| PBC, ROHF, fractional occupations, complex orbitals | Outside current scope | Outside current scope |
-| NLC/VV10, Laplacian-dependent meta-GGA, Hessian | Not supported | Not supported |
+| PBC, ROHF, NLC/VV10, $\nabla^2$-dependent meta-GGA, Hessian | Outside current scope | Outside current scope |
+
 
 
 ## Examples
